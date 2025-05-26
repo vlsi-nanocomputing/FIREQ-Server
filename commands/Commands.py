@@ -177,7 +177,7 @@ def set_drive_inc(ip=None, *options):
 
 def set_trigger(ip=None, *options):
     """
-    Set the source of the wave LFSR or FIFO
+    Set the trigger type readout or drive
 
     :param ip: IP selected
     :type ip: DefaultIP
@@ -208,6 +208,47 @@ def set_trigger(ip=None, *options):
     return 0
 
 
+def set_trigger_channel(ip=None, *options):
+    """
+    set the trigger mask
+
+    :param ip: IP selected
+    :type ip: DefaultIP
+    :param channel: Channel to select
+    :type channel: int
+    :param ttype: Trigger type, must be "readout" or "drive"
+    :type ttype: str
+    :return: Error code
+    :rtype: int
+    """
+    # check IP instance
+    if ip is None:
+        print("# Error: IP parameter missing")
+        return IP_MISSING
+    # check correctness of option
+    if len(options) < 2:
+        print("# Error: channel or ttype parameter missing")
+        return OPTION_MISSING
+
+    channel = 0
+    try:
+        channel = int(options[0])
+
+    except ValueError as e:
+        print(f"Error: {e}")
+
+    ttype = options[1]
+    if not ttype in ['readout', 'drive']:
+        print('# Error: ttype provided is not valid, must be "readout" or "drive"')
+        return VALUE_ERROR
+
+    if ttype == 'readout':
+        ip.SetTriggerChannel(channel, 1)
+    elif ttype == 'drive':
+        ip.SetTriggerChannel(channel, 0)
+
+    return 0
+
 
 def print_help(*options):
     """
@@ -219,10 +260,12 @@ def print_help(*options):
     print("\t- exit")
     print("\t- description <IP>: Print the description of the IP")
     print("\t- set_manual_trigger <IP>: Set the manual trigger")
-    print("\t- set_source <IP> <source>: Set the source of the wave LFSR or FIFO")
+    print("\t- set_source <IP> <source>: Set the source of the wave (LFSR or FIFO)")
     print("\t- set_seed <IP> <seed>: Set the seed for LFSR")
     print("\t- set_readout_inc_off <IP> <inc> <off>: Set readout increment and offset value")
     print("\t- set_drive_inc <IP> <inc>: Set drive increment value")
+    print("\t- set_trigger <IP> <ttype>: Set the type of trigger (readout or drive)")
+    print("\t- set_trigger_channel <IP> <channel> <ttype>: Set the channel to trigger referred to the type (readout or drive)")
 
 
 

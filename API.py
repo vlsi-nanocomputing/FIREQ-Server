@@ -30,6 +30,8 @@ cmd_dict = {
     "set_seed": set_lfsr_seed,
     "set_readout_inc_off": set_redaout_inc_off,
     "set_drive_inc": set_drive_inc,
+    "set_trigger": set_trigger,
+    "set_trigger_channel": set_trigger_channel
 }
 
 # Defining main function

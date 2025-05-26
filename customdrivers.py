@@ -67,23 +67,25 @@ class Generator_driver(DefaultIP):
         self.SetBit(reg = 0, pos = self.ManTrigPos, value = 1)
         return
 
-    def SetTriggerChannel(self, channel):
+    def SetTriggerChannel(self, channel, ttype):
         """
         set the trigger channel for the generator where triggers are received
 
         :param channel: Channel number, 1 to TriggerChannels
         :type channel: int
+        :param ttype: trigger type: 0 for drive, 1 for readout
+        :type ttype: int
         :return: Error code
         :rtype: int
         """
         if channel <= 0 or channel > self.TriggerChannels:
             print("channel choice is out of range")
             return -3
+        if ttype != 0 and ttype != 1:
+            print("type choice is out of range")
+            return -3
 
-        ormask = 1 << (channel - 1)
-        cntr = self.mmio.read(0) & self.TriggerMask
-        cntr = cntr | ormask
-        self.write(0,cntr)
+        self.SetBit(reg = 0, pos = channel + ttype * self.TriggerChannels, value = 1)
         return 0
 
     def SetSource(self, source):
@@ -172,10 +174,6 @@ class Generator_driver(DefaultIP):
 
         self.SetBit(reg = 0, pos = self.TriggerPos, value = trigger)
         return 0
-
-    # def SetReadoutTriggerMaks(self, channel):
-    #
-    #     return
 
     def SetBit(self, reg, pos, value):
         andmask = 0xffffffff-(1<<pos)
