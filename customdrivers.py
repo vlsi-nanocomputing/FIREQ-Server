@@ -24,8 +24,8 @@ class Generator_driver(DefaultIP):
 
     def __init__(self, description):
         super().__init__(description=description)
+        #TODO: check the correctness
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-        self.TriggerMask = 0xFFFFFFFF << self.TriggerChannels
         self.SampleMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
         self.SampleMemoryMMIO = MMIO(description["phys_addr"]-self.SampleMemoryDepth, self.SampleMemoryDepth)
         self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
@@ -35,7 +35,19 @@ class Generator_driver(DefaultIP):
         self.MaximumDuration = pow(2,int(description["parameters"]["DurationWidth"]))
         self.FractionalPrecision = int(description["parameters"]["IncrementFractionalPrecision"])
 
+        self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
+
+        # MASK and Bit position definition
+        self.TriggerMask = 0xFFFFFFFF << self.TriggerChannels
+        self.SourcePos = 29
+        self.TriggerPos = 30
+        self.ManTrigPos = 31
+
     def WriteDescription(self):
+        """
+        Print the description of the IP
+        """
+        #TODO: check the correctness
         print("trigger channels: " + str(self.TriggerChannels))
         print("trigger mask: " + str(hex(self.TriggerMask)))
         print("sample memory depth: " + str(self.SampleMemoryDepth))
@@ -44,60 +56,134 @@ class Generator_driver(DefaultIP):
         print("channel memory depth: " + str(self.ChannelSampleMemoryDepth))
         print("maximum sample duration: " + str(self.MaximumDuration))
         print("fractional precision: " + str(self.FractionalPrecision))
-        
 
-    def WriteRegister(self, REGNAME, value):
-        """Write manual registers (AXI lite)
-
-        Args:
-            REGNAME (str): name of the register
-            value (int): 32 or 64 bit integer number
+    def SetManualtTigger(self):
         """
-        regOffset = 0
-        long = 0
-        if REGNAME == 'MAXADDR':
-            regOffset = 0x04
-        elif REGNAME == 'MAXDUR':
-            regOffset = 0x08
-        elif REGNAME == 'SOFF':
-            regOffset = 0x0c
-            long = 1
-        elif REGNAME == 'INC':
-            regOffset = 0x14
-            long = 1
-        elif REGNAME == 'POFF':
-            regOffset = 0x1c
-        elif REGNAME == 'PINC':
-            regOffset = 0x20
-        elif REGNAME == 'GAIN':
-            regOffset = 0x24
-        else:
-            print("invalid register name: " + REGNAME)
-            return
+        Trigger the generator manually
 
-        if long == 0:
-            self.mmio.write(regOffset,int(value))
-        else:
-            self.mmio.write(regOffset,int(value & 0xFFFFFFFF))
-            self.mmio.write(regOffset+4,int(value>>32))
+        :return: Error code
+        :rtype: int
+        """
+        self.SetBit(reg = 0, pos = self.ManTrigPos, value = 1)
         return
-    
-    def SetTriggerChannel(self,channel):
-        """set the trigger channel for the generator where triggers are received
 
-        Args:
-            channel (int): channel number, 1 to TriggerChannels
+    def SetTriggerChannel(self, channel):
         """
-        if (channel <= 0 or channel > self.TriggerChannels):
+        set the trigger channel for the generator where triggers are received
+
+        :param channel: Channel number, 1 to TriggerChannels
+        :type channel: int
+        :return: Error code
+        :rtype: int
+        """
+        if channel <= 0 or channel > self.TriggerChannels:
             print("channel choice is out of range")
-            return
-         
+            return -3
+
         ormask = 1 << (channel - 1)
         cntr = self.mmio.read(0) & self.TriggerMask
         cntr = cntr | ormask
         self.write(0,cntr)
-        return
-    
+        return 0
+
+    def SetSource(self, source):
+        """
+        set the source for the generator: lfsr or fifo
+
+        :param source: Source for wave, 1 for LFSR 0 for FIFO
+        :type source: int
+        :return: Error code
+        :rtype: int
+        """
+        if source < 0 or source > 1:
+            print("source choice is out of range")
+            return -3
+
+        self.SetBit(reg = 0, pos = self.SourcePos, value = source)
+        return 0
+
+    def SetLFSRSeed(self, seed):
+        """
+        set the seed for lfsr
+
+        :param seed: Seed for LFSR
+        :type seed: int
+        :return: Error code
+        :rtype: int
+        """
+        if seed < 0 or seed > (2**self.SeedLfsrWidth - 1):
+            print("source choice is out of range")
+            return -3
+
+        andmask = 0xffffffff - ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        ormask = seed << (2*self.TriggerChannels)
+        cntr = self.mmio.read(0) & andmask
+        cntr = cntr | ormask
+        self.write(0, cntr)
+        return 0
+
+    def SetReadoutIncOff(self, inc, off):
+        """
+        Set readout increment and offset values
+
+        :param inc: Increment value for readout
+        :type inc: int
+        :param off: Offset value for readout
+        :type off: int
+        :return: None
+        :rtype: None
+        """
+        # write inc LOW
+        self.write(5, inc | 0xFFFFFFFF)
+        #write inc HIGH
+        self.write(6, inc >> 32)
+
+        # write off LOW
+        self.write(9, off | 0xFFFFFFFF)
+        #write off HIGH
+        self.write(10, off >> 32)
+
+    def SetDriveInc(self, inc):
+        """
+        Set readout increment value
+
+        :param inc: Increment value for readout
+        :type inc: int
+        :return: None
+        :rtype: None
+        """
+        # write inc LOW
+        self.write(7, inc | 0xFFFFFFFF)
+        #write inc HIGH
+        self.write(8, inc >> 32)
+
+    def SetTriggerSelector(self, trigger):
+        """
+        set the trigger: readout or drive
+
+        :param trigger: trigger selection
+        :type source: int
+        :return: Error code
+        :rtype: int
+        """
+        if trigger < 0 or trigger > 1:
+            print("source choice is out of range")
+            return -3
+
+        self.SetBit(reg = 0, pos = self.TriggerPos, value = trigger)
+        return 0
+
+    # def SetReadoutTriggerMaks(self, channel):
+    #
+    #     return
+
+    def SetBit(self, reg, pos, value):
+        andmask = 0xffffffff-(1<<pos)
+        ormask = value << pos
+        cntr = self.mmio.read(reg) & andmask
+        cntr = cntr | ormask
+        self.write(reg, cntr)
+
     def WriteCntrRegister(self, symmetric, even, invert, restart_phase_coherent_counter, forceone, keeplast, perpetual):
         """Write to the control register for manual generation
 
@@ -133,15 +219,15 @@ class Generator_driver(DefaultIP):
             value = value | 0x01000000
 
         self.mmio.write(0,int(value))
-        return 
-    
+        return
+
     def ManualTrigger(self):
         """trigger the generator manually
         """
         value = self.mmio.read(0) | 0x80000000
         self.mmio.write(0,value)
         return
-    
+
     def ManualStop(self):
         """stop the generator manually
         """
@@ -165,7 +251,7 @@ class Generator_driver(DefaultIP):
         if (frequency*1000000 > DAC_SAMPLERATE/2):
             pinc = 2**32 - ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
         else:
-            pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE 
+            pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
 
         # compute gain as fixed point 16-bit number
         gain = round(gain*0x7FFF)
@@ -179,7 +265,7 @@ class Generator_driver(DefaultIP):
         self.WriteCntrRegister(0,0,0,0,1,1,1)
 
         return
-    
+
     def SetRectangularMANUAL(self, frequency, gain, duration, DAC_SAMPLERATE):
         """set the manual registers to generate a rectangular pulse of a certain duration
 
@@ -188,7 +274,7 @@ class Generator_driver(DefaultIP):
             gain (float): gain, within 0 and 1
             duration (uint): duration in dac samples
             DAC_SAMPLERATE (uint): dac samplerate
-        """ 
+        """
 
         # compute the phase increment
         pinc = 0
@@ -196,7 +282,7 @@ class Generator_driver(DefaultIP):
         if (frequency*1000000 > DAC_SAMPLERATE/2):
             pinc = 2**32 - ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
         else:
-            pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE 
+            pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
 
         # compute gain as fixed point 16-bit number
         gain = round(gain*0x7FFF)
@@ -209,22 +295,22 @@ class Generator_driver(DefaultIP):
 
         # set the control word for a pulse
         self.WriteCntrRegister(0,0,0,0,1,0,0)
-        return 
-    
+        return
+
     def FillSampleMemory(self, start_address, samples, interpolation):
 
         """fill the sample memory of the generator
 
         Args:
             start_address (uint): address of generator memory where to start filling
-            samples (complex array): samples used to fill the memory, numpy complex array, within the complex circle 
+            samples (complex array): samples used to fill the memory, numpy complex array, within the complex circle
             interpolation (bool): memory is intended to be used for interpolation
         """
 
         if (start_address < 0 or start_address >= self.ChannelSampleMemoryDepth):
             print("error, address: " + str(start_address) + " is outside of range 0 to " + str(self.SampleMemoryDepth-1))
             return
-        
+
         size = samples.size
 
         if (interpolation):
@@ -233,11 +319,11 @@ class Generator_driver(DefaultIP):
         else:
             maxaddr = start_address + int(math.ceil(size/self.NumberOfChannels))
             address = start_address
-        
+
         if (maxaddr >= self.ChannelSampleMemoryDepth):
             print("error, size of sample array is bigger than available memory: " + str(maxaddr))
             return
-        
+
         channel_index = 0
         for i in samples:
             actual_address = address + channel_index*self.ChannelSampleMemoryDepth
@@ -270,7 +356,7 @@ class Generator_driver(DefaultIP):
         n_samples = wavedepth
         if (symmetric):
             n_samples = wavedepth*2
-        
+
         incr = ((n_samples -1)<<self.FractionalPrecision)//(duration-1)
         off = (start_address<<26) + (((n_samples -1)<<self.FractionalPrecision)%(duration-1))//2
 

@@ -1,10 +1,12 @@
 from pynq import Overlay
 from pynq import PL
 import xrfclk
+import xrfdc
+import customdrivers
 
 import os
 
-from commands import write_description, print_help, exit_function
+from commands import *
 
 BASE_PATH = "/home/xilinx/jupyter_notebooks/"
 
@@ -23,12 +25,17 @@ cmd_dict = {
     "help": print_help,
     "exit": exit_function,
     "description": write_description,
+    "set_manual_trigger": set_manual_trigger,
+    "set_source": set_source,
+    "set_seed": set_lfsr_seed,
+    "set_readout_inc_off": set_redaout_inc_off,
+    "set_drive_inc": set_drive_inc,
 }
 
 # Defining main function
 def main():
     print("### FIREQ API interface ###\n")
-    # TODO: add menu
+    print_help()
 
     # get overlay path
     ol_folder = input("# Insert Overlay folder\n")
