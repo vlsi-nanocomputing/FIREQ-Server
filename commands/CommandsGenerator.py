@@ -1,6 +1,4 @@
-from traceback import print_tb
-
-from Commands import IP_MISSING, OPTION_MISSING, VALUE_ERROR, WRONG_IP
+from commands.Commands import IP_MISSING, OPTION_MISSING, VALUE_ERROR, WRONG_IP
 
 
 def set_manual_trigger(ip=None, *options):
@@ -17,7 +15,12 @@ def set_manual_trigger(ip=None, *options):
         print("# Error: IP parameter missing")
         return IP_MISSING
 
-    ip.SetManualTrigger()
+    try:
+        ip.SetManualTrigger()
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
     return 0
 
 
@@ -46,17 +49,22 @@ def set_source(ip=None, *options):
         print('# Error: source provided is not valid, must be "LFSR" or "FIFO"')
         return VALUE_ERROR
 
-    if source == 'LFSR':
-        ip.SetSource(1)
-    elif source == 'FIFO':
-        ip.SetSource(0)
+    try:
+        if source == 'LFSR':
+            ip.SetSource(1)
+        elif source == 'FIFO':
+            ip.SetSource(0)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
 
     return 0
 
 
 def get_source(ip=None, *options):
     """
-    get_source <IP> <source>: Get the source of the wave (LFSR or FIFO)
+    get_source <IP>: Get the source of the wave (LFSR or FIFO)
 
     :param ip: IP selected
     :type ip: DefaultIP
@@ -68,7 +76,12 @@ def get_source(ip=None, *options):
         print("# Error: IP parameter missing")
         return IP_MISSING
 
-    ip.GetSource(0)
+    try:
+        ip.GetSource(0)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
 
     return 0
 
@@ -100,13 +113,19 @@ def set_lfsr_seed(ip=None, *options):
         print(f"# Error: {e}")
         return VALUE_ERROR
 
-    ip.SetLFSRSeed(seed)
+    try:
+        ip.SetLFSRSeed(seed)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
+
     return 0
 
 
 def get_lfsr_seed(ip=None, *options):
     """
-    set_seed <IP> <seed>: Set the seed for LFSR
+    set_seed <IP>: Set the seed for LFSR
 
     :param ip: IP selected
     :type ip: DefaultIP
@@ -118,7 +137,13 @@ def get_lfsr_seed(ip=None, *options):
         print("# Error: IP parameter missing")
         return IP_MISSING
 
-    ip.GetLFSRSeed()
+    try:
+        ip.GetLFSRSeed()
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
+
     return 0
 
 
@@ -156,7 +181,13 @@ def set_redaout_inc_off(ip=None, *options):
         print(f"# Error: {e}")
         return VALUE_ERROR
 
-    ip.SetReaoutIncOff(increment, offset)
+    try:
+        ip.SetReaoutIncOff(increment, offset)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
+
     return 0
 
 
@@ -189,7 +220,13 @@ def set_drive_inc(ip=None, *options):
         print(f"# Error: {e}")
         return VALUE_ERROR
 
-    ip.SetDriveInc(increment)
+    try:
+        ip.SetDriveInc(increment)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
+
     return 0
 
 
@@ -218,10 +255,15 @@ def set_trigger(ip=None, *options):
         print('# Error: source provided is not valid, must be "readout" or "drive"')
         return VALUE_ERROR
 
-    if source == 'readout':
-        ip.SetTrigger(1)
-    elif source == 'drive':
-        ip.SetTrigger(0)
+    try:
+        if source == 'readout':
+            ip.SetTrigger(1)
+        elif source == 'drive':
+            ip.SetTrigger(0)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
 
     return 0
 
@@ -260,10 +302,15 @@ def set_trigger_channel(ip=None, *options):
         print('# Error: ttype provided is not valid, must be "readout" or "drive"')
         return VALUE_ERROR
 
-    if ttype == 'readout':
-        ip.SetTriggerChannel(channel, 1)
-    elif ttype == 'drive':
-        ip.SetTriggerChannel(channel, 0)
+    try:
+        if ttype == 'readout':
+            ip.SetTriggerChannel(channel, 1)
+        elif ttype == 'drive':
+            ip.SetTriggerChannel(channel, 0)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
 
     return 0
 
@@ -293,10 +340,15 @@ def get_trigger_channel(ip=None, *options):
         print('# Error: ttype provided is not valid, must be "readout" or "drive"')
         return VALUE_ERROR
 
-    if ttype == 'readout':
-        ip.GetTriggerChannel(1)
-    elif ttype == 'drive':
-        ip.GetTriggerChannel(0)
+    try:
+        if ttype == 'readout':
+            ip.GetTriggerChannel(1)
+        elif ttype == 'drive':
+            ip.GetTriggerChannel(0)
+
+    except AttributeError as e:
+        print(f" Error: {e}")
+        return WRONG_IP
 
     return 0
 
@@ -323,4 +375,7 @@ def print_help_generate(*options):
     print("Commands available for generator:")
     # get first row of docstring
     for cmd in cmd_gen:
-        print(f"\t- {cmd_gen[cmd].__doc__.split('\n')[1].lstrip(" \n\t")}")
+        doc = cmd_gen[cmd].__doc__.split('\n')[1].lstrip(" \n\t")
+        print(f"\t- {doc}")
+
+print_help_generate()
