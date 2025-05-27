@@ -88,6 +88,29 @@ class Generator_driver(DefaultIP):
         self.SetBit(reg = 0, pos = channel + ttype * self.TriggerChannels, value = 1)
         return 0
 
+    def GetTriggerChannel(self, ttype):
+        """
+        get the trigger channel for the generator where triggers are received
+
+        :param ttype: trigger type: 0 for drive, 1 for readout
+        :type ttype: int
+        :return: Error code
+        :rtype: int
+        """
+        if ttype != 0 and ttype != 1:
+            print("type choice is out of range")
+            return -3
+
+        cntr = self.mmio.read(0)
+
+        mask = (cntr >> ttype*self.TriggerChannels) & (2**self.TriggerChannels - 1)
+        if ttype == 0:
+            print("Trigger Drive mask: " + format(mask, f"0{self.TriggerChannels}b"))
+        else:
+            print("Trigger Readout mask: " + format(mask, f"0{self.TriggerChannels}b"))
+
+        return 0
+
     def SetSource(self, source):
         """
         set the source for the generator: lfsr or fifo
@@ -102,6 +125,20 @@ class Generator_driver(DefaultIP):
             return -3
 
         self.SetBit(reg = 0, pos = self.SourcePos, value = source)
+        return 0
+
+    def GetSource(self):
+        """
+        get the source for the generator: lfsr or fifo
+
+        :return: Error code
+        :rtype: int
+        """
+        if self.GetBit(reg = 0, pos = self.SourcePos) == 0:
+            print("Source: FIFO")
+        else:
+            print("Source: LFSR")
+
         return 0
 
     def SetLFSRSeed(self, seed):
@@ -124,6 +161,24 @@ class Generator_driver(DefaultIP):
         self.write(0, cntr)
         return 0
 
+    def GetLFSRSeed(self, seed):
+        """
+        get the seed for lfsr
+
+        :return: Error code
+        :rtype: int
+        """
+        andmask = 0xffffffff - ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        ormask = seed << (2*self.TriggerChannels)
+        cntr = self.mmio.read(0) & andmask
+        cntr = cntr | ormask
+        self.write(0, cntr)
+
+        cntr = self.mmio.read(0) & ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        print(f"LFSR seed: {cntr}")
+
+        return 0
+
     def SetReadoutIncOff(self, inc, off):
         """
         Set readout increment and offset values
@@ -136,12 +191,12 @@ class Generator_driver(DefaultIP):
         :rtype: None
         """
         # write inc LOW
-        self.write(5, inc | 0xFFFFFFFF)
+        self.write(5, inc & 0xFFFFFFFF)
         #write inc HIGH
         self.write(6, inc >> 32)
 
         # write off LOW
-        self.write(9, off | 0xFFFFFFFF)
+        self.write(9, off & 0xFFFFFFFF)
         #write off HIGH
         self.write(10, off >> 32)
 
@@ -191,6 +246,21 @@ class Generator_driver(DefaultIP):
         cntr = self.mmio.read(reg) & andmask
         cntr = cntr | ormask
         self.write(reg, cntr)
+
+    def GetBit(self, reg, pos):
+        """
+        Function to get a bit from a register
+
+        :param reg: address of the register
+        :type reg: int
+        :param pos: position in the register to read
+        :type pos: int
+        :return: Value read
+        :rtype: int
+        """
+        cntr = self.mmio.read(reg)
+
+        return (cntr >> pos) & 0x1
 
     # def WriteCntrRegister(self, symmetric, even, invert, restart_phase_coherent_counter, forceone, keeplast, perpetual):
     #     """Write to the control register for manual generation

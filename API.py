@@ -25,16 +25,12 @@ def init_rf_clks(lmk_freq=245.76, lmx_freq=491.52):
 # define command dict
 cmd_dict = {
     "help": print_help,
+    "help_generator": print_help_generate,
     "exit": exit_function,
     "description": write_description,
-    "set_manual_trigger": set_manual_trigger,
-    "set_source": set_source,
-    "set_seed": set_lfsr_seed,
-    "set_readout_inc_off": set_redaout_inc_off,
-    "set_drive_inc": set_drive_inc,
-    "set_trigger": set_trigger,
-    "set_trigger_channel": set_trigger_channel
 }
+# merge generator commands
+cmd_dict |= cmd_gen
 
 # Defining main function
 def main():
@@ -42,8 +38,8 @@ def main():
     print_help()
 
     # get overlay path
-    ol_folder = input("# Insert Overlay folder\n")
-    ol_filename = input('# Insert Overlay filename (press Enter for "overlay.bit"\n')
+    ol_folder = input("\n# Insert Overlay folder\n")
+    ol_filename = input('# Insert Overlay filename (press Enter for "overlay.bit")\n')
     if not ol_filename:
         ol_filename = "overlay.bit"
 
@@ -59,6 +55,7 @@ def main():
     PL.reset()
 
     # get overlay
+    print("# Loading the overlay")
     ol = Overlay(ol_filepath)
 
     # init clock
@@ -77,18 +74,7 @@ def main():
                 # ip_dict[f"{ip_name.lower()}{n_instances}"] = ol.ip_dict[ip]["phys_addr"]
                 ip_dict[f"{ip_name.lower()}{n_instances}"] = getattr(ol,ip)
 
-    """
-    # old code
-    generator = ol.AXIS_Generator_IP_0
-    # TODO: add other IPs
-
-    ip_dict = {
-        "generator": generator,
-        #TODO: add other IPs
-    }
-    """
-
-    print(" # IPs available:")
+    print("\n# IPs available:")
     for ip in ip_dict.keys():
         print(f"\t- {ip}")
 
