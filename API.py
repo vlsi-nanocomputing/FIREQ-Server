@@ -9,6 +9,8 @@ import os
 from commands import *
 
 BASE_PATH = "/home/xilinx/jupyter_notebooks/"
+IP_BLOCKS = ["Generator", ]
+
 
 def init_rf_clks(lmk_freq=245.76, lmx_freq=491.52):
     """Initialise the LMK and LMX clocks for the radio hierarchy.
@@ -63,6 +65,20 @@ def main():
     print("# Init clock")
     init_rf_clks()
 
+    # create dict with all the IPs
+    ip_dict = {}
+
+    all_ips = ol.ip_dict.keys()
+    for ip_name in IP_BLOCKS:
+        n_instances = 0
+        for ip in all_ips:
+            if ip_name in ip:
+                n_instances += 1
+                # ip_dict[f"{ip_name.lower()}{n_instances}"] = ol.ip_dict[ip]["phys_addr"]
+                ip_dict[f"{ip_name.lower()}{n_instances}"] = getattr(ol,ip)
+
+    """
+    # old code
     generator = ol.AXIS_Generator_IP_0
     # TODO: add other IPs
 
@@ -70,6 +86,11 @@ def main():
         "generator": generator,
         #TODO: add other IPs
     }
+    """
+
+    print(" # IPs available:")
+    for ip in ip_dict.keys():
+        print(f"\t- {ip}")
 
     while True:
         cmd = input("\nInsert a command: ")
