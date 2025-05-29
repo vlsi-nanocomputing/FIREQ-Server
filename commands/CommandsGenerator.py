@@ -77,7 +77,7 @@ def get_source(ip=None, *options):
         return IP_MISSING
 
     try:
-        ip.GetSource(0)
+        ip.GetSource()
 
     except AttributeError as e:
         print(f" Error: {e}")
@@ -125,7 +125,7 @@ def set_lfsr_seed(ip=None, *options):
 
 def get_lfsr_seed(ip=None, *options):
     """
-    set_seed <IP>: Set the seed for LFSR
+    get_seed <IP>: Set the seed for LFSR
 
     :param ip: IP selected
     :type ip: DefaultIP
@@ -335,7 +335,7 @@ def get_trigger_channel(ip=None, *options):
         print("# Error: ttype parameter missing")
         return OPTION_MISSING
 
-    ttype = options[1]
+    ttype = options[0]
     if not ttype in ['readout', 'drive']:
         print('# Error: ttype provided is not valid, must be "readout" or "drive"')
         return VALUE_ERROR

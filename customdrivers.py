@@ -37,8 +37,16 @@ class Generator_driver(DefaultIP):
 
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
 
-        # MASK and Bit position definition
-        # self.TriggerMask = 0xFFFFFFFF << self.TriggerChannels
+        # Reg definition
+        self.ctrl = 0
+        self.readout_inc_l = 5
+        self.readout_inc_h = 6
+        self.readout_off_l = 9
+        self.readout_off_h = 10
+        self.drive_inc_l = 7
+        self.drive_inc_h = 8
+
+        # Bit position definition
         self.SourcePos = 29
         self.TriggerPos = 30
         self.ManTrigPos = 31
@@ -64,7 +72,7 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        self.SetBit(reg = 0, pos = self.ManTrigPos, value = 1)
+        self.SetBit(reg = self.ctrl, pos = self.ManTrigPos, value = 1)
         return
 
     def SetTriggerChannel(self, channel, ttype):
@@ -85,7 +93,12 @@ class Generator_driver(DefaultIP):
             print("type choice is out of range")
             return -3
 
-        self.SetBit(reg = 0, pos = channel + ttype * self.TriggerChannels, value = 1)
+        # clear mask
+        andmask = 0xffffffff - ((2**self.TriggerChannels - 1) << (ttype*self.TriggerChannels))
+        cntr = self.mmio.read(self.ctrl) & andmask
+        self.write(self.ctrl, cntr)
+
+        self.SetBit(reg = self.ctrl, pos = channel - 1 + ttype * self.TriggerChannels, value = 1)
         return 0
 
     def GetTriggerChannel(self, ttype):
@@ -101,7 +114,7 @@ class Generator_driver(DefaultIP):
             print("type choice is out of range")
             return -3
 
-        cntr = self.mmio.read(0)
+        cntr = self.mmio.read(self.ctrl)
 
         mask = (cntr >> ttype*self.TriggerChannels) & (2**self.TriggerChannels - 1)
         if ttype == 0:
@@ -124,7 +137,7 @@ class Generator_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        self.SetBit(reg = 0, pos = self.SourcePos, value = source)
+        self.SetBit(reg = self.ctrl, pos = self.SourcePos, value = source)
         return 0
 
     def GetSource(self):
@@ -134,7 +147,7 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        if self.GetBit(reg = 0, pos = self.SourcePos) == 0:
+        if self.GetBit(reg = self.ctrl, pos = self.SourcePos) == 0:
             print("Source: FIFO")
         else:
             print("Source: LFSR")
@@ -156,25 +169,19 @@ class Generator_driver(DefaultIP):
 
         andmask = 0xffffffff - ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
         ormask = seed << (2*self.TriggerChannels)
-        cntr = self.mmio.read(0) & andmask
+        cntr = self.mmio.read(self.ctrl) & andmask
         cntr = cntr | ormask
-        self.write(0, cntr)
+        self.write(self.ctrl, cntr)
         return 0
 
-    def GetLFSRSeed(self, seed):
+    def GetLFSRSeed(self):
         """
         get the seed for lfsr
 
         :return: Error code
         :rtype: int
         """
-        andmask = 0xffffffff - ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
-        ormask = seed << (2*self.TriggerChannels)
-        cntr = self.mmio.read(0) & andmask
-        cntr = cntr | ormask
-        self.write(0, cntr)
-
-        cntr = self.mmio.read(0) & ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        cntr = self.mmio.read(self.ctrl) & ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
         print(f"LFSR seed: {cntr}")
 
         return 0
@@ -187,18 +194,41 @@ class Generator_driver(DefaultIP):
         :type inc: int
         :param off: Offset value for readout
         :type off: int
-        :return: None
-        :rtype: None
+        :return: Error code
+        :rtype: int
         """
         # write inc LOW
-        self.write(5, inc & 0xFFFFFFFF)
-        #write inc HIGH
-        self.write(6, inc >> 32)
+        self.write(self.readout_inc_l, inc & 0xFFFFFFFF)
+        # write inc HIGH
+        self.write(self.readout_inc_h, inc >> 32)
 
         # write off LOW
-        self.write(9, off & 0xFFFFFFFF)
-        #write off HIGH
-        self.write(10, off >> 32)
+        self.write(self.readout_off_l, off & 0xFFFFFFFF)
+        # write off HIGH
+        self.write(self.readout_off_h, off >> 32)
+
+        return 0
+
+    def GetReadoutIncOff(self):
+        """
+        Get readout increment and offset values
+
+        :return: Error code
+        :rtype: int
+        """
+        # read inc LOW
+        inc = self.mmio.read(self.readout_inc_l)
+        # read inc HIGH
+        inc += (self.mmio.read(self.readout_inc_h) & 0xFFFF) << 32
+
+        # read off LOW
+        off = self.mmio.read(self.readout_off_l)
+        # read off HIGH
+        off += (self.mmio.read(self.readout_off_h) & 0xFFFF) << 32
+
+        print(f"readout increment: {inc}, offset: {off}")
+
+        return 0
 
     def SetDriveInc(self, inc):
         """
@@ -206,13 +236,31 @@ class Generator_driver(DefaultIP):
 
         :param inc: Increment value for readout
         :type inc: int
-        :return: None
-        :rtype: None
+        :return: Error code
+        :rtype: int
         """
         # write inc LOW
-        self.write(7, inc | 0xFFFFFFFF)
-        #write inc HIGH
-        self.write(8, inc >> 32)
+        self.write(self.drive_inc_l, inc | 0xFFFFFFFF)
+        # write inc HIGH
+        self.write(self.drive_inc_h, inc >> 32)
+
+        return 0
+
+    def GetDriveInc(self):
+        """
+        Get drive increment value
+
+        :return: Error code
+        :rtype: int
+        """
+        # read inc LOW
+        inc = self.mmio.read(self.drive_inc_l)
+        # read inc HIGH
+        inc += (self.mmio.read(self.drive_inc_h) & 0xFFFF) << 32
+
+        print(f"drive increment: {inc}")
+
+        return 0
 
     def SetTriggerSelector(self, trigger):
         """
@@ -227,7 +275,7 @@ class Generator_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        self.SetBit(reg = 0, pos = self.TriggerPos, value = trigger)
+        self.SetBit(reg = self.ctrl, pos = self.TriggerPos, value = trigger)
         return 0
 
     def SetBit(self, reg, pos, value):
