@@ -47,8 +47,8 @@ class Generator_driver(DefaultIP):
         self.drive_inc_h = 8
 
         # Bit position definition
-        self.SourcePos = 29
-        self.TriggerPos = 30
+        self.SourcePos = 27
+        self.ManTrigSel = 28
         self.ManTrigPos = 31
 
     def WriteDescription(self):
@@ -73,11 +73,11 @@ class Generator_driver(DefaultIP):
         :rtype: int
         """
         self.SetBit(reg = self.ctrl, pos = self.ManTrigPos, value = 1)
-        return
+        return 0
 
     def SetTriggerChannel(self, channel, ttype):
         """
-        set the trigger channel for the generator where triggers are received
+        Set the channel where the generator is listening for a trigger for the readout and drive trigger types
 
         :param channel: Channel number, 1 to TriggerChannels
         :type channel: int
@@ -86,7 +86,7 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        if channel <= 0 or channel > self.TriggerChannels:
+        if channel < 1 or channel > self.TriggerChannels:
             print("channel choice is out of range")
             return -3
         if ttype != 0 and ttype != 1:
@@ -94,7 +94,7 @@ class Generator_driver(DefaultIP):
             return -3
 
         # clear mask
-        andmask = 0xffffffff - ((2**self.TriggerChannels - 1) << (ttype*self.TriggerChannels))
+        andmask = ~((2**self.TriggerChannels - 1) << (ttype*self.TriggerChannels))
         cntr = self.mmio.read(self.ctrl) & andmask
         self.write(self.ctrl, cntr)
 
@@ -167,7 +167,7 @@ class Generator_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        andmask = 0xffffffff - ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        andmask = ~((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
         ormask = seed << (2*self.TriggerChannels)
         cntr = self.mmio.read(self.ctrl) & andmask
         cntr = cntr | ormask
@@ -188,7 +188,8 @@ class Generator_driver(DefaultIP):
 
     def SetReadoutIncOff(self, inc, off):
         """
-        Set readout increment and offset values
+        Set readout phase increment and phase offset values, used to generate the 
+        modulation carrier for waves on the readout output line
 
         :param inc: Increment value for readout
         :type inc: int
@@ -198,41 +199,42 @@ class Generator_driver(DefaultIP):
         :rtype: int
         """
         # write inc LOW
-        self.write(self.readout_inc_l, inc & 0xFFFFFFFF)
+        self.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.readout_inc_h, inc >> 32)
+        self.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.write(self.readout_off_l, off & 0xFFFFFFFF)
+        self.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.write(self.readout_off_h, off >> 32)
+        self.write(self.readout_off_h*4, off >> 32)
 
         return 0
 
     def GetReadoutIncOff(self):
         """
-        Get readout increment and offset values
+        Get readout phase increment and phase offset values
 
         :return: Error code
         :rtype: int
         """
         # read inc LOW
-        inc = self.mmio.read(self.readout_inc_l)
+        inc = self.mmio.read(self.readout_inc_l*4)
         # read inc HIGH
-        inc += (self.mmio.read(self.readout_inc_h) & 0xFFFF) << 32
+        inc += self.mmio.read(self.readout_inc_h*4) << 32
 
         # read off LOW
-        off = self.mmio.read(self.readout_off_l)
+        off = self.mmio.read(self.readout_off_l*4)
         # read off HIGH
-        off += (self.mmio.read(self.readout_off_h) & 0xFFFF) << 32
+        off += self.mmio.read(self.readout_off_h*4) << 32
 
-        print(f"readout increment: {inc}, offset: {off}")
+        print(f"readout phase increment: {inc}, phase offset: {off}")
 
         return 0
 
     def SetDriveInc(self, inc):
         """
-        Set readout increment value
+        Set readout phase increment value, used to generate the 
+        modulation carrier for waves on the drive output line
 
         :param inc: Increment value for readout
         :type inc: int
@@ -240,42 +242,44 @@ class Generator_driver(DefaultIP):
         :rtype: int
         """
         # write inc LOW
-        self.write(self.drive_inc_l, inc | 0xFFFFFFFF)
+        self.write(self.drive_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.drive_inc_h, inc >> 32)
+        self.write(self.drive_inc_h*4, inc >> 32)
 
         return 0
 
     def GetDriveInc(self):
         """
-        Get drive increment value
+        Get drive phaseincrement value
 
         :return: Error code
         :rtype: int
         """
         # read inc LOW
-        inc = self.mmio.read(self.drive_inc_l)
+        inc = self.mmio.read(self.drive_inc_l*4)
         # read inc HIGH
-        inc += (self.mmio.read(self.drive_inc_h) & 0xFFFF) << 32
+        inc += self.mmio.read(self.drive_inc_h*4) << 32
 
-        print(f"drive increment: {inc}")
+        print(f"drive phase increment: {inc}")
 
         return 0
 
-    def SetTriggerSelector(self, trigger):
+    def SetManualTriggerDestination(self, destination):
         """
-        set the trigger: readout or drive
+        Set the destination of a manually generated wave.
+        The wave to be generated is the one set for readout but you can select 
+        if the manually generated wave should output on the readout or drive line.
 
-        :param trigger: trigger selection
-        :type source: int
+        :param destination: 1 for readout output line, 0 for drive output line
+        :type destination: int
         :return: Error code
         :rtype: int
         """
-        if trigger < 0 or trigger > 1:
+        if destination < 0 or destination > 1:
             print("source choice is out of range")
             return -3
 
-        self.SetBit(reg = self.ctrl, pos = self.TriggerPos, value = trigger)
+        self.SetBit(reg = self.ctrl, pos = self.ManTrigSel, value = destination)
         return 0
 
     def SetBit(self, reg, pos, value):
@@ -291,9 +295,9 @@ class Generator_driver(DefaultIP):
         """
         andmask = 0xffffffff-(1<<pos)
         ormask = value << pos
-        cntr = self.mmio.read(reg) & andmask
+        cntr = self.mmio.read(reg*4) & andmask
         cntr = cntr | ormask
-        self.write(reg, cntr)
+        self.write(reg*4, cntr)
 
     def GetBit(self, reg, pos):
         """
@@ -306,7 +310,7 @@ class Generator_driver(DefaultIP):
         :return: Value read
         :rtype: int
         """
-        cntr = self.mmio.read(reg)
+        cntr = self.mmio.read(reg*4)
 
         return (cntr >> pos) & 0x1
 
@@ -520,53 +524,196 @@ class Acquisition_driver(DefaultIP):
 
     def __init__(self, description):
         super().__init__(description=description)
+        # number of triggers on the input trigger channel
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-        self.TriggerMask = 0xFFFFFFFF << self.TriggerChannels
-        
+        # parallelism of the acquistion
         self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
         self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
+        # maximum acquistion duration
+        self.DurationWidth = int(description["parameters"]["DurationWidth"])
+        self.MaximumDuration = pow(2,self.DurationWidth)
+        # depth of the phase increment and offset
+        self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
+        # maximum time of flight delay
+        self.TimeOfFlightMax = pow(2,int(description["parameters"]["TimeOfFlightCounterWidth"]))
 
-        self.MaximumDuration = pow(2,int(description["parameters"]["DurationWidth"]))
+        # Reg definition
+        self.ctrl = 0
+        self.readout_inc_l = 3
+        self.readout_inc_h = 4
+        self.readout_off_l = 1
+        self.readout_off_h = 2
+
+        # Bit position definition
+        self.ManTrigPos = 31
 
     def WriteDescription(self):
+        """
+        Print the description of the IP
+        """
         print("trigger channels: " + str(self.TriggerChannels))
-        print("trigger mask: " + str(hex(self.TriggerMask)))
         print("number of channels: " + str(self.NumberOfChannels))
-        print("maximum sample duration: " + str(self.MaximumDuration))
+        print("maximum acquistion duration: " + str(self.MaximumDuration))
+        print("depth of phase increment and offset: " + str(self.PhaseDepth))
+        print("maximum time of flight: " + str(self.TimeOfFlightMax))
 
     def SetAcquistionParameters(self, frequency, phase, duration, ADC_SAMPLERATE):
+        """
+        Set parameters for acquistion such as demodulation frequency, the phase offset of the demodulation
+        and the duration of the acquistion
+        
+        :param frequency: Frequency of the demodulation signal in MHz
+        :type frequency: float
+        :param phase: Phase offset of the demodulation signal in RADs
+        :type phase: float
+        :param duration: Acquistion duration in clock cycles
+        :type duration: uint
+        :param ADC_SAMPLERATE: Sampling frequency of the ADC in MHz
+        :type ADC_SAMPLERATE: float
+        :return: Error code
+        :rtype: int
+        """
+        # check inputs
+        if(frequency < 0 or duration < 0  or duration > self.MaximumDuration):
+            print("input parameters out of range")
+            return -3
+
+        # get the bounded phase, mapping an unbounded radiant into (-2pi:2pi)
+        bounded_phase = phase % (2*np.pi)
+        # add 2pi to move the bounds to (0:4pi)
+        bounded_phase = bounded_phase + 2*np.pi
+        # now bound the phase to [0:2pi)
+        bounded_phase = bounded_phase% (2*np.pi)
+
+        # get the nyquist zone
+        nyquist_zone = frequency//(ADC_SAMPLERATE/2)
+        # get the reminder, e.g. the distance from the nyquist frequency
+        nyquist_reminder = frequency%(ADC_SAMPLERATE/2)
+
+        # compute the phase increment and offset
         pinc = 0
-        #todo: add checks to input params
-        pinc = ((frequency*1000000)*(2**32))/ADC_SAMPLERATE
+        poff = 0
+
+        if (nyquist_zone%2 == 0):
+            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
+            # the odd/even checks on the real nyquist zone are opposite
+            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/ADC_SAMPLERATE
+            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
+        else:
+            # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
+            # as the distance from the sample rate
+            nyquist_reminder = ADC_SAMPLERATE/2 - nyquist_reminder
+            bounded_phase = 2*np.pi - bounded_phase
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/ADC_SAMPLERATE
+            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
 
         # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
         # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
-        self.mmio.write(0x20,round(pinc)&0xFFFFFFFE)
-        # todo: fix the phase not being used
-        self.mmio.write(0x1c,0)
-        # todo: check this out
-        self.mmio.write(0x08,int(duration))
-        return
+        pinc = round(pinc)&(2**self.PhaseDepth - 2)
+        poff = round(poff)&(2**self.PhaseDepth - 2)
 
-    def ManualTrigger(self):
-        """trigger the acquisition manually
-        """
-        self.mmio.write(0,0x80000000)
+        # write registers
+        self.SetReadoutIncOff(pinc,poff)
+
+        # write the duration
+        self.SetDuration(duration)
         return
     
-    def SetTriggerChannel(self,channel):
-        """set the trigger channel for the acquisition 
-
-        Args:
-            channel (int): channel number, 1 to TriggerChannels
+    def SetReadoutIncOff(self, inc, off):
         """
-        if (channel <= 0 or channel > self.TriggerChannels):
-            print("channel choice is out of range")
-            return
-         
-        ormask = 1 << (channel - 1)
-        self.mmio.write(0x10,ormask)
+        Set readout increment and offset values
+
+        :param inc: Increment value for readout
+        :type inc: int
+        :param off: Offset value for readout
+        :type off: int
+        :return: Error code
+        :rtype: int
+        """
+        # write inc LOW
+        self.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        # write inc HIGH
+        self.write(self.readout_inc_h*4, inc >> 32)
+
+        # write off LOW
+        self.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        # write off HIGH
+        self.write(self.readout_off_h*4, off >> 32)
+
+        return 0
+    
+    def ManualTrigger(self):
+        """
+        trigger the acquisition manually
+        """
+        ormask = 0x80000000
+        cntr = self.mmio.read(0) | ormask
+        self.mmio.write(0,cntr)
         return
+    
+    def SetDuration(self, dur):
+        """
+        Set the acquistion duration
+        
+        :param dur: Duration in clock cycles
+        :type dur: uint
+        :return: Error Code
+        :rtype: int
+        """
+        
+        # todo: check if this is correct in terms of the actual size of acquistion
+        if (dur < 0 or dur > self.MaximumDuration):
+            print("acquistion duration is out of range")
+            return -3
+
+        mask = (self.MaximumDuration - 1) << self.TriggerChannels
+        cntr = self.mmio.read(0) & (~mask)
+        cntr = cntr | (dur << self.TriggerChannels)
+        self.mmio.write(0,cntr)
+    
+    def SetTriggerChannel(self, trigger):
+        """
+        set the readout trigger channel
+
+        :param trigger: trigger selection, set to 0 to deactivate external triggers
+        :type trigger: uint
+        :return: Error code
+        :rtype: int
+        """
+
+        if trigger < 0 or trigger > self.TriggerChannels:
+            print("source choice is out of range")
+            return -3
+
+        andmask = ~(2**self.TriggerChannels-1)
+        cntr = self.mmio.read(0) & andmask
+        if (trigger == 0):
+            ormask = 0
+        else:
+            ormask = 1 << (trigger-1)
+        cntr = cntr | ormask
+        self.mmio.write(0,cntr)
+        return 0
+    
+    def SetTimeOfFlight(self, time_of_flight):
+        """
+        Set time of flight
+        
+        :param time_of_flight: Time of flight in clock cycles
+        :type time_of_flight: uint
+        :return: Error code
+        :rtype: int
+        """
+        # todo: check if this is correct in terms of the actual time of flight
+        if (time_of_flight < 0 or time_of_flight > self.MaximumDuration):
+            print("time of flight is out of range")
+            return -3
+
+        mask = (self.TimeOfFlightMax - 1) << (self.TriggerChannels + self.DurationWidth)
+        cntr = self.mmio.read(0) & (~mask)
+        cntr = cntr | (time_of_flight << (self.TriggerChannels + self.DurationWidth))
+        self.mmio.write(0,cntr)
 
 ######################################################################################################
 #      ___           ___                       ___           ___           ___           ___         #
@@ -591,57 +738,81 @@ class Trigger_driver(DefaultIP):
 
         super().__init__(description=description)
         # parse the number of channels of the trigger generator
-        self.TriggerChannels = int(description['parameters']['n_occ'])
-        self.TriggerMask = 0xFFFFFFFF << self.TriggerChannels
+        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
 
         # parse the fifo interface depth and create mmio handle
         self.FifoInterfaceMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
         self.FifoInterfaceMMIO = MMIO(description["phys_addr"]-self.FifoInterfaceMemoryDepth, self.FifoInterfaceMemoryDepth)
+
+        # fifo depth in number of words 
         self.ChannelFifoDepth = pow(2,int(description['parameters']['FifoAddressWidth']))
 
+        # fifo output width
+        self.FifoOutputWidth = int(description['parameters']['FifoOutputWidth'])
+        # maximum drive delay
+        self.DriveDelayMax = pow(2,self.FifoOutputWidth-1)
+
+        # experiment max
+        self.ExperimentTimerMax = pow(2,int(description['parameters']['ExperimentTimerWidth']))
+
         # parse the size of the repitition counter
-        self.MaxHWRepetitions = pow(2,int(description['parameters']['reps_width'])) - 1
+        self.MaxHWRepetitions = pow(2,int(description['parameters']['RepetitionWidth']))
 
         #init fifo pointers
         self.FIFOpointers = [0]*self.TriggerChannels
 
+        self.ctrl = 0
+        self.experiment_dur_l = 2
+        self.experiment_dur_h = 3
+        self.shots_num_l = 1
+
+        # Bit position definition
+        self.ManTrigPos = 31
+
     def WriteDescription(self):
         print("trigger channels: " + str(self.TriggerChannels))
-        print("trigger mask: " + str(hex(self.TriggerMask)))
         print("fifo interface axi depth: " + str(self.FifoInterfaceMemoryDepth))
         print("fifo channel depth: " + str(self.ChannelFifoDepth))
         print("maximum number of hardware repetitions: " + str(self.MaxHWRepetitions))
 
-    def SetTriggerARV(self, value):
-        """set the trigger counter auto reload value
-
-        Args:
-            value (int): auto reload value, 32 bit unsigned
+    def SetExperimentDuration(self,duration):
         """
-        self.mmio.write(8,int(value))
-
-    def SetTriggerShots(self, value):
-        """set the number of hardware shots 
-
-        Args:
-            value (int): number of hardware shots
+        Set the experiment duration for a single shot
+        
+        :param duration: Duration in clock cycles
+        :type duration: uint
         """
-        if(value <= 0 or value > self.MaxHWRepetitions):
+
+        # write inc LOW
+        self.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
+        # write inc HIGH
+        self.write(self.experiment_dur_h*4, duration >> 32)
+
+    def SetNumberOfShots(self, value):
+        """
+        Set the number of shots to execute in hardware
+        
+        :param value: number of shots
+        :type value: uint
+        """
+        if(value < 1 or value > self.MaxHWRepetitions):
             print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.MaxHWRepetitions))
             return
 
-        self.mmio.write(4,int(value))
+        self.mmio.write(self.shots_num_l*4,int(value))
 
-    def StartTrigger(self):
-        """start the pheripheral
+    def StartExperiment(self):
         """
-        self.mmio.write(0,0x80000000)
+        Start the generation of triggers
+        """
+        self.mmio.write(0,1 << self.ManTrigPos)
 
     def IsDone(self):
-        """checks if the trigger generator has stopped running
-
-        Returns:
-            bool: returns 1 if done
+        """
+        Check if the experiment is finished
+        
+        :return: 1 if the experiment is finished, 0 if still running
+        :rtype: Literal[1, 0]
         """
         cntr = self.mmio.read(0)
         if ((cntr&0x40000000) == 0x40000000):
@@ -649,12 +820,17 @@ class Trigger_driver(DefaultIP):
         else:
             return 0
 
-    def PushFIFO(self, channel, value):
-        """push an output compare value to the fifo of a specified channel
-
-        Args:
-            channel (int): channel number, starts from 1
-            value (int): unsigned 32 bit output compare value, 0 is invalid
+    def PushDriveFIFO(self, channel, delay, generate_trigger):
+        """
+        Push a delay value to the FIFO of a channel. The generate_trigger input is used to 
+        tell the trigger generator if a trigger should be generated at the end of the delay
+        
+        :param channel: Drive channel
+        :type channel: uint
+        :param delay: Delay in clock cycles
+        :type delay: uint
+        :param generate_trigger: Generates a trigger if set to 1
+        :type generate_trigger: Literal[1, 0]
         """
         if (channel<=0 or channel > self.TriggerChannels):
             print("error: channel " + str(channel) + " is outside of range 1 to " + str(self.TriggerChannels))
@@ -671,7 +847,8 @@ class Trigger_driver(DefaultIP):
         return
     
     def ResetFIFOPointers(self):
-        """reset the fifo pointer used by the driver to refill fifo. Does not physically empty the fifo
+        """
+        Resets the cached FIFO pointers. Does not clear the FIFO entries
         """
         self.FIFOpointers = [0 for i in self.FIFOpointers]
         return
