@@ -21,6 +21,8 @@ import math
 class Generator_driver(DefaultIP):
 
     bindto = ['user.org:user:AXIS_Generator_IP:1.0']
+    
+    EnvelopeMemoryDict = {}
 
     def __init__(self, description):
         super().__init__(description=description)
@@ -36,6 +38,9 @@ class Generator_driver(DefaultIP):
         self.FractionalPrecision = int(description["parameters"]["IncrementFractionalPrecision"])
 
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
+
+        # set the memory free space in the envelope memory dictionary
+        self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
 
         # Reg definition
         self.ctrl = 0
@@ -313,6 +318,82 @@ class Generator_driver(DefaultIP):
         cntr = self.mmio.read(reg*4)
 
         return (cntr >> pos) & 0x1
+    
+    def WriteEnvelopeMemory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
+        """
+        Write to the envelope memory (sample memory) a series of samples to be used to generate a wave. \n
+        An envelope description is cached and a name is associated to it. \n
+        Important note: symmetric waves should have an odd number of samples and only half of the samples
+        (including the center sample) should be passed to this function. \n
+        Warning: the values in the array should be representable in int16, if not they will be saturated 
+        to the maximum or negative value.
+        
+        :param envelope_samples: complex array of samples, real and imaginary part used as I/Q values
+        :type envelope_samples: complex int16 numpy array
+        :param for_interpolation: if the envelope is to be used with interpolation
+        :type for_interpolation: bool
+        :param is_symmetric: if the envelope is symmetric, only valid if it's for interpolation
+        :type is_symmetric: bool
+        :param i_even: type of symmetry of the in-phase samples
+        :type i_even: bool
+        :param q_even: type of symmetry of the quadrature samples
+        :type q_even: bool
+        :param envelope_name: name to attach to envelope description
+        :type envelope_name: string
+        """
+        new_dict_item = {}
+
+        # check inputs
+        if envelope_name in self.EnvelopeMemoryDict.keys():
+            print("error, name '" + envelope_name + "' is already in use")
+            return -3
+        if (envelope_samples.dtype != complex):
+            print("error, the provided samples for the envelope are not complex")
+            return -3
+        
+        envelope_size = envelope_samples.size
+        if (for_interpolation):
+            new_dict_item["size"] = envelope_size
+            new_dict_item["is_sym"] = is_symmetric
+            new_dict_item["i_even"] = i_even
+            new_dict_item["q_even"] = q_even
+        else:
+            envelope_size = (envelope_size + self.NumberOfChannels-1) // self.NumberOfChannels
+            new_dict_item["size"] = envelope_size
+            new_dict_item["is_sym"] = 0
+            new_dict_item["i_even"] = 0
+            new_dict_item["q_even"] = 0
+        
+        # check that we have enough space in the sample memory
+        free_space = self.EnvelopeMemoryDict["_FREESPACE"]["depth"]
+        if (free_space < envelope_size):
+            print("error, not enough space in the envelope memory. Required space: " 
+                  + str(envelope_size) + ", available space: " + str(free_space) )
+            return -4
+        
+        # finish setup of the dictionary entry
+        start_address = self.EnvelopeMemoryDict["_FREESPACE"]["start"]
+        new_dict_item["start"] = start_address
+
+        # commit to envelope dictionary
+        self.EnvelopeMemoryDict[envelope_name] = new_dict_item
+        self.EnvelopeMemoryDict["_FREESPACE"]["start"] = start_address + envelope_size
+        self.EnvelopeMemoryDict["_FREESPACE"]["size"] = free_space - envelope_size
+
+        # commit to generator sample memory
+        if(is_symmetric):
+            # write the samples to all channels, there is a specific space in the generator memory to do just that
+            write_address_start = start_address + self.ChannelSampleMemoryDepth*self.NumberOfChannels
+            for index,sample in enumerate(envelope_samples):
+                to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
+                self.SampleMemoryMMIO.write((write_address_start+index)*4,to_write)
+        else:
+            # TODO: handle last samples
+            for index,sample in enumerate(envelope_samples):
+                to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
+                channel = index % self.NumberOfChannels
+                write_address = start_address + channel*self.ChannelSampleMemoryDepth + index//self.NumberOfChannels
+                self.SampleMemoryMMIO.write((write_address)*4,to_write)
 
     # def WriteCntrRegister(self, symmetric, even, invert, restart_phase_coherent_counter, forceone, keeplast, perpetual):
     #     """Write to the control register for manual generation
@@ -662,7 +743,7 @@ class Acquisition_driver(DefaultIP):
         :rtype: int
         """
         
-        # todo: check if this is correct in terms of the actual size of acquistion
+        # TODO: check if this is correct in terms of the actual size of acquistion
         if (dur < 0 or dur > self.MaximumDuration):
             print("acquistion duration is out of range")
             return -3
@@ -705,7 +786,7 @@ class Acquisition_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        # todo: check if this is correct in terms of the actual time of flight
+        # TODO: check if this is correct in terms of the actual time of flight
         if (time_of_flight < 0 or time_of_flight > self.MaximumDuration):
             print("time of flight is out of range")
             return -3
