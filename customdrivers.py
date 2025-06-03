@@ -41,6 +41,8 @@ class Generator_driver(DefaultIP):
 
         # set the memory free space in the envelope memory dictionary
         self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
+        # set an entry for rectangular waves
+        self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
 
         # Reg definition
         self.ctrl = 0
@@ -319,6 +321,97 @@ class Generator_driver(DefaultIP):
 
         return (cntr >> pos) & 0x1
     
+    def SetReadoutDDSParameters(self, frequency : float, phase : float, dac_samplerate : int):
+        """
+        Set frequency and phase for the readout carrier signal
+        
+        :param frequency: Description
+        :type frequency: float
+        :param phase: Description
+        :type phase: float
+        :param dac_samplerate: Description
+        :type dac_samplerate: int
+        :return: Description
+        :rtype: Literal[-3, 0]
+        """
+        # check inputs
+        if(frequency < 0):
+            print("input parameters out of range")
+            return -3
+
+        # get the bounded phase, mapping an unbounded radiant into (-2pi:2pi)
+        bounded_phase = phase % (2*np.pi)
+        # add 2pi to move the bounds to (0:4pi)
+        bounded_phase = bounded_phase + 2*np.pi
+        # now bound the phase to [0:2pi)
+        bounded_phase = bounded_phase% (2*np.pi)
+
+        # get the nyquist zone
+        nyquist_zone = frequency//(dac_samplerate/2)
+        # get the reminder, e.g. the distance from the nyquist frequency
+        nyquist_reminder = frequency%(dac_samplerate/2)
+
+        # compute the phase increment and offset
+        pinc = 0
+        poff = 0
+
+        if (nyquist_zone%2 == 0):
+            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
+            # the odd/even checks on the real nyquist zone are opposite
+            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
+        else:
+            # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
+            # as the distance from the sample rate
+            nyquist_reminder = dac_samplerate/2 - nyquist_reminder
+            bounded_phase = 2*np.pi - bounded_phase
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
+
+        # rounding the phase increment and offset
+        pinc = round(pinc)
+        poff = round(poff)
+
+        # write registers
+        self.SetReadoutIncOff(pinc,poff)
+        return 0
+
+    def SetDriveDDSParameters(self, frequency, dac_samplerate):
+
+        # check inputs
+        if(frequency < 0):
+            print("input parameters out of range")
+            return -3
+
+        # get the nyquist zone
+        nyquist_zone = frequency//(dac_samplerate/2)
+        # get the reminder, e.g. the distance from the nyquist frequency
+        nyquist_reminder = frequency%(dac_samplerate/2)
+
+        # compute the phase increment and offset
+        pinc = 0
+
+        if (nyquist_zone%2 == 0):
+            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
+            # the odd/even checks on the real nyquist zone are opposite
+            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+        else:
+            # when the nyquist zone is even, the frequency needs to be calculated 
+            # as the distance from the sample rate
+            nyquist_reminder = dac_samplerate/2 - nyquist_reminder
+            bounded_phase = 2*np.pi - bounded_phase
+            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+
+        # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
+        # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
+        pinc = round(pinc)
+
+        # write registers
+        self.SetDriveInc(pinc)
+        return 0
+    
     def WriteEnvelopeMemory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
         """
         Write to the envelope memory (sample memory) a series of samples to be used to generate a wave. \n
@@ -352,13 +445,26 @@ class Generator_driver(DefaultIP):
             return -3
         
         envelope_size = envelope_samples.size
+        if (envelope_size < 2):
+            print("error, envelope samples must be greater or eaqual than 2")
+            return -3 
+
+        # check requirement for non interpolation envelope size
+        if (envelope_size%self.NumberOfChannels != 0 and not(for_interpolation)):
+            print("error, envelopes not marked for interpolation must have a number of sample divisible by the generator parlallism")
+            print("the number of samples: " + str(envelope_size) + " is not divisible by " + str(self.NumberOfChannels))
+            print("HINT: pad the envelope with zeros")
+            return -3
+        
         if (for_interpolation):
+            new_dict_item["is_interp"] = 1
             new_dict_item["size"] = envelope_size
             new_dict_item["is_sym"] = is_symmetric
             new_dict_item["i_even"] = i_even
             new_dict_item["q_even"] = q_even
         else:
-            envelope_size = (envelope_size + self.NumberOfChannels-1) // self.NumberOfChannels
+            envelope_size = envelope_size // self.NumberOfChannels
+            new_dict_item["is_interp"] = 0
             new_dict_item["size"] = envelope_size
             new_dict_item["is_sym"] = 0
             new_dict_item["i_even"] = 0
@@ -388,201 +494,116 @@ class Generator_driver(DefaultIP):
                 to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
                 self.SampleMemoryMMIO.write((write_address_start+index)*4,to_write)
         else:
-            # TODO: handle last samples
             for index,sample in enumerate(envelope_samples):
                 to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
                 channel = index % self.NumberOfChannels
                 write_address = start_address + channel*self.ChannelSampleMemoryDepth + index//self.NumberOfChannels
                 self.SampleMemoryMMIO.write((write_address)*4,to_write)
+        return 0
+    
+    def CreateWaveDefinitionWord(self, envelope_name : str, duration: np.uint16, gain: float, switch_iq : bool):
+        """
+        Function to generate a wave definition word, uses cached envelopes stored in envelope memory to
+        correctly generate a wave.\n For envelopes not marked for interpolation, it is advised
+        to set the duration input to zero, this way the envelope's natural size is used instead. 
+        
+        :param envelope_name: Name of the envelope precedently stored in envelope memory
+        :type envelope_name: str
+        :param duration: Duration of the wave in samples, set to 0 to use the size of the envelope
+        :type duration: 
+        :param gain: Gain, values between -1 and 1 included
+        :type gain: float
+        :param switch_iq: Switch the envelope I and Q values, useful for Y-Gates
+        :type switch_iq: bool
+        :return: Error code
+        :rtype: Literal[-3] | None
+        """
+        wavedef = np.uint128(0)
+        # check input parameters
+        if (envelope_name not in self.EnvelopeMemoryDict.keys() or envelope_name == "_FREESPACE"):
+            print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
+            print("HINT: use the 'WriteEnvelopeMemory' function to add the envelope to memory")
+            return -3
+        
+        if (gain < -1 or gain > 1):
+            print("error, gain out of range")
+            return -3
+        
+        # handle duration argument, if set to zero the duration will be the
+        # natural duration of the envelope
+        if ((duration < 2 or duration > self.MaximumDuration) and duration != 0):
+            print("error, duration out of range")
+            return -3
+        
+        envelope_def = self.EnvelopeMemoryDict[envelope_name]
+        
+        # handle gain
+        invert = False
+        real_gain = 0
+        if (gain < 0):
+            invert = True
+            real_gain = round(-gain*(2**self.SampleSize-1))
+        else: 
+            invert = False
+            real_gain = round(gain*(2**self.SampleSize-1))
 
-    # def WriteCntrRegister(self, symmetric, even, invert, restart_phase_coherent_counter, forceone, keeplast, perpetual):
-    #     """Write to the control register for manual generation
-    #
-    #     Args:
-    #         symmetric (bool): Tell if the wave is symmetric
-    #         even (bool): Tell if the wave has even symmetry
-    #         invert (bool): inverts the sign of the wave
-    #         restart_phase_coherent_counter (bool): restarts the DDS local oscillator when the trigger is received
-    #         forceone (bool): forces the wave to 1 before modulation, used to output a pure tone
-    #         keeplast (bool): keeps last sample at the output of the generator
-    #         perpetual (bool): ignores the duration register *deprecated*
-    #     """
-    #     value = self.mmio.read(0) & ~self.TriggerMask
-    #     if symmetric:
-    #         value = value | 0x40000000
-    #
-    #     if even:
-    #         value = value | 0x20000000
-    #
-    #     if invert:
-    #         value = value | 0x10000000
-    #
-    #     if restart_phase_coherent_counter:
-    #         value = value | 0x08000000
-    #
-    #     if forceone:
-    #         value = value | 0x04000000
-    #
-    #     if keeplast:
-    #         value = value | 0x02000000
-    #
-    #     if perpetual:
-    #         value = value | 0x01000000
-    #
-    #     self.mmio.write(0,int(value))
-    #     return
-    #
-    # def ManualTrigger(self):
-    #     """trigger the generator manually
-    #     """
-    #     value = self.mmio.read(0) | 0x80000000
-    #     self.mmio.write(0,value)
-    #     return
-    #
-    # def ManualStop(self):
-    #     """stop the generator manually
-    #     """
-    #     value = self.mmio.read(0) & ~self.TriggerMask
-    #     self.mmio.write(0,value)
-    #     self.ManualTrigger()
-    #     return
-    #
-    # def SetCosineMANUAL(self, frequency, gain, DAC_SAMPLERATE):
-    #     """set the control registers to output a fixed frequency tone with a specified phase and gain
-    #
-    #     Args:
-    #         frequency (integer): frequency in MHz
-    #         gain (float): gain, within 0 and 1
-    #         DAC_SAMPLERATE (integer): samplerate of the dac attached to this generator
-    #     """
-    #
-    #     # compute the phase increment
-    #     pinc = 0
-    #
-    #     if (frequency*1000000 > DAC_SAMPLERATE/2):
-    #         pinc = 2**32 - ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
-    #     else:
-    #         pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
-    #
-    #     # compute gain as fixed point 16-bit number
-    #     gain = round(gain*0x7FFF)
-    #
-    #     # set the frequency and phase
-    #     self.WriteRegister('PINC', int(pinc))
-    #     self.WriteRegister('POFF', 0)
-    #     self.WriteRegister('GAIN',gain)
-    #
-    #     # start a countinuous tone
-    #     self.WriteCntrRegister(0,0,0,0,1,1,1)
-    #
-    #     return
-    #
-    # def SetRectangularMANUAL(self, frequency, gain, duration, DAC_SAMPLERATE):
-    #     """set the manual registers to generate a rectangular pulse of a certain duration
-    #
-    #     Args:
-    #         frequency (uint): frequency in MHz
-    #         gain (float): gain, within 0 and 1
-    #         duration (uint): duration in dac samples
-    #         DAC_SAMPLERATE (uint): dac samplerate
-    #     """
-    #
-    #     # compute the phase increment
-    #     pinc = 0
-    #
-    #     if (frequency*1000000 > DAC_SAMPLERATE/2):
-    #         pinc = 2**32 - ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
-    #     else:
-    #         pinc = ((frequency*1000000)*(2**32))/DAC_SAMPLERATE
-    #
-    #     # compute gain as fixed point 16-bit number
-    #     gain = round(gain*0x7FFF)
-    #
-    #     # set the frequency and duration
-    #     self.WriteRegister('PINC', int(pinc))
-    #     self.WriteRegister('POFF', 0)
-    #     self.WriteRegister('GAIN',gain)
-    #     self.WriteRegister('MAXDUR',int(duration-1))
-    #
-    #     # set the control word for a pulse
-    #     self.WriteCntrRegister(0,0,0,0,1,0,0)
-    #     return
-    #
-    # def FillSampleMemory(self, start_address, samples, interpolation):
-    #
-    #     """fill the sample memory of the generator
-    #
-    #     Args:
-    #         start_address (uint): address of generator memory where to start filling
-    #         samples (complex array): samples used to fill the memory, numpy complex array, within the complex circle
-    #         interpolation (bool): memory is intended to be used for interpolation
-    #     """
-    #
-    #     if (start_address < 0 or start_address >= self.ChannelSampleMemoryDepth):
-    #         print("error, address: " + str(start_address) + " is outside of range 0 to " + str(self.SampleMemoryDepth-1))
-    #         return
-    #
-    #     size = samples.size
-    #
-    #     if (interpolation):
-    #         maxaddr = start_address + size
-    #         address = start_address + self.NumberOfChannels*self.ChannelSampleMemoryDepth
-    #     else:
-    #         maxaddr = start_address + int(math.ceil(size/self.NumberOfChannels))
-    #         address = start_address
-    #
-    #     if (maxaddr >= self.ChannelSampleMemoryDepth):
-    #         print("error, size of sample array is bigger than available memory: " + str(maxaddr))
-    #         return
-    #
-    #     channel_index = 0
-    #     for i in samples:
-    #         actual_address = address + channel_index*self.ChannelSampleMemoryDepth
-    #         sample = int(i.real * (2**15 - 1)) << 16
-    #         sample = sample + (int(i.imag * (2**15 - 1)) & 0xFFFF)
-    #         # axi address is byte aligned
-    #         self.SampleMemoryMMIO.write(actual_address << 2,sample)
-    #         if (interpolation):
-    #             address = address + 1
-    #         else:
-    #             channel_index = channel_index + 1
-    #             address = address + channel_index//self.NumberOfChannels
-    #             channel_index = channel_index%self.NumberOfChannels
-    #
-    #     return
-    #
-    # def SetMemoryPulseMANUAL(self, frequency, gain, duration, start_address, symmetric, even, wavedepth, DAC_SAMPLERATE):
-    #     """set manual registers to generate a wave using an envelope precedently stored in memory
-    #
-    #     Args:
-    #         frequency (uint): frequency in MHz
-    #         gain (float): gain between 0 and 1
-    #         duration (uint): duration in samples
-    #         start_address (uint): address of the starting sample of envelope
-    #         symmetric (bool): flag if memory is symmetric
-    #         even (bool): type of symmetry
-    #         wavedepth (uint): number of samples of the envelope
-    #         DAC_SAMPLERATE (uint): dac samplerate
-    #     """
-    #     n_samples = wavedepth
-    #     if (symmetric):
-    #         n_samples = wavedepth*2
-    #
-    #     incr = ((n_samples -1)<<self.FractionalPrecision)//(duration-1)
-    #     off = (start_address<<26) + (((n_samples -1)<<self.FractionalPrecision)%(duration-1))//2
-    #
-    #     #print("debug: increment = " + hex(incr) + " , offset = " + hex(off))
-    #
-    #     self.SetRectangularMANUAL(frequency,gain,duration,DAC_SAMPLERATE)
-    #
-    #     self.WriteRegister('MAXADDR', int(start_address+wavedepth-1))
-    #     self.WriteRegister('SOFF', off)
-    #     self.WriteRegister('INC', incr)
-    #
-    #     #override the control register
-    #     self.WriteCntrRegister(symmetric,even,0,0,0,0,0)
-    #
-    #     return
+        # handle special envelope names
+        if (envelope_name == "_RECTANGULAR"):
+            # set the force one bit
+            wavedef = wavedef | (np.uint128(0x1) << 121)
+        else:
+            # set the symmetric bit
+            if (envelope_def["is_sym"]):
+                wavedef = wavedef | (np.uint128(0x1) << 127)
+            # set the i_even bit
+            if (envelope_def["i_even"]):
+                wavedef = wavedef | (np.uint128(0x1) << 126)
+            # set the q_even bit
+            if (envelope_def["q_even"]):
+                wavedef = wavedef | (np.uint128(0x1) << 125)
+            # set the interpolation bit
+            if (envelope_def["is_interp"]):
+                wavedef = wavedef | (np.uint128(0x1) << 120)
+        
+        # set the iq switch
+        if (switch_iq):
+            wavedef = wavedef | (np.uint128(0x1) << 123)
+        # set the invert bit
+        if (invert): 
+            wavedef = wavedef | (np.uint128(0x1) << 124)
+        # set the gain
+        wavedef = wavedef | (np.uint128(real_gain) << (2*(self.ChannelAddressWidth + self.FractionalPrecision) + self.DurationWidth))
+        # get the envelope natural duration
+        natural_envelope_duration = 0
+        if (envelope_def["is_interp"]):
+            natural_envelope_duration = envelope_def["size"]*(1 + envelope_def["is_sym"]) - 1
+        else:
+            natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
+        # set the real duration
+        real_duration = 0
+        if(duration == 0):
+            real_duration = natural_envelope_duration
+        else:
+            real_duration = duration
+        # set the duration bits
+        wavedef = wavedef | (np.uint128(real_duration - 1) << 2*(self.ChannelAddressWidth + self.FractionalPrecision))
+        # set sample generator offsets
+        start_offset = 0
+        increment = 0
+        if (envelope_def["is_interp"]):
+            # TODO: handle the reminder
+            start_offset = np.uint128(envelope_def["start"]) << self.FractionalPrecision
+            increment = (np.uint128(natural_envelope_duration-1) << self.FractionalPrecision)//(real_duration-1)
+        else:
+            start_offset = np.uint128(envelope_def["start"]) << self.FractionalPrecision
+            # set the increment to 1/(number_of_channels), usually 1/16
+            increment = np.uint128(0x1) << (self.FractionalPrecision - self.LogNumberOfChannels)
+        # set the start offset and increment bits
+        wavedef = wavedef | (start_offset << (self.ChannelAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | increment
+        # return wave definition
+        return wavedef
+
     
 #######################################################################################################################################################
 #      ___           ___           ___           ___                       ___                       ___                       ___           ___      #
@@ -699,7 +720,7 @@ class Acquisition_driver(DefaultIP):
 
         # write the duration
         self.SetDuration(duration)
-        return
+        return 0
     
     def SetReadoutIncOff(self, inc, off):
         """
