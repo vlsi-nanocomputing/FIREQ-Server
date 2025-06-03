@@ -23,26 +23,45 @@ class Generator_driver(DefaultIP):
     bindto = ['user.org:user:AXIS_Generator_IP:1.0']
     
     EnvelopeMemoryDict = {}
+    WaveMemoryDict = {}
 
     def __init__(self, description):
         super().__init__(description=description)
-        #TODO: check the correctness
-        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-        self.SampleMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
-        self.SampleMemoryMMIO = MMIO(description["phys_addr"]-self.SampleMemoryDepth, self.SampleMemoryDepth)
+        # address width of the envelope memory, word aligned
+        self.SampleMemoryAddressWidth = int(description["parameters"]["SampleMemoryAddressWidth"])
+        # size of the envelope memory for every channel, in words
+        self.ChannelSampleMemoryDepth = pow(2,self.SampleMemoryAddressWidth)
+        # width of the duration 
+        self.DurationWidth = int(description["parameters"]["DurationWidth"])
+        self.MaximumDuration = pow(2,self.DurationWidth)
+        # fractional precision of the interpolator
+        self.FractionalPrecision = int(description["parameters"]["IncrementFractionalPrecision"])
+        # width of samples
+        self.SampleSize = int(description["parameters"]["SampleSize"])
+        # number of channels (parallelism of the generator)
         self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
         self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
-        self.ChannelAddressWidth = int(description["parameters"]["AddressWidth"])
-        self.ChannelSampleMemoryDepth = pow(2,self.ChannelAddressWidth)
-        self.MaximumDuration = pow(2,int(description["parameters"]["DurationWidth"]))
-        self.FractionalPrecision = int(description["parameters"]["IncrementFractionalPrecision"])
-
+        # width of the phase increment and offset
+        self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
+        # number of trigger channels
+        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
+        # axi full interface depth in bytes
+        self.AxiFullInterfaceDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
+        self.AxiFullInterfaceMMIO = MMIO(description["phys_addr"]-self.AxiFullInterfaceDepth, self.AxiFullInterfaceDepth)
+        # TODO: fix this /4 after updating the IP
+        # size of axi full segments in bytes
+        self.TotalSampleMemorySegmentDepth = int(description['parameters']['TotalSampleMemorySegmentDepth']/4)
+        self.WaveMemorySegmentDepth = int(description['parameters']['WaveMemoryDepth']/4)
+        self.MemoryMappedFifoSegmentDepth = int(description['parameters']['MemoryMappedFifoDepth']/4)
+        # width of the lfsr seed
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
 
         # set the memory free space in the envelope memory dictionary
         self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
         # set an entry for rectangular waves
         self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
+        # address of next wave in wave memory
+        self.WaveMemoryDict["_NEXT"] = 0
 
         # Reg definition
         self.ctrl = 0
@@ -62,15 +81,20 @@ class Generator_driver(DefaultIP):
         """
         Print the description of the IP
         """
-        #TODO: check the correctness
-        print("trigger channels: " + str(self.TriggerChannels))
-        # print("trigger mask: " + str(hex(self.TriggerMask)))
-        print("sample memory depth: " + str(self.SampleMemoryDepth))
-        print("number of channels: " + str(self.NumberOfChannels))
-        print("addrwidth for each channel: " + str(self.ChannelAddressWidth))
-        print("channel memory depth: " + str(self.ChannelSampleMemoryDepth))
-        print("maximum sample duration: " + str(self.MaximumDuration))
-        print("fractional precision: " + str(self.FractionalPrecision))
+
+        print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
+        print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
+        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")
+        print("FractionalPrecision: " + str(self.FractionalPrecision) + ", fractional precision of the interpolator (bits)")
+        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
+        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the generator (samples/clock cycle)")
+        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
+        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
+        print("AxiFullInterfaceDepth: " + str(self.AxiFullInterfaceDepth) + ", axi full interface depth (bytes)")
+        print("TotalSampleMemorySegmentDepth: " + str(self.TotalSampleMemorySegmentDepth) + ", envelope memory segment depth (bytes)")
+        print("WaveMemorySegmentDepth: " + str(self.WaveMemorySegmentDepth) + ", wave memory segment depth (bytes)")
+        print("MemoryMappedFifoSegmentDepth: " + str(self.MemoryMappedFifoSegmentDepth) + ", memory mapped FIFO segment depth (bytes)")
+        print("SeedLfsrWidth: " + str(self.SeedLfsrWidth) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
 
     def SetManualTrigger(self):
         """
@@ -492,16 +516,16 @@ class Generator_driver(DefaultIP):
             write_address_start = start_address + self.ChannelSampleMemoryDepth*self.NumberOfChannels
             for index,sample in enumerate(envelope_samples):
                 to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
-                self.SampleMemoryMMIO.write((write_address_start+index)*4,to_write)
+                self.AxiFullInterfaceMMIO.write((write_address_start+index)*4,to_write)
         else:
             for index,sample in enumerate(envelope_samples):
                 to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
                 channel = index % self.NumberOfChannels
                 write_address = start_address + channel*self.ChannelSampleMemoryDepth + index//self.NumberOfChannels
-                self.SampleMemoryMMIO.write((write_address)*4,to_write)
+                self.AxiFullInterfaceMMIO.write((write_address)*4,to_write)
         return 0
     
-    def CreateWaveDefinitionWord(self, envelope_name : str, duration: np.uint16, gain: float, switch_iq : bool):
+    def CreateWaveDefinitionWord(self, envelope_name : str, duration: np.uint, gain: float, switch_iq : bool):
         """
         Function to generate a wave definition word, uses cached envelopes stored in envelope memory to
         correctly generate a wave.\n For envelopes not marked for interpolation, it is advised
@@ -510,13 +534,13 @@ class Generator_driver(DefaultIP):
         :param envelope_name: Name of the envelope precedently stored in envelope memory
         :type envelope_name: str
         :param duration: Duration of the wave in samples, set to 0 to use the size of the envelope
-        :type duration: 
+        :type duration: uint
         :param gain: Gain, values between -1 and 1 included
         :type gain: float
         :param switch_iq: Switch the envelope I and Q values, useful for Y-Gates
         :type switch_iq: bool
         :return: Error code
-        :rtype: Literal[-3] | None
+        :rtype: Literal[-3] | uint128
         """
         wavedef = np.uint128(0)
         # check input parameters
@@ -572,7 +596,7 @@ class Generator_driver(DefaultIP):
         if (invert): 
             wavedef = wavedef | (np.uint128(0x1) << 124)
         # set the gain
-        wavedef = wavedef | (np.uint128(real_gain) << (2*(self.ChannelAddressWidth + self.FractionalPrecision) + self.DurationWidth))
+        wavedef = wavedef | (np.uint128(real_gain) << (2*(self.SampleMemoryAddressWidth + self.FractionalPrecision) + self.DurationWidth))
         # get the envelope natural duration
         natural_envelope_duration = 0
         if (envelope_def["is_interp"]):
@@ -586,7 +610,7 @@ class Generator_driver(DefaultIP):
         else:
             real_duration = duration
         # set the duration bits
-        wavedef = wavedef | (np.uint128(real_duration - 1) << 2*(self.ChannelAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | (np.uint128(real_duration - 1) << 2*(self.SampleMemoryAddressWidth + self.FractionalPrecision))
         # set sample generator offsets
         start_offset = 0
         increment = 0
@@ -599,10 +623,71 @@ class Generator_driver(DefaultIP):
             # set the increment to 1/(number_of_channels), usually 1/16
             increment = np.uint128(0x1) << (self.FractionalPrecision - self.LogNumberOfChannels)
         # set the start offset and increment bits
-        wavedef = wavedef | (start_offset << (self.ChannelAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | (start_offset << (self.SampleMemoryAddressWidth + self.FractionalPrecision))
         wavedef = wavedef | increment
         # return wave definition
         return wavedef
+    
+    def AddWaveInWaveMemory(self, wave_definition : np.uint128, wave_name : str):
+        """
+        Add a wave definition word in the wave memory, there are no checks on the 
+        word so the it should only be generated with provided functions
+        
+        :param wave_definition: Wave definition word, low level definition of a wave
+        :type wave_definition: uint128
+        :param wave_name: Name of the wave to add
+        :type wave_name: str
+        :return: Error code
+        :rtype: Literal[-3, 0]
+        """
+        if wave_name in self.WaveMemoryDict.keys():
+            print("error, a wave was found in the cached wave memory with the same name")
+            return -3
+        
+        # get the address where the wave definition will end up
+        address = self.WaveMemoryDict["_NEXT"]
+        if address == self.WaveMemorySegmentDepth:
+            print("error, the wave memory is full")
+            return -3
+        
+        # write to wave memory
+        for i in range(4):
+            self.AxiFullInterfaceMMIO.write((self.TotalSampleMemorySegmentDepth + i*4 + address), (wave_definition >> (i*32)) & 0xFFFFFFFF)
+        
+        # write to wave memory cache
+        self.WaveMemoryDict[wave_name] = address
+        # add 32 bytes (128/8) to address
+        self.WaveMemoryDict["_NEXT"] = address + 32
+        
+        return 0
+    
+    def ReplaceWaveInWaveMemory(self, wave_definition : np.uint128, wave_name : str):
+        """
+        Replace a certain word definition with another one
+        
+        :param wave_definition: Wave definition word for the new wave
+        :type wave_definition: uint128
+        :param wave_name: Name of the wave to replace
+        :type wave_name: str
+        :return: Error code
+        :rtype: Literal[-3, 0]
+        """
+        if wave_name not in self.WaveMemoryDict.keys():
+            print("error, a wave was not found in the cached wave memory with the same name")
+            print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
+            return -3
+        if wave_name == "_NEXT":
+            print("'_NEXT' is a reserved keyword")
+            return -3
+        
+        # get the address where the wave definition will end up
+        address = self.WaveMemoryDict[wave_name]
+        
+        # write to wave memory
+        for i in range(4):
+            self.AxiFullInterfaceMMIO.write((self.TotalSampleMemorySegmentDepth + i*4 + address), (wave_definition >> (i*32)) & 0xFFFFFFFF)
+        
+        return 0
 
     
 #######################################################################################################################################################
