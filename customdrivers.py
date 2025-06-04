@@ -20,7 +20,7 @@ import math
 
 class Generator_driver(DefaultIP):
 
-    bindto = ['user.org:user:AXIS_Generator_IP:1.0']
+    bindto = ['user.org:user:axisGeneratorIP:1.0']
     
     EnvelopeMemoryDict = {}
     EnvelopeMemoryDictReservedNames = []
@@ -741,7 +741,7 @@ class Generator_driver(DefaultIP):
 
 class Acquisition_driver(DefaultIP):
 
-    bindto = ['user.org:user:AXIS_Acquisition_IP:1.0']
+    bindto = ['user.org:user:axisAcquistionIP:1.0']
 
     def __init__(self, description):
         super().__init__(description=description)
@@ -957,7 +957,7 @@ class Acquisition_driver(DefaultIP):
 
 class Trigger_driver(DefaultIP):
 
-    bindto = ['user.org:user:AXIS_Trigger_IP:1.0']
+    bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
     def __init__(self, description):
 
