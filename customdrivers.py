@@ -23,7 +23,9 @@ class Generator_driver(DefaultIP):
     bindto = ['user.org:user:AXIS_Generator_IP:1.0']
     
     EnvelopeMemoryDict = {}
+    EnvelopeMemoryDictReservedNames = []
     WaveMemoryDict = {}
+    WaveMemoryDictReservedNames = []
 
     def __init__(self, description):
         super().__init__(description=description)
@@ -56,12 +58,8 @@ class Generator_driver(DefaultIP):
         # width of the lfsr seed
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
 
-        # set the memory free space in the envelope memory dictionary
-        self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
-        # set an entry for rectangular waves
-        self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
-        # address of next wave in wave memory
-        self.WaveMemoryDict["_NEXT"] = 0
+        # reset envelope dictionary and wave memory dict
+        self.ResetEnvelopeDict()
 
         # Reg definition
         self.ctrl = 0
@@ -76,6 +74,32 @@ class Generator_driver(DefaultIP):
         self.SourcePos = 27
         self.ManTrigSel = 28
         self.ManTrigPos = 31
+
+    def ResetEnvelopeDict(self):
+        """
+        Resets the cached information about the envelope memory. The actual memory is not modified by this function. \n
+        Since resetting this memory invalidates the wave definition words, the wave memory cache is also cleared 
+         
+        """
+        self.EnvelopeMemoryDict = {}
+        # set the memory free space in the envelope memory dictionary
+        self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
+        self.EnvelopeMemoryDictReservedNames.append("_FREESPACE")
+        # set an entry for rectangular waves
+        self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
+        self.ResetWaveMemoryDict()
+
+    def ResetWaveMemoryDict(self):
+        """
+        Resets the cached information about the wave memory and also clears the generator wave memory.
+
+        """
+        self.WaveMemoryDict = {}
+        # address of next wave in wave memory
+        self.WaveMemoryDict["_NEXT"] = 0
+        self.WaveMemoryDictReservedNames.append("_NEXT")
+        for address in range(0,self.WaveMemorySegmentDepth,4):
+            self.AxiFullInterfaceMMIO.write(address, 0)
 
     def WriteDescription(self):
         """
@@ -127,7 +151,7 @@ class Generator_driver(DefaultIP):
         # clear mask
         andmask = ~((2**self.TriggerChannels - 1) << (ttype*self.TriggerChannels))
         cntr = self.mmio.read(self.ctrl) & andmask
-        self.write(self.ctrl, cntr)
+        self.mmio.write(self.ctrl, cntr)
 
         self.SetBit(reg = self.ctrl, pos = channel - 1 + ttype * self.TriggerChannels, value = 1)
         return 0
@@ -202,7 +226,7 @@ class Generator_driver(DefaultIP):
         ormask = seed << (2*self.TriggerChannels)
         cntr = self.mmio.read(self.ctrl) & andmask
         cntr = cntr | ormask
-        self.write(self.ctrl, cntr)
+        self.mmio.write(self.ctrl, cntr)
         return 0
 
     def GetLFSRSeed(self):
@@ -230,14 +254,14 @@ class Generator_driver(DefaultIP):
         :rtype: int
         """
         # write inc LOW
-        self.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        self.mmio.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.readout_inc_h*4, inc >> 32)
+        self.mmio.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        self.mmio.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.write(self.readout_off_h*4, off >> 32)
+        self.mmio.write(self.readout_off_h*4, off >> 32)
 
         return 0
 
@@ -273,9 +297,9 @@ class Generator_driver(DefaultIP):
         :rtype: int
         """
         # write inc LOW
-        self.write(self.drive_inc_l*4, inc & 0xFFFFFFFF)
+        self.mmio.write(self.drive_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.drive_inc_h*4, inc >> 32)
+        self.mmio.write(self.drive_inc_h*4, inc >> 32)
 
         return 0
 
@@ -328,7 +352,7 @@ class Generator_driver(DefaultIP):
         ormask = value << pos
         cntr = self.mmio.read(reg*4) & andmask
         cntr = cntr | ormask
-        self.write(reg*4, cntr)
+        self.mmio.write(reg*4, cntr)
 
     def GetBit(self, reg, pos):
         """
@@ -402,7 +426,16 @@ class Generator_driver(DefaultIP):
         return 0
 
     def SetDriveDDSParameters(self, frequency, dac_samplerate):
-
+        """
+        Set modulation frequency for the drive output channel
+        
+        :param frequency: Frequency in MHz
+        :type frequency: float
+        :param dac_samplerate: Sampling frequency of the dac in Hz
+        :type dac_samplerate: int
+        :return: Error code
+        :rtype: Literal[-3, 0]
+        """
         # check inputs
         if(frequency < 0):
             print("input parameters out of range")
@@ -544,10 +577,11 @@ class Generator_driver(DefaultIP):
         """
         wavedef = np.uint128(0)
         # check input parameters
-        if (envelope_name not in self.EnvelopeMemoryDict.keys() or envelope_name == "_FREESPACE"):
+        if (envelope_name not in self.EnvelopeMemoryDict.keys()):
             print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
             print("HINT: use the 'WriteEnvelopeMemory' function to add the envelope to memory")
             return -3
+        
         
         if (gain < -1 or gain > 1):
             print("error, gain out of range")
@@ -711,18 +745,21 @@ class Acquisition_driver(DefaultIP):
 
     def __init__(self, description):
         super().__init__(description=description)
-        # number of triggers on the input trigger channel
-        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-        # parallelism of the acquistion
-        self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
-        self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
         # maximum acquistion duration
         self.DurationWidth = int(description["parameters"]["DurationWidth"])
         self.MaximumDuration = pow(2,self.DurationWidth)
+        # size of the samples
+        self.SampleSize = int(description["parameters"]["SampleSize"])
+        # parallelism of the acquistion
+        self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
+        self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
         # depth of the phase increment and offset
         self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
+        # number of triggers on the input trigger channel
+        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
         # maximum time of flight delay
-        self.TimeOfFlightMax = pow(2,int(description["parameters"]["TimeOfFlightCounterWidth"]))
+        self.TimeOfFlightWidth = int(description["parameters"]["TimeOfFlightCounterWidth"])
+        self.TimeOfFlightMax = pow(2,self.TimeOfFlightWidth)
 
         # Reg definition
         self.ctrl = 0
@@ -738,11 +775,12 @@ class Acquisition_driver(DefaultIP):
         """
         Print the description of the IP
         """
-        print("trigger channels: " + str(self.TriggerChannels))
-        print("number of channels: " + str(self.NumberOfChannels))
-        print("maximum acquistion duration: " + str(self.MaximumDuration))
-        print("depth of phase increment and offset: " + str(self.PhaseDepth))
-        print("maximum time of flight: " + str(self.TimeOfFlightMax))
+        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
+        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
+        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the acquistion (samples/clock cycle)")
+        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
+        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
+        print("TimeOfFlightWidth: " + str(self.TimeOfFlightWidth) + ", width of the time of flight timer (bits)")
 
     def SetAcquistionParameters(self, frequency, phase, duration, ADC_SAMPLERATE):
         """
@@ -819,14 +857,14 @@ class Acquisition_driver(DefaultIP):
         :rtype: int
         """
         # write inc LOW
-        self.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        self.mmio.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.readout_inc_h*4, inc >> 32)
+        self.mmio.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        self.mmio.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.write(self.readout_off_h*4, off >> 32)
+        self.mmio.write(self.readout_off_h*4, off >> 32)
 
         return 0
     
@@ -926,27 +964,19 @@ class Trigger_driver(DefaultIP):
         super().__init__(description=description)
         # parse the number of channels of the trigger generator
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-
         # parse the fifo interface depth and create mmio handle
         self.FifoInterfaceMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
         self.FifoInterfaceMMIO = MMIO(description["phys_addr"]-self.FifoInterfaceMemoryDepth, self.FifoInterfaceMemoryDepth)
-
         # fifo depth in number of words 
         self.ChannelFifoDepth = pow(2,int(description['parameters']['FifoAddressWidth']))
-
         # fifo output width
         self.FifoOutputWidth = int(description['parameters']['FifoOutputWidth'])
         # maximum drive delay
         self.DriveDelayMax = pow(2,self.FifoOutputWidth-1)
-
         # experiment max
         self.ExperimentTimerMax = pow(2,int(description['parameters']['ExperimentTimerWidth']))
-
         # parse the size of the repitition counter
         self.MaxHWRepetitions = pow(2,int(description['parameters']['RepetitionWidth']))
-
-        #init fifo pointers
-        self.FIFOpointers = [0]*self.TriggerChannels
 
         self.ctrl = 0
         self.experiment_dur_l = 2
@@ -971,9 +1001,9 @@ class Trigger_driver(DefaultIP):
         """
 
         # write inc LOW
-        self.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
+        self.mmio.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
         # write inc HIGH
-        self.write(self.experiment_dur_h*4, duration >> 32)
+        self.mmio.write(self.experiment_dur_h*4, duration >> 32)
 
     def SetNumberOfShots(self, value):
         """
@@ -986,7 +1016,7 @@ class Trigger_driver(DefaultIP):
             print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.MaxHWRepetitions))
             return
 
-        self.mmio.write(self.shots_num_l*4,int(value))
+        self.mmio.write(self.shots_num_l*4,int(value-1))
 
     def StartExperiment(self):
         """
@@ -1007,39 +1037,34 @@ class Trigger_driver(DefaultIP):
         else:
             return 0
 
-    def PushDriveFIFO(self, channel, delay, generate_trigger):
+    def InsertDelayDriveFifo(self, channel, index, delay, generate_trigger):
         """
-        Push a delay value to the FIFO of a channel. The generate_trigger input is used to 
+        Insert a delay value in the FIFO of a drive channel at index. The generate_trigger input is used to 
         tell the trigger generator if a trigger should be generated at the end of the delay
         
         :param channel: Drive channel
         :type channel: uint
+        :param index: FIFO index, 1 is the start
+        :type index: uint
         :param delay: Delay in clock cycles
         :type delay: uint
         :param generate_trigger: Generates a trigger if set to 1
         :type generate_trigger: Literal[1, 0]
         """
-        if (channel<=0 or channel > self.TriggerChannels):
-            print("error: channel " + str(channel) + " is outside of range 1 to " + str(self.TriggerChannels))
-            return
+        if (channel< 1 or channel > self.TriggerChannels):
+            print("error, channel " + str(channel) + " is outside of range 1 to " + str(self.TriggerChannels))
+            return -3
 
-        if (self.FIFOpointers[channel-1] == self.ChannelFifoDepth):
-            print("error: the FIFO for channel " + str(channel) + " is full")
-            return
+        if (index < 1 or index > self.ChannelFifoDepth):
+            print("error, the index is outside of range")
+            return -3
 
-        real_address = (channel-1)*self.ChannelFifoDepth + self.FIFOpointers[channel-1]
-        # the left shift is because the axi address is byte aligned whereas the address computed as of now is 32-bit aligned
-        self.FifoInterfaceMMIO.write(real_address << 2, int(value))
-        self.FIFOpointers[channel-1] += 1
-        return
-    
-    def ResetFIFOPointers(self):
-        """
-        Resets the cached FIFO pointers. Does not clear the FIFO entries
-        """
-        self.FIFOpointers = [0 for i in self.FIFOpointers]
-        return
-    
-
-
+        if (delay < 1 or delay > self.DriveDelayMax):
+            print("error, the delay is outside of range")
+            return -3
+        
+        real_delay = (delay - 1) | (generate_trigger << 31)
+        real_address = (channel-1)*self.ChannelFifoDepth + index - 1
+        self.FifoInterfaceMMIO.write(real_address*4, int(real_delay))
+        return 0
     
