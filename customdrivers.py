@@ -1,7 +1,62 @@
-from pynq import DefaultIP
-from pynq import MMIO
+if not __debug__:
+    from pynq import DefaultIP
+    from pynq import MMIO
 import numpy as np
 import math
+
+def _SetBit(value : int, pos : int, setvalue : int):
+    """
+    Set the bit at index pos of value to setvalue
+    
+    :param value: Input value to be manipulated
+    :type value: int
+    :param pos: Bit position, 0 is LSB
+    :type pos: int
+    :param setvalue: Value to set the bit, 0 or 1
+    :type setvalue: int
+    """
+    bitvalue = 0
+    if setvalue:
+        bitvalue = 1
+    return (value & ~(bitvalue << pos)) | (bitvalue << pos)
+
+def _SetBits(value : int, start : int, length : int, setvalue : int):
+    mask = ((1 << length) - 1) << start
+    safe_setvalue = (setvalue << start) & mask
+    return (value & ~(mask)) | safe_setvalue
+
+if __debug__:
+    class MMIO:
+        base_address = 0
+        depth = 0
+        memory = {}
+
+        def __init__(self, base, depth):
+            if (type(base) != int or type(depth) != int):
+                print("error during mmio init, the or depth is wrong")
+            self.base_address = base
+            self.depth = depth
+        
+        def read(self, address):
+            if address%4 != 0:
+                print("mmio error, read at address not word aligned")
+                return 0
+            if address not in self.memory.keys():
+                self.memory[address] = 0
+            return self.memory[address]
+        
+        def write(self, address, value):
+            if address%4 != 0:
+                print("mmio error, read at address not word aligned")
+                return 0
+            self.memory[address] = value
+    
+    class DefaultIP:
+        
+        def __init__(self, description):
+            self.mmio = MMIO(int(description["phys_addr"],16), int(description['C_HIGHADDR'],16) - int(description["phys_addr"],16)+1)
+
+
 
 #################################################################################################################################
 #      ___           ___           ___           ___           ___           ___           ___           ___           ___      #
@@ -22,10 +77,16 @@ class Generator_driver(DefaultIP):
 
     bindto = ['user.org:user:axisGeneratorIP:1.0']
     
+    # a dictionary that stores useful data about the envelopes that have been written to 
+    # the envelope memory
     EnvelopeMemoryDict = {}
     EnvelopeMemoryDictReservedNames = []
+    # a dictionary that stores useful data about the wave definition words that have
+    # been written to the sequencer's wave memory
     WaveMemoryDict = {}
     WaveMemoryDictReservedNames = []
+    # the axi interface 
+    AxiFullInterfaceMMIO = None
 
     def __init__(self, description):
         super().__init__(description=description)
@@ -49,17 +110,13 @@ class Generator_driver(DefaultIP):
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
         # axi full interface depth in bytes
         self.AxiFullInterfaceDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
-        self.AxiFullInterfaceMMIO = MMIO(description["phys_addr"]-self.AxiFullInterfaceDepth, self.AxiFullInterfaceDepth)
-        # TODO: fix this /4 after updating the IP
+        #self.AxiFullInterfaceMMIO = MMIO(description["phys_addr"]-self.AxiFullInterfaceDepth, self.AxiFullInterfaceDepth)
         # size of axi full segments in bytes
-        self.TotalSampleMemorySegmentDepth = int(description['parameters']['TotalSampleMemorySegmentDepth']/4)
-        self.WaveMemorySegmentDepth = int(description['parameters']['WaveMemoryDepth']/4)
-        self.MemoryMappedFifoSegmentDepth = int(description['parameters']['MemoryMappedFifoDepth']/4)
+        self.TotalSampleMemorySegmentDepth = int(description['parameters']['TotalSampleMemorySegmentDepth'])
+        self.WaveMemorySegmentDepth = int(description['parameters']['WaveMemoryDepth'])
+        self.MemoryMappedFifoSegmentDepth = int(description['parameters']['MemoryMappedFifoDepth'])
         # width of the lfsr seed
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
-
-        # reset envelope dictionary and wave memory dict
-        self.ResetEnvelopeDict()
 
         # Reg definition
         self.ctrl = 0
@@ -74,6 +131,17 @@ class Generator_driver(DefaultIP):
         self.SourcePos = 27
         self.ManTrigSel = 28
         self.ManTrigPos = 31
+    
+    def InitAxiFullInterface(self, base_address : int):
+        """
+        Initialize the axi full interface for this IP
+        
+        :param base_address: Base address of the axi full interface
+        :type base_address: int
+        """
+        if self.AxiFullInterfaceMMIO is None:
+            self.AxiFullInterfaceMMIO = MMIO(base_address, self.AxiFullInterfaceDepth)
+        self.ResetEnvelopeDict()
 
     def ResetEnvelopeDict(self):
         """
@@ -87,6 +155,7 @@ class Generator_driver(DefaultIP):
         self.EnvelopeMemoryDictReservedNames.append("_FREESPACE")
         # set an entry for rectangular waves
         self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
+        self.EnvelopeMemoryDictReservedNames.append("_RECTANGULAR")
         self.ResetWaveMemoryDict()
 
     def ResetWaveMemoryDict(self):
@@ -98,7 +167,7 @@ class Generator_driver(DefaultIP):
         # address of next wave in wave memory
         self.WaveMemoryDict["_NEXT"] = 0
         self.WaveMemoryDictReservedNames.append("_NEXT")
-        for address in range(0,self.WaveMemorySegmentDepth,4):
+        for address in range(self.TotalSampleMemorySegmentDepth,self.TotalSampleMemorySegmentDepth+self.WaveMemorySegmentDepth,4):
             self.AxiFullInterfaceMMIO.write(address, 0)
 
     def WriteDescription(self):
@@ -127,7 +196,8 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        self.SetBit(reg = self.ctrl, pos = self.ManTrigPos, value = 1)
+        register = self.mmio.read(self.ctrl*4)
+        self.mmio.write(self.ctrl*4, _SetBit(register, self.ManTrigPos, 1))
         return 0
 
     def SetTriggerChannel(self, channel, ttype):
@@ -148,12 +218,11 @@ class Generator_driver(DefaultIP):
             print("type choice is out of range")
             return -3
 
-        # clear mask
-        andmask = ~((2**self.TriggerChannels - 1) << (ttype*self.TriggerChannels))
-        cntr = self.mmio.read(self.ctrl) & andmask
-        self.mmio.write(self.ctrl, cntr)
+        # write to the control register
+        trigger_mask = 1 << (channel - 1)
+        control = _SetBits(self.mmio.read(self.ctrl*4), ttype*self.TriggerChannels, self.TriggerChannels, trigger_mask)
+        self.mmio.write(self.ctrl*4, control)
 
-        self.SetBit(reg = self.ctrl, pos = channel - 1 + ttype * self.TriggerChannels, value = 1)
         return 0
 
     def GetTriggerChannel(self, ttype):
@@ -192,7 +261,8 @@ class Generator_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        self.SetBit(reg = self.ctrl, pos = self.SourcePos, value = source)
+        register = _SetBit(value= self.mmio.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
+        self.mmio.write(self.ctrl*4, register)
         return 0
 
     def GetSource(self):
@@ -288,7 +358,7 @@ class Generator_driver(DefaultIP):
 
     def SetDriveInc(self, inc):
         """
-        Set readout phase increment value, used to generate the 
+        Set drive phase increment value, used to generate the 
         modulation carrier for waves on the drive output line
 
         :param inc: Increment value for readout
@@ -305,7 +375,7 @@ class Generator_driver(DefaultIP):
 
     def GetDriveInc(self):
         """
-        Get drive phaseincrement value
+        Get drive phase increment value
 
         :return: Error code
         :rtype: int
@@ -334,26 +404,11 @@ class Generator_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        self.SetBit(reg = self.ctrl, pos = self.ManTrigSel, value = destination)
+        register = _SetBit(self.mmio.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= destination)
+        self.mmio.write(self.ctrl*4, register)
         return 0
 
-    def SetBit(self, reg, pos, value):
-        """
-        Function to set a bit in a register
-
-        :param reg: address of the register
-        :type reg: int
-        :param pos: position in the register to modify
-        :type pos: int
-        :param value: value to write in the register
-        :type value: int, must be 0 or 1
-        """
-        andmask = 0xffffffff-(1<<pos)
-        ormask = value << pos
-        cntr = self.mmio.read(reg*4) & andmask
-        cntr = cntr | ormask
-        self.mmio.write(reg*4, cntr)
-
+    
     def GetBit(self, reg, pos):
         """
         Function to get a bit from a register
@@ -558,7 +613,7 @@ class Generator_driver(DefaultIP):
                 self.AxiFullInterfaceMMIO.write((write_address)*4,to_write)
         return 0
     
-    def CreateWaveDefinitionWord(self, envelope_name : str, duration: np.uint, gain: float, switch_iq : bool):
+    def CreateWaveDefinitionWord(self, envelope_name : str, duration: int, gain: float, switch_iq : bool):
         """
         Function to generate a wave definition word, uses cached envelopes stored in envelope memory to
         correctly generate a wave.\n For envelopes not marked for interpolation, it is advised
@@ -573,9 +628,9 @@ class Generator_driver(DefaultIP):
         :param switch_iq: Switch the envelope I and Q values, useful for Y-Gates
         :type switch_iq: bool
         :return: Error code
-        :rtype: Literal[-3] | uint128
+        :rtype: Literal[-3] | int
         """
-        wavedef = np.uint128(0)
+        wavedef = 0
         # check input parameters
         if (envelope_name not in self.EnvelopeMemoryDict.keys()):
             print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
@@ -608,29 +663,29 @@ class Generator_driver(DefaultIP):
         # handle special envelope names
         if (envelope_name == "_RECTANGULAR"):
             # set the force one bit
-            wavedef = wavedef | (np.uint128(0x1) << 121)
+            wavedef = wavedef | (1 << 121)
         else:
             # set the symmetric bit
             if (envelope_def["is_sym"]):
-                wavedef = wavedef | (np.uint128(0x1) << 127)
+                wavedef = wavedef | (1 << 127)
             # set the i_even bit
             if (envelope_def["i_even"]):
-                wavedef = wavedef | (np.uint128(0x1) << 126)
+                wavedef = wavedef | (1 << 126)
             # set the q_even bit
             if (envelope_def["q_even"]):
-                wavedef = wavedef | (np.uint128(0x1) << 125)
+                wavedef = wavedef | (1 << 125)
             # set the interpolation bit
             if (envelope_def["is_interp"]):
-                wavedef = wavedef | (np.uint128(0x1) << 120)
+                wavedef = wavedef | (1 << 120)
         
         # set the iq switch
         if (switch_iq):
-            wavedef = wavedef | (np.uint128(0x1) << 123)
+            wavedef = wavedef | (1 << 123)
         # set the invert bit
         if (invert): 
-            wavedef = wavedef | (np.uint128(0x1) << 124)
+            wavedef = wavedef | (1 << 124)
         # set the gain
-        wavedef = wavedef | (np.uint128(real_gain) << (2*(self.SampleMemoryAddressWidth + self.FractionalPrecision) + self.DurationWidth))
+        wavedef = wavedef | (real_gain << (2*(self.SampleMemoryAddressWidth + self.FractionalPrecision) + self.DurationWidth))
         # get the envelope natural duration
         natural_envelope_duration = 0
         if (envelope_def["is_interp"]):
@@ -644,31 +699,31 @@ class Generator_driver(DefaultIP):
         else:
             real_duration = duration
         # set the duration bits
-        wavedef = wavedef | (np.uint128(real_duration - 1) << 2*(self.SampleMemoryAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | ((real_duration - 1) << 2*(self.SampleMemoryAddressWidth + self.FractionalPrecision))
         # set sample generator offsets
         start_offset = 0
         increment = 0
         if (envelope_def["is_interp"]):
             # TODO: handle the reminder
-            start_offset = np.uint128(envelope_def["start"]) << self.FractionalPrecision
-            increment = (np.uint128(natural_envelope_duration-1) << self.FractionalPrecision)//(real_duration-1)
+            start_offset = envelope_def["start"] << self.FractionalPrecision
+            increment = ((natural_envelope_duration-1) << self.FractionalPrecision)//(real_duration-1)
         else:
-            start_offset = np.uint128(envelope_def["start"]) << self.FractionalPrecision
+            start_offset = envelope_def["start"] << self.FractionalPrecision
             # set the increment to 1/(number_of_channels), usually 1/16
-            increment = np.uint128(0x1) << (self.FractionalPrecision - self.LogNumberOfChannels)
+            increment = 1 << (self.FractionalPrecision - self.LogNumberOfChannels)
         # set the start offset and increment bits
         wavedef = wavedef | (start_offset << (self.SampleMemoryAddressWidth + self.FractionalPrecision))
         wavedef = wavedef | increment
         # return wave definition
         return wavedef
     
-    def AddWaveInWaveMemory(self, wave_definition : np.uint128, wave_name : str):
+    def AddWaveInWaveMemory(self, wave_definition : int, wave_name : str):
         """
         Add a wave definition word in the wave memory, there are no checks on the 
         word so the it should only be generated with provided functions
         
         :param wave_definition: Wave definition word, low level definition of a wave
-        :type wave_definition: uint128
+        :type wave_definition: int
         :param wave_name: Name of the wave to add
         :type wave_name: str
         :return: Error code
@@ -695,7 +750,7 @@ class Generator_driver(DefaultIP):
         
         return 0
     
-    def ReplaceWaveInWaveMemory(self, wave_definition : np.uint128, wave_name : str):
+    def ReplaceWaveInWaveMemory(self, wave_definition : int, wave_name : str):
         """
         Replace a certain word definition with another one
         
