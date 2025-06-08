@@ -49,6 +49,8 @@ if __debug__:
             if address%4 != 0:
                 print("mmio error, read at address not word aligned")
                 return 0
+            with open("./memory_operations_axi.txt","a+") as writefile:
+                writefile.write("write address " + hex(address) + " write data " + hex(value) + " " + str(value) + "\n")
             self.memory[address] = value
     
     class DefaultIP:
@@ -450,9 +452,9 @@ class Generator_driver(DefaultIP):
         bounded_phase = bounded_phase% (2*np.pi)
 
         # get the nyquist zone
-        nyquist_zone = frequency//(dac_samplerate/2)
+        nyquist_zone = (frequency*1000000)//(dac_samplerate/2)
         # get the reminder, e.g. the distance from the nyquist frequency
-        nyquist_reminder = frequency%(dac_samplerate/2)
+        nyquist_reminder = (frequency*1000000)%(dac_samplerate/2)
 
         # compute the phase increment and offset
         pinc = 0
@@ -462,14 +464,14 @@ class Generator_driver(DefaultIP):
             # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
             # the odd/even checks on the real nyquist zone are opposite
             # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
             poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
         else:
             # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
             # as the distance from the sample rate
             nyquist_reminder = dac_samplerate/2 - nyquist_reminder
             bounded_phase = 2*np.pi - bounded_phase
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
             poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
 
         # rounding the phase increment and offset
@@ -497,9 +499,9 @@ class Generator_driver(DefaultIP):
             return -3
 
         # get the nyquist zone
-        nyquist_zone = frequency//(dac_samplerate/2)
+        nyquist_zone = (frequency*1000000)//(dac_samplerate/2)
         # get the reminder, e.g. the distance from the nyquist frequency
-        nyquist_reminder = frequency%(dac_samplerate/2)
+        nyquist_reminder = (frequency*1000000)%(dac_samplerate/2)
 
         # compute the phase increment and offset
         pinc = 0
@@ -508,13 +510,12 @@ class Generator_driver(DefaultIP):
             # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
             # the odd/even checks on the real nyquist zone are opposite
             # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
         else:
             # when the nyquist zone is even, the frequency needs to be calculated 
             # as the distance from the sample rate
             nyquist_reminder = dac_samplerate/2 - nyquist_reminder
-            bounded_phase = 2*np.pi - bounded_phase
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/dac_samplerate
+            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
 
         # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
         # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
@@ -1014,6 +1015,8 @@ class Trigger_driver(DefaultIP):
 
     bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
+    FifoInterfaceMMIO = None
+
     def __init__(self, description):
 
         super().__init__(description=description)
@@ -1021,7 +1024,6 @@ class Trigger_driver(DefaultIP):
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
         # parse the fifo interface depth and create mmio handle
         self.FifoInterfaceMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
-        self.FifoInterfaceMMIO = MMIO(description["phys_addr"]-self.FifoInterfaceMemoryDepth, self.FifoInterfaceMemoryDepth)
         # fifo depth in number of words 
         self.ChannelFifoDepth = pow(2,int(description['parameters']['FifoAddressWidth']))
         # fifo output width
@@ -1036,6 +1038,8 @@ class Trigger_driver(DefaultIP):
         self.ctrl = 0
         self.experiment_dur_l = 2
         self.experiment_dur_h = 3
+        self.readout_delay_l = 4
+        self.readout_delay_h = 5
         self.shots_num_l = 1
 
         # Bit position definition
@@ -1046,6 +1050,16 @@ class Trigger_driver(DefaultIP):
         print("fifo interface axi depth: " + str(self.FifoInterfaceMemoryDepth))
         print("fifo channel depth: " + str(self.ChannelFifoDepth))
         print("maximum number of hardware repetitions: " + str(self.MaxHWRepetitions))
+    
+    def InitAxiFullInterface(self, base_address : int):
+        """
+        Initialize the axi full interface for this IP
+        
+        :param base_address: Base address of the axi full interface
+        :type base_address: int
+        """
+        if self.AxiFullInterfaceMMIO is None:
+            self.AxiFullInterfaceMMIO = MMIO(base_address, self.FifoInterfaceMemoryDepth)
 
     def SetExperimentDuration(self,duration):
         """
@@ -1123,3 +1137,17 @@ class Trigger_driver(DefaultIP):
         self.FifoInterfaceMMIO.write(real_address*4, int(real_delay))
         return 0
     
+    def SetReadoutDelay(self,delay : int,channel : int):
+        """
+        Set the experiment duration for a single shot
+        
+        :param duration: Duration in clock cycles
+        :type duration: uint
+        """
+        if channel < 1 or channel > self.TriggerChannels:
+            print("error, channel selection out of range")
+            return -3
+        # write inc LOW
+        self.mmio.write(self.readout_delay_l*channel*4, delay & 0xFFFFFFFF)
+        # write inc HIGH
+        self.mmio.write((self.readout_delay_l*channel + 1)*4, delay >> 32)
