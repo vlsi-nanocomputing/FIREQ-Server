@@ -20,10 +20,98 @@ def _SetBit(value : int, pos : int, setvalue : int):
         bitvalue = 1
     return (value & ~(bitvalue << pos)) | (bitvalue << pos)
 
+def _GetBit(value : int, pos : int):
+    """
+    Gets the bit at position pos of argument value
+    
+    :param value: Input value to extract bit from
+    :type value: int
+    :param pos: Bit position 
+    :type pos: int
+    :return: 0 or 1 depending on the bit value
+    :rtype: int
+    """
+    return (value & (1 << pos)) >> pos
+
 def _SetBits(value : int, start : int, length : int, setvalue : int):
+    """
+    Set bits from start for a length equal to length to setvalue
+    
+    :param value: Input value to set bits
+    :type value: int
+    :param start: Start bit index, 0 is LSB
+    :type start: int
+    :param length: Number of bits to modify
+    :type length: int
+    :param setvalue: Value to set the bits
+    :type setvalue: int
+    :return: Modified input value
+    :rtype: int
+    """
     mask = ((1 << length) - 1) << start
     safe_setvalue = (setvalue << start) & mask
     return (value & ~(mask)) | safe_setvalue
+
+def _GetBits(value : int, start : int, length : int):
+    """
+    Get a number of sequential bits from argument value
+    
+    :param value: Input to extract bits
+    :type value: int
+    :param start: Start index of the bits, 0 is LSB
+    :type start: int
+    :param length: Number of bits to extract
+    :type length: int
+    :return: Extracted bits from argument value
+    :rtype: int
+    """
+    mask = ((1 << length) - 1) << start
+    return (value & mask) >> start
+
+def _ComputePincPoff(frequency : int, phase : int, samplerate : int, phase_depth : int):
+    """
+    Compute the phase increment and phase offset depending on the input frequency and phase
+    
+    :param frequency: Frequency in Hz
+    :type frequency: int
+    :param phase: Phase in radiants
+    :type phase: int
+    :param samplerate: Sample rate in samples per second
+    :type samplerate: int
+    :param phase_depth: Depth of the phase registers
+    :type phase_depth: int
+    :return: Phase increment and phase offset tuple
+    :rtype: tuple[Any, Any]
+    """
+    # get the bounded phase, mapping an unbounded radiant into (-2pi:2pi)
+    bounded_phase = phase % (2*np.pi)
+    # add 2pi to move the bounds to (0:4pi)
+    bounded_phase = bounded_phase + 2*np.pi
+    # now bound the phase to [0:2pi)
+    bounded_phase = bounded_phase% (2*np.pi)
+    # get the nyquist zone
+    nyquist_zone = frequency//(samplerate/2)
+    # get the reminder, e.g. the distance from the nyquist frequency
+    nyquist_reminder = frequency%(samplerate/2)
+    # compute the phase increment and offset
+
+    pinc = 0
+    poff = 0
+    if (nyquist_zone%2 == 0):
+        # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
+        # the odd/even checks on the real nyquist zone are opposite
+        # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
+        pinc = (nyquist_reminder*(2**phase_depth))/samplerate
+        poff = (2**phase_depth - 1)*(bounded_phase/(2*np.pi))
+    else:
+        # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
+        # as the distance from the sample rate
+        nyquist_reminder = samplerate/2 - nyquist_reminder
+        bounded_phase = 2*np.pi - bounded_phase
+        pinc = (nyquist_reminder*(2**phase_depth))/samplerate
+        poff = (2**phase_depth - 1)*(bounded_phase/(2*np.pi))
+    
+    return (round(pinc), round(poff))
 
 if __debug__:
     class MMIO:
@@ -242,11 +330,11 @@ class Generator_driver(DefaultIP):
 
         cntr = self.mmio.read(self.ctrl)
 
-        mask = (cntr >> ttype*self.TriggerChannels) & (2**self.TriggerChannels - 1)
+        channel = _GetBits(cntr, ttype*self.TriggerChannels, self.TriggerChannels)
         if ttype == 0:
-            print("Trigger Drive mask: " + format(mask, f"0{self.TriggerChannels}b"))
+            print("Trigger Drive mask: " + format(channel, f"0{self.TriggerChannels}b"))
         else:
-            print("Trigger Readout mask: " + format(mask, f"0{self.TriggerChannels}b"))
+            print("Trigger Readout mask: " + format(channel, f"0{self.TriggerChannels}b"))
 
         return 0
 
@@ -274,7 +362,8 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        if self.GetBit(reg = self.ctrl, pos = self.SourcePos) == 0:
+        cntr = self.mmio.read(self.ctrl*4)
+        if _GetBit(cntr, self.SourcePos) == 0:
             print("Source: FIFO")
         else:
             print("Source: LFSR")
@@ -293,12 +382,9 @@ class Generator_driver(DefaultIP):
         if seed < 0 or seed > (2**self.SeedLfsrWidth - 1):
             print("source choice is out of range")
             return -3
-
-        andmask = ~((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
-        ormask = seed << (2*self.TriggerChannels)
-        cntr = self.mmio.read(self.ctrl) & andmask
-        cntr = cntr | ormask
-        self.mmio.write(self.ctrl, cntr)
+        cntr = self.mmio.read(self.ctrl*4)
+        cntr = _SetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth, seed)
+        self.mmio.write(self.ctrl*4, cntr)
         return 0
 
     def GetLFSRSeed(self):
@@ -308,7 +394,8 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        cntr = self.mmio.read(self.ctrl) & ((2**self.SeedLfsrWidth - 1) << (2*self.TriggerChannels))
+        cntr = self.mmio.read(self.ctrl)
+        cntr = _GetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth)
         print(f"LFSR seed: {cntr}")
 
         return 0
@@ -409,22 +496,18 @@ class Generator_driver(DefaultIP):
         register = _SetBit(self.mmio.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= destination)
         self.mmio.write(self.ctrl*4, register)
         return 0
-
     
-    def GetBit(self, reg, pos):
+    def GetManualTriggerDestination(self):
         """
-        Function to get a bit from a register
-
-        :param reg: address of the register
-        :type reg: int
-        :param pos: position in the register to read
-        :type pos: int
-        :return: Value read
-        :rtype: int
+        Get the destination output line for the generator when triggered from the manual trigger
+        
         """
-        cntr = self.mmio.read(reg*4)
-
-        return (cntr >> pos) & 0x1
+        dest = _GetBit(self.mmio.read(self.ctrl*4), self.ManTrigSel)
+        if dest:
+            print("Manual trigger destination is readout line")
+        else: 
+            print("Manual trigger destination is drive line")
+        return 0
     
     def SetReadoutDDSParameters(self, frequency : float, phase : float, dac_samplerate : int):
         """
@@ -444,42 +527,11 @@ class Generator_driver(DefaultIP):
             print("input parameters out of range")
             return -3
 
-        # get the bounded phase, mapping an unbounded radiant into (-2pi:2pi)
-        bounded_phase = phase % (2*np.pi)
-        # add 2pi to move the bounds to (0:4pi)
-        bounded_phase = bounded_phase + 2*np.pi
-        # now bound the phase to [0:2pi)
-        bounded_phase = bounded_phase% (2*np.pi)
-
-        # get the nyquist zone
-        nyquist_zone = (frequency*1000000)//(dac_samplerate/2)
-        # get the reminder, e.g. the distance from the nyquist frequency
-        nyquist_reminder = (frequency*1000000)%(dac_samplerate/2)
-
-        # compute the phase increment and offset
-        pinc = 0
-        poff = 0
-
-        if (nyquist_zone%2 == 0):
-            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
-            # the odd/even checks on the real nyquist zone are opposite
-            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
-            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
-            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
-        else:
-            # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
-            # as the distance from the sample rate
-            nyquist_reminder = dac_samplerate/2 - nyquist_reminder
-            bounded_phase = 2*np.pi - bounded_phase
-            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
-            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
-
-        # rounding the phase increment and offset
-        pinc = round(pinc)
-        poff = round(poff)
+        # get poff and pinc
+        value_tuple = _ComputePincPoff(frequency*1000000, phase, dac_samplerate, self.PhaseDepth)
 
         # write registers
-        self.SetReadoutIncOff(pinc,poff)
+        self.SetReadoutIncOff(value_tuple[0],value_tuple[1])
         return 0
 
     def SetDriveDDSParameters(self, frequency, dac_samplerate):
@@ -498,31 +550,11 @@ class Generator_driver(DefaultIP):
             print("input parameters out of range")
             return -3
 
-        # get the nyquist zone
-        nyquist_zone = (frequency*1000000)//(dac_samplerate/2)
-        # get the reminder, e.g. the distance from the nyquist frequency
-        nyquist_reminder = (frequency*1000000)%(dac_samplerate/2)
-
-        # compute the phase increment and offset
-        pinc = 0
-
-        if (nyquist_zone%2 == 0):
-            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
-            # the odd/even checks on the real nyquist zone are opposite
-            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
-            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
-        else:
-            # when the nyquist zone is even, the frequency needs to be calculated 
-            # as the distance from the sample rate
-            nyquist_reminder = dac_samplerate/2 - nyquist_reminder
-            pinc = (nyquist_reminder*(2**self.PhaseDepth))/dac_samplerate
-
-        # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
-        # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
-        pinc = round(pinc)
+        # get poff and pinc
+        value_tuple = _ComputePincPoff(frequency*1000000, 0, dac_samplerate, self.PhaseDepth)
 
         # write registers
-        self.SetDriveInc(pinc)
+        self.SetDriveInc(value_tuple[0])
         return 0
     
     def WriteEnvelopeMemory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
@@ -838,7 +870,7 @@ class Acquisition_driver(DefaultIP):
         print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
         print("TimeOfFlightWidth: " + str(self.TimeOfFlightWidth) + ", width of the time of flight timer (bits)")
 
-    def SetAcquistionParameters(self, frequency, phase, duration, ADC_SAMPLERATE):
+    def SetAcquistionParameters(self, frequency, phase, duration, adc_samplerate):
         """
         Set parameters for acquistion such as demodulation frequency, the phase offset of the demodulation
         and the duration of the acquistion
@@ -859,40 +891,13 @@ class Acquisition_driver(DefaultIP):
             print("input parameters out of range")
             return -3
 
-        # get the bounded phase, mapping an unbounded radiant into (-2pi:2pi)
-        bounded_phase = phase % (2*np.pi)
-        # add 2pi to move the bounds to (0:4pi)
-        bounded_phase = bounded_phase + 2*np.pi
-        # now bound the phase to [0:2pi)
-        bounded_phase = bounded_phase% (2*np.pi)
-
-        # get the nyquist zone
-        nyquist_zone = frequency//(ADC_SAMPLERATE/2)
-        # get the reminder, e.g. the distance from the nyquist frequency
-        nyquist_reminder = frequency%(ADC_SAMPLERATE/2)
-
-        # compute the phase increment and offset
-        pinc = 0
-        poff = 0
-
-        if (nyquist_zone%2 == 0):
-            # checking that we are in the odd nyquist zones, note that nyquist_zone differs from the real nyquist zone by 1 so
-            # the odd/even checks on the real nyquist zone are opposite
-            # in this case we will be here for zones 1,3,5,... which map into 0,2,4 for the nyquist_zone variable
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/ADC_SAMPLERATE
-            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
-        else:
-            # when the nyquist zone is even, the phase has opposite sign and the frequency needs to be calculated 
-            # as the distance from the sample rate
-            nyquist_reminder = ADC_SAMPLERATE/2 - nyquist_reminder
-            bounded_phase = 2*np.pi - bounded_phase
-            pinc = ((nyquist_reminder*1000000)*(2**self.PhaseDepth))/ADC_SAMPLERATE
-            poff = (2**self.PhaseDepth - 1)*(bounded_phase/(2*np.pi))
+        # get poff and pinc
+        value_tuple = _ComputePincPoff(frequency*1000000, phase, adc_samplerate, self.PhaseDepth)
 
         # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
         # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
-        pinc = round(pinc)&(2**self.PhaseDepth - 2)
-        poff = round(poff)&(2**self.PhaseDepth - 2)
+        pinc = value_tuple[0]&(2**self.PhaseDepth - 2)
+        poff = value_tuple[1]&(2**self.PhaseDepth - 2)
 
         # write registers
         self.SetReadoutIncOff(pinc,poff)
@@ -944,14 +949,13 @@ class Acquisition_driver(DefaultIP):
         """
         
         # TODO: check if this is correct in terms of the actual size of acquistion
-        if (dur < 0 or dur > self.MaximumDuration):
+        if (dur < 1 or dur > self.MaximumDuration):
             print("acquistion duration is out of range")
             return -3
 
-        mask = (self.MaximumDuration - 1) << self.TriggerChannels
-        cntr = self.mmio.read(0) & (~mask)
-        cntr = cntr | (dur << self.TriggerChannels)
-        self.mmio.write(0,cntr)
+        cntr = self.mmio.read(self.ctrl*4)
+        cntr = _SetBits(cntr, self.TriggerChannels, self.DurationWidth, dur-1)
+        self.mmio.write(self.ctrl*4,cntr)
     
     def SetTriggerChannel(self, trigger):
         """
@@ -967,14 +971,10 @@ class Acquisition_driver(DefaultIP):
             print("source choice is out of range")
             return -3
 
-        andmask = ~(2**self.TriggerChannels-1)
-        cntr = self.mmio.read(0) & andmask
-        if (trigger == 0):
-            ormask = 0
-        else:
-            ormask = 1 << (trigger-1)
-        cntr = cntr | ormask
-        self.mmio.write(0,cntr)
+        mask = (1 << trigger) >> 1
+        cntr = self.mmio.read(self.ctrl*4)
+        cntr = _SetBits(cntr, 0, self.TriggerChannels, mask)
+        self.mmio.write(self.ctrl*4, cntr)
         return 0
     
     def SetTimeOfFlight(self, time_of_flight):
@@ -987,14 +987,13 @@ class Acquisition_driver(DefaultIP):
         :rtype: int
         """
         # TODO: check if this is correct in terms of the actual time of flight
-        if (time_of_flight < 0 or time_of_flight > self.MaximumDuration):
+        if (time_of_flight < 1 or time_of_flight > self.TimeOfFlightMax):
             print("time of flight is out of range")
             return -3
 
-        mask = (self.TimeOfFlightMax - 1) << (self.TriggerChannels + self.DurationWidth)
-        cntr = self.mmio.read(0) & (~mask)
-        cntr = cntr | (time_of_flight << (self.TriggerChannels + self.DurationWidth))
-        self.mmio.write(0,cntr)
+        cntr = self.mmio.read(self.ctrl*4)
+        cntr = _SetBits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
+        self.mmio.write(self.ctrl*4, cntr)
 
 ######################################################################################################
 #      ___           ___                       ___           ___           ___           ___         #
@@ -1058,8 +1057,8 @@ class Trigger_driver(DefaultIP):
         :param base_address: Base address of the axi full interface
         :type base_address: int
         """
-        if self.AxiFullInterfaceMMIO is None:
-            self.AxiFullInterfaceMMIO = MMIO(base_address, self.FifoInterfaceMemoryDepth)
+        if self.FifoInterfaceMMIO is None:
+            self.FifoInterfaceMMIO = MMIO(base_address, self.FifoInterfaceMemoryDepth)
 
     def SetExperimentDuration(self,duration):
         """
