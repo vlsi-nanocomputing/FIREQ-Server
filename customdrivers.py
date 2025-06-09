@@ -210,6 +210,7 @@ class Generator_driver(DefaultIP):
 
         # Reg definition
         self.ctrl = 0
+        self.readout_wave_l = 1
         self.readout_inc_l = 5
         self.readout_inc_h = 6
         self.readout_off_l = 9
@@ -244,7 +245,8 @@ class Generator_driver(DefaultIP):
         self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
         self.EnvelopeMemoryDictReservedNames.append("_FREESPACE")
         # set an entry for rectangular waves
-        self.EnvelopeMemoryDict["_RECTANGULAR"] = {}
+        self.EnvelopeMemoryDict["_RECTANGULAR"] = {"is_interp" : 0, "size" : any, "is_sym" : 0,
+                                                   "i_even" : 0, "q_even" : 0, "start" : 0}
         self.EnvelopeMemoryDictReservedNames.append("_RECTANGULAR")
         self.ResetWaveMemoryDict()
 
@@ -292,7 +294,8 @@ class Generator_driver(DefaultIP):
 
     def SetTriggerChannel(self, channel, ttype):
         """
-        Set the channel where the generator is listening for a trigger for the readout and drive trigger types
+        Set the channel where the generator is listening for a trigger for the readout and drive trigger types.\n
+        Set the channel to 0 if you want to disable external triggers
 
         :param channel: Channel number, 1 to TriggerChannels
         :type channel: int
@@ -301,7 +304,7 @@ class Generator_driver(DefaultIP):
         :return: Error code
         :rtype: int
         """
-        if channel < 1 or channel > self.TriggerChannels:
+        if channel < 0 or channel > self.TriggerChannels:
             print("channel choice is out of range")
             return -3
         if ttype != 0 and ttype != 1:
@@ -309,7 +312,7 @@ class Generator_driver(DefaultIP):
             return -3
 
         # write to the control register
-        trigger_mask = 1 << (channel - 1)
+        trigger_mask = (1 << channel) >> 1
         control = _SetBits(self.mmio.read(self.ctrl*4), ttype*self.TriggerChannels, self.TriggerChannels, trigger_mask)
         self.mmio.write(self.ctrl*4, control)
 
@@ -513,13 +516,13 @@ class Generator_driver(DefaultIP):
         """
         Set frequency and phase for the readout carrier signal
         
-        :param frequency: Description
+        :param frequency: Frequency of the carrier in MHz
         :type frequency: float
-        :param phase: Description
+        :param phase: Phase in radiants
         :type phase: float
-        :param dac_samplerate: Description
+        :param dac_samplerate: Sample rate of the dac, in samples per second
         :type dac_samplerate: int
-        :return: Description
+        :return: Error code
         :rtype: Literal[-3, 0]
         """
         # check inputs
@@ -540,7 +543,7 @@ class Generator_driver(DefaultIP):
         
         :param frequency: Frequency in MHz
         :type frequency: float
-        :param dac_samplerate: Sampling frequency of the dac in Hz
+        :param dac_samplerate: Sampling frequency of the dac in samples per second
         :type dac_samplerate: int
         :return: Error code
         :rtype: Literal[-3, 0]
@@ -579,7 +582,8 @@ class Generator_driver(DefaultIP):
         :param envelope_name: name to attach to envelope description
         :type envelope_name: string
         """
-        new_dict_item = {}
+        new_dict_item = {"is_interp" : 0, "size" : 0, "is_sym" : 0,
+                         "i_even" : 0, "q_even" : 0}
 
         # check inputs
         if envelope_name in self.EnvelopeMemoryDict.keys():
@@ -693,23 +697,35 @@ class Generator_driver(DefaultIP):
             invert = False
             real_gain = round(gain*(2**self.SampleSize-1))
 
+        real_duration = 0
+        natural_envelope_duration = 0
         # handle special envelope names
         if (envelope_name == "_RECTANGULAR"):
             # set the force one bit
             wavedef = wavedef | (1 << 121)
-        else:
-            # set the symmetric bit
-            if (envelope_def["is_sym"]):
-                wavedef = wavedef | (1 << 127)
-            # set the i_even bit
-            if (envelope_def["i_even"]):
-                wavedef = wavedef | (1 << 126)
-            # set the q_even bit
-            if (envelope_def["q_even"]):
-                wavedef = wavedef | (1 << 125)
-            # set the interpolation bit
+            real_duration = duration
+            natural_envelope_duration = duration
+        else: 
+            # TODO: duration check if not interp
             if (envelope_def["is_interp"]):
-                wavedef = wavedef | (1 << 120)
+                natural_envelope_duration = envelope_def["size"]*(1 + envelope_def["is_sym"]) - 1
+                real_duration = duration
+            else:
+                natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
+                real_duration = natural_envelope_duration
+
+        # set the symmetric bit
+        if (envelope_def["is_sym"]):
+            wavedef = wavedef | (1 << 127)
+        # set the i_even bit
+        if (envelope_def["i_even"]):
+            wavedef = wavedef | (1 << 126)
+        # set the q_even bit
+        if (envelope_def["q_even"]):
+            wavedef = wavedef | (1 << 125)
+        # set the interpolation bit
+        if (envelope_def["is_interp"]):
+            wavedef = wavedef | (1 << 120)
         
         # set the iq switch
         if (switch_iq):
@@ -719,18 +735,6 @@ class Generator_driver(DefaultIP):
             wavedef = wavedef | (1 << 124)
         # set the gain
         wavedef = wavedef | (real_gain << (2*(self.SampleMemoryAddressWidth + self.FractionalPrecision) + self.DurationWidth))
-        # get the envelope natural duration
-        natural_envelope_duration = 0
-        if (envelope_def["is_interp"]):
-            natural_envelope_duration = envelope_def["size"]*(1 + envelope_def["is_sym"]) - 1
-        else:
-            natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
-        # set the real duration
-        real_duration = 0
-        if(duration == 0):
-            real_duration = natural_envelope_duration
-        else:
-            real_duration = duration
         # set the duration bits
         wavedef = wavedef | ((real_duration - 1) << 2*(self.SampleMemoryAddressWidth + self.FractionalPrecision))
         # set sample generator offsets
@@ -783,6 +787,43 @@ class Generator_driver(DefaultIP):
         
         return 0
     
+    def WriteWaveToDriveSequence(self, index : int, wave_name : str):
+        """
+        Write to memory mapped fifo the address of the wave memory containing the wave definiton defined by 
+        wave_name
+ 
+        :param index: Sequence index, the first one is 1
+        :type index: int
+        :param wave_name: Name of the wave definition previously added to wave memory
+        :type wave_name: str
+        """
+
+        if (index < 1 or index > self.MemoryMappedFifoSegmentDepth//4):
+            print("error, the index is out of range")
+            return -3
+        if wave_name not in self.WaveMemoryDict.keys():
+            print("error, a wave was not found in the cached wave memory with the same name")
+            print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
+            return -3
+        if wave_name in self.WaveMemoryDictReservedNames:
+            print("wave name is a reserved keyword")
+            return -3
+        
+        # get wave
+        wave_addr = self.WaveMemoryDict[wave_name]
+        
+        # write to memory mapped fifo
+        fifo_start_address = self.TotalSampleMemorySegmentDepth + self.WaveMemorySegmentDepth
+        actual_address = fifo_start_address + (index-1)*4
+        self.AxiFullInterfaceMMIO.write(actual_address, wave_addr)
+
+    def WriteReadoutWave(self, wave_definition : int):
+        if wave_definition < 0:
+            print("error, wave def is negative")
+            return -3
+        for i in range(4):
+            self.mmio.write((self.readout_wave_l+i)*4, (wave_definition >> i*32) & 0xFFFFFFFF)
+
     def ReplaceWaveInWaveMemory(self, wave_definition : int, wave_name : str):
         """
         Replace a certain word definition with another one
@@ -798,8 +839,8 @@ class Generator_driver(DefaultIP):
             print("error, a wave was not found in the cached wave memory with the same name")
             print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
             return -3
-        if wave_name == "_NEXT":
-            print("'_NEXT' is a reserved keyword")
+        if wave_name in self.WaveMemoryDictReservedNames:
+            print("wave name is a reserved keyword")
             return -3
         
         # get the address where the wave definition will end up
@@ -887,7 +928,7 @@ class Acquisition_driver(DefaultIP):
         :rtype: int
         """
         # check inputs
-        if(frequency < 0 or duration < 0  or duration > self.MaximumDuration):
+        if(frequency < 0 or duration < 1  or duration > self.MaximumDuration):
             print("input parameters out of range")
             return -3
 
@@ -902,7 +943,7 @@ class Acquisition_driver(DefaultIP):
         # write registers
         self.SetReadoutIncOff(pinc,poff)
 
-        # write the duration
+        # write the duration, note that this function removes one from duration before writing 
         self.SetDuration(duration)
         return 0
     
@@ -1147,6 +1188,6 @@ class Trigger_driver(DefaultIP):
             print("error, channel selection out of range")
             return -3
         # write inc LOW
-        self.mmio.write(self.readout_delay_l*channel*4, delay & 0xFFFFFFFF)
+        self.mmio.write((self.readout_delay_l + (channel-1)*2)*4, delay & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write((self.readout_delay_l*channel + 1)*4, delay >> 32)
+        self.mmio.write((self.readout_delay_h + (channel-1)*2)*4, delay >> 32)
