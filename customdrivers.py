@@ -636,18 +636,16 @@ class Generator_driver(DefaultIP):
         self.EnvelopeMemoryDict["_FREESPACE"]["size"] = free_space - envelope_size
 
         # commit to generator sample memory
-        if(is_symmetric):
+        to_write_array = (envelope_samples.real.astype(np.int32) << 16) + envelope_samples.imag.astype(np.int16)
+        if(is_symmetric and for_interpolation):
             # write the samples to all channels, there is a specific space in the generator memory to do just that
             write_address_start = start_address + self.ChannelSampleMemoryDepth*self.NumberOfChannels
-            for index,sample in enumerate(envelope_samples):
-                to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
-                self.AxiFullInterfaceMMIO.write((write_address_start+index)*4,to_write)
+            self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_array.tobytes())
         else:
-            for index,sample in enumerate(envelope_samples):
-                to_write = (np.int16(sample.real) << 16) + np.int16(sample.imag)
-                channel = index % self.NumberOfChannels
-                write_address = start_address + channel*self.ChannelSampleMemoryDepth + index//self.NumberOfChannels
-                self.AxiFullInterfaceMMIO.write((write_address)*4,to_write)
+            for channel in range(self.NumberOfChannels):
+                write_address_start = start_address + self.ChannelSampleMemoryDepth*channel
+                to_write_to_channel = to_write_array[channel::self.NumberOfChannels]
+                self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_to_channel.tobytes())
         return 0
     
     def CreateWaveDefinitionWord(self, envelope_name : str, duration: int, gain: float, switch_iq : bool):
