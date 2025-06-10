@@ -133,13 +133,23 @@ if __debug__:
                 self.memory[address] = 0
             return self.memory[address]
         
-        def write(self, address, value):
+        def write(self, address, data):
             if address%4 != 0:
                 print("mmio error, read at address not word aligned")
                 return 0
             with open("./memory_operations_axi.txt","a+") as writefile:
-                writefile.write("write address " + hex(address) + " write data " + hex(value) + " " + str(value) + "\n")
-            self.memory[address] = value
+                if type(data) is int:
+                    writefile.write("write address " + hex(address) + " write data " + hex(data) + " " + str(data) + "\n")
+                elif type(data) is bytes:
+                    length = len(data)
+                    num_words = length >> 2
+                    if length % 4:
+                        raise MemoryError("Unaligned write: data length must be multiple of 4.")
+                    buf = np.frombuffer(data, np.uint32, num_words, 0)
+                    for i in range(len(buf)):
+                        writefile.write("write address " + hex(address) + " write data " + hex(buf[i]) + " " + str(buf[i]) + "\n")
+                else:
+                    raise ValueError("Data type must be int or bytes.")
     
     class DefaultIP:
         
@@ -809,7 +819,8 @@ class Generator_driver(DefaultIP):
         
         # get wave
         wave_addr = self.WaveMemoryDict[wave_name]
-        
+        # this address is byte aligned but we need it 128-bit aligned
+        wave_addr = wave_addr//(128//8)
         # write to memory mapped fifo
         fifo_start_address = self.TotalSampleMemorySegmentDepth + self.WaveMemorySegmentDepth
         actual_address = fifo_start_address + (index-1)*4
