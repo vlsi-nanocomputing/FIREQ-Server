@@ -790,8 +790,8 @@ class Generator_driver(DefaultIP):
         
         # write to wave memory cache
         self.WaveMemoryDict[wave_name] = address
-        # add 32 bytes (128/8) to address
-        self.WaveMemoryDict["_NEXT"] = address + 32
+        # add 16 bytes (128/8) to address
+        self.WaveMemoryDict["_NEXT"] = address + (128//8)
         
         return 0
     
