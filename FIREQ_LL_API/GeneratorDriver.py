@@ -48,6 +48,8 @@ class Generator_driver(_FIREQDriver):
         self.MemoryMappedFifoSegmentDepth = int(description['parameters']['MemoryMappedFifoDepth'])
         # width of the lfsr seed
         self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
+        # set debug level
+        self.DebugLevel = 0
 
         # Reg definition
         self.ctrl = 0
@@ -64,16 +66,53 @@ class Generator_driver(_FIREQDriver):
         self.ManTrigSel = 28
         self.ManTrigPos = 31
     
-    def InitAxiFullInterface(self, base_address : int):
-        """
-        Initialize the axi full interface for this IP
-        
-        :param base_address: Base address of the axi full interface
-        :type base_address: int
-        """
-        if self.AxiFullInterfaceMMIO is None:
-            self.AxiFullInterfaceMMIO = MMIO(base_address, self.AxiFullInterfaceDepth)
+    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
+        super().InitAxiFullInterface(base_address, axi_depth)
+        # reset envelope dictionary and memory
         self.ResetEnvelopeDict()
+
+    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
+        super().InitAxiLiteInterface(base_address, axi_depth)
+        # delete the mmio object created by PYNQ
+        del self.mmio
+    
+    def SetDebugLevel(self, level : int, file_handler):
+        
+        if level == self.DebugLevel:
+            return 0
+        
+        if level == 0:
+            # no debug
+            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
+            full_mmio = self.AxiFullInterfaceMMIO.replaces
+            del self.AxiLiteInterfaceMMIO
+            self.AxiLiteInterfaceMMIO = lite_mmio
+            del self.AxiFullInterfaceMMIO
+            self.AxiFullInterfaceMMIO = full_mmio
+        elif level == 1:
+            self.AxiFullInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, file_handler)
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, file_handler)
+        else:
+            return 0
+        
+        self.DebugLevel = level
+        return 0
+            
+
+    def WriteDescription(self):
+        print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
+        print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
+        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")
+        print("FractionalPrecision: " + str(self.FractionalPrecision) + ", fractional precision of the interpolator (bits)")
+        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
+        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the generator (samples/clock cycle)")
+        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
+        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
+        print("AxiFullInterfaceDepth: " + str(self.AxiFullInterfaceDepth) + ", axi full interface depth (bytes)")
+        print("TotalSampleMemorySegmentDepth: " + str(self.TotalSampleMemorySegmentDepth) + ", envelope memory segment depth (bytes)")
+        print("WaveMemorySegmentDepth: " + str(self.WaveMemorySegmentDepth) + ", wave memory segment depth (bytes)")
+        print("MemoryMappedFifoSegmentDepth: " + str(self.MemoryMappedFifoSegmentDepth) + ", memory mapped FIFO segment depth (bytes)")
+        print("SeedLfsrWidth: " + str(self.SeedLfsrWidth) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
 
     def ResetEnvelopeDict(self):
         """
@@ -103,25 +142,6 @@ class Generator_driver(_FIREQDriver):
         for address in range(self.TotalSampleMemorySegmentDepth,self.TotalSampleMemorySegmentDepth+self.WaveMemorySegmentDepth,4):
             self.AxiFullInterfaceMMIO.write(address, 0)
 
-    def WriteDescription(self):
-        """
-        Print the description of the IP
-        """
-
-        print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
-        print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
-        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")
-        print("FractionalPrecision: " + str(self.FractionalPrecision) + ", fractional precision of the interpolator (bits)")
-        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
-        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the generator (samples/clock cycle)")
-        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
-        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
-        print("AxiFullInterfaceDepth: " + str(self.AxiFullInterfaceDepth) + ", axi full interface depth (bytes)")
-        print("TotalSampleMemorySegmentDepth: " + str(self.TotalSampleMemorySegmentDepth) + ", envelope memory segment depth (bytes)")
-        print("WaveMemorySegmentDepth: " + str(self.WaveMemorySegmentDepth) + ", wave memory segment depth (bytes)")
-        print("MemoryMappedFifoSegmentDepth: " + str(self.MemoryMappedFifoSegmentDepth) + ", memory mapped FIFO segment depth (bytes)")
-        print("SeedLfsrWidth: " + str(self.SeedLfsrWidth) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
-
     def SetManualTrigger(self):
         """
         Trigger the generator manually
@@ -129,8 +149,8 @@ class Generator_driver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        register = self.mmio.read(self.ctrl*4)
-        self.mmio.write(self.ctrl*4, _SetBit(register, self.ManTrigPos, 1))
+        register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, _SetBit(register, self.ManTrigPos, 1))
         return 0
 
     def SetTriggerChannel(self, channel, ttype):
@@ -154,8 +174,8 @@ class Generator_driver(_FIREQDriver):
 
         # write to the control register
         trigger_mask = (1 << channel) >> 1
-        control = _SetBits(self.mmio.read(self.ctrl*4), ttype*self.TriggerChannels, self.TriggerChannels, trigger_mask)
-        self.mmio.write(self.ctrl*4, control)
+        control = _SetBits(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), ttype*self.TriggerChannels, self.TriggerChannels, trigger_mask)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
 
         return 0
 
@@ -172,7 +192,7 @@ class Generator_driver(_FIREQDriver):
             print("type choice is out of range")
             return -3
 
-        cntr = self.mmio.read(self.ctrl)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
 
         channel = _GetBits(cntr, ttype*self.TriggerChannels, self.TriggerChannels)
         if ttype == 0:
@@ -195,8 +215,8 @@ class Generator_driver(_FIREQDriver):
             print("source choice is out of range")
             return -3
 
-        register = _SetBit(value= self.mmio.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
-        self.mmio.write(self.ctrl*4, register)
+        register = _SetBit(value= self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
         return 0
 
     def GetSource(self):
@@ -206,7 +226,7 @@ class Generator_driver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        cntr = self.mmio.read(self.ctrl*4)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         if _GetBit(cntr, self.SourcePos) == 0:
             print("Source: FIFO")
         else:
@@ -226,9 +246,9 @@ class Generator_driver(_FIREQDriver):
         if seed < 0 or seed > (2**self.SeedLfsrWidth - 1):
             print("source choice is out of range")
             return -3
-        cntr = self.mmio.read(self.ctrl*4)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _SetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth, seed)
-        self.mmio.write(self.ctrl*4, cntr)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
         return 0
 
     def GetLFSRSeed(self):
@@ -238,7 +258,7 @@ class Generator_driver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        cntr = self.mmio.read(self.ctrl)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
         cntr = _GetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth)
         print(f"LFSR seed: {cntr}")
 
@@ -257,14 +277,14 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         # write inc LOW
-        self.mmio.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write(self.readout_inc_h*4, inc >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.mmio.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.mmio.write(self.readout_off_h*4, off >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.readout_off_h*4, off >> 32)
 
         return 0
 
@@ -276,14 +296,14 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         # read inc LOW
-        inc = self.mmio.read(self.readout_inc_l*4)
+        inc = self.AxiLiteInterfaceMMIO.read(self.readout_inc_l*4)
         # read inc HIGH
-        inc += self.mmio.read(self.readout_inc_h*4) << 32
+        inc += self.AxiLiteInterfaceMMIO.read(self.readout_inc_h*4) << 32
 
         # read off LOW
-        off = self.mmio.read(self.readout_off_l*4)
+        off = self.AxiLiteInterfaceMMIO.read(self.readout_off_l*4)
         # read off HIGH
-        off += self.mmio.read(self.readout_off_h*4) << 32
+        off += self.AxiLiteInterfaceMMIO.read(self.readout_off_h*4) << 32
 
         print(f"readout phase increment: {inc}, phase offset: {off}")
 
@@ -300,9 +320,9 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         # write inc LOW
-        self.mmio.write(self.drive_inc_l*4, inc & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.drive_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write(self.drive_inc_h*4, inc >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.drive_inc_h*4, inc >> 32)
 
         return 0
 
@@ -314,9 +334,9 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         # read inc LOW
-        inc = self.mmio.read(self.drive_inc_l*4)
+        inc = self.AxiLiteInterfaceMMIO.read(self.drive_inc_l*4)
         # read inc HIGH
-        inc += self.mmio.read(self.drive_inc_h*4) << 32
+        inc += self.AxiLiteInterfaceMMIO.read(self.drive_inc_h*4) << 32
 
         print(f"drive phase increment: {inc}")
 
@@ -337,8 +357,8 @@ class Generator_driver(_FIREQDriver):
             print("source choice is out of range")
             return -3
 
-        register = _SetBit(self.mmio.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= destination)
-        self.mmio.write(self.ctrl*4, register)
+        register = _SetBit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= destination)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
         return 0
     
     def GetManualTriggerDestination(self):
@@ -346,7 +366,7 @@ class Generator_driver(_FIREQDriver):
         Get the destination output line for the generator when triggered from the manual trigger
         
         """
-        dest = _GetBit(self.mmio.read(self.ctrl*4), self.ManTrigSel)
+        dest = _GetBit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), self.ManTrigSel)
         if dest:
             print("Manual trigger destination is readout line")
         else: 
@@ -658,11 +678,22 @@ class Generator_driver(_FIREQDriver):
         self.AxiFullInterfaceMMIO.write(actual_address, wave_addr)
 
     def WriteReadoutWave(self, wave_definition : int):
+        """
+        Write the readout wave definition to the IP.\n
+        This is the wave definition that will be used for manual and readout waves.\n
+        HINT: for manual waves, you can set the output DAC (readout or drive channel) 
+        with the "SetManualTriggerDestination" function.
+         
+        :param wave_definition: 128-bit wave defintion
+        :type wave_definition: int
+        :return: Error code
+        :rtype: Literal[-3] | None
+        """
         if wave_definition < 0:
             print("error, wave def is negative")
             return -3
         for i in range(4):
-            self.mmio.write((self.readout_wave_l+i)*4, (wave_definition >> i*32) & 0xFFFFFFFF)
+            self.AxiLiteInterfaceMMIO.write((self.readout_wave_l+i)*4, (wave_definition >> i*32) & 0xFFFFFFFF)
 
     def ReplaceWaveInWaveMemory(self, wave_definition : int, wave_name : str):
         """

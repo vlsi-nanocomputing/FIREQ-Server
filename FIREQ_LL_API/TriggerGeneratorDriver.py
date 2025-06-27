@@ -44,16 +44,36 @@ class Trigger_driver(_FIREQDriver):
         print("fifo channel depth: " + str(self.ChannelFifoDepth))
         print("maximum number of hardware repetitions: " + str(self.MaxHWRepetitions))
     
-    def InitAxiFullInterface(self, base_address : int):
-        """
-        Initialize the axi full interface for this IP
-        
-        :param base_address: Base address of the axi full interface
-        :type base_address: int
-        """
-        if self.FifoInterfaceMMIO is None:
-            self.FifoInterfaceMMIO = MMIO(base_address, self.FifoInterfaceMemoryDepth)
+    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
+        super().InitAxiFullInterface(base_address, axi_depth)
 
+    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
+        super().InitAxiLiteInterface(base_address, axi_depth)
+        # delete the mmio object created by PYNQ
+        del self.mmio
+    
+    def SetDebugLevel(self, level : int, file_handler):
+        
+        if level == self.DebugLevel:
+            return 0
+        
+        if level == 0:
+            # no debug
+            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
+            full_mmio = self.AxiFullInterfaceMMIO.replaces
+            del self.AxiLiteInterfaceMMIO
+            self.AxiLiteInterfaceMMIO = lite_mmio
+            del self.AxiFullInterfaceMMIO
+            self.AxiFullInterfaceMMIO = full_mmio
+        elif level == 1:
+            self.AxiFullInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, file_handler)
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, file_handler)
+        else:
+            return 0
+        
+        self.DebugLevel = level
+        return 0
+    
     def SetExperimentDuration(self,duration):
         """
         Set the experiment duration for a single shot

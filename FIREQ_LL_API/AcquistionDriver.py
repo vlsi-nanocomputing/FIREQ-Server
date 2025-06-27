@@ -37,15 +37,35 @@ class Acquisition_driver(_FIREQDriver):
         self.ManTrigPos = 31
 
     def WriteDescription(self):
-        """
-        Print the description of the IP
-        """
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
         print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
         print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the acquistion (samples/clock cycle)")
         print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
         print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
         print("TimeOfFlightWidth: " + str(self.TimeOfFlightWidth) + ", width of the time of flight timer (bits)")
+
+    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
+        super().InitAxiLiteInterface(base_address, axi_depth)
+        # delete the mmio object created by PYNQ
+        del self.AxiLiteInterfaceMMIO
+    
+    def SetDebugLevel(self, level : int, file_handler):
+        
+        if level == self.DebugLevel:
+            return 0
+        
+        if level == 0:
+            # no debug
+            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
+            del self.AxiLiteInterfaceMMIO
+            self.AxiLiteInterfaceMMIO = lite_mmio
+        elif level == 1:
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, file_handler)
+        else:
+            return 0
+        
+        self.DebugLevel = level
+        return 0
 
     def SetAcquistionParameters(self, frequency, phase, duration, adc_samplerate):
         """
@@ -95,14 +115,14 @@ class Acquisition_driver(_FIREQDriver):
         :rtype: int
         """
         # write inc LOW
-        self.mmio.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write(self.readout_inc_h*4, inc >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.mmio.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.mmio.write(self.readout_off_h*4, off >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.readout_off_h*4, off >> 32)
 
         return 0
     
@@ -111,8 +131,8 @@ class Acquisition_driver(_FIREQDriver):
         trigger the acquisition manually
         """
         ormask = 0x80000000
-        cntr = self.mmio.read(0) | ormask
-        self.mmio.write(0,cntr)
+        cntr = self.AxiLiteInterfaceMMIO.read(0) | ormask
+        self.AxiLiteInterfaceMMIO.write(0,cntr)
         return
     
     def SetDuration(self, dur):
@@ -130,9 +150,9 @@ class Acquisition_driver(_FIREQDriver):
             print("acquistion duration is out of range")
             return -3
 
-        cntr = self.mmio.read(self.ctrl*4)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _SetBits(cntr, self.TriggerChannels, self.DurationWidth, dur-1)
-        self.mmio.write(self.ctrl*4,cntr)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4,cntr)
     
     def SetTriggerChannel(self, trigger):
         """
@@ -149,9 +169,9 @@ class Acquisition_driver(_FIREQDriver):
             return -3
 
         mask = (1 << trigger) >> 1
-        cntr = self.mmio.read(self.ctrl*4)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _SetBits(cntr, 0, self.TriggerChannels, mask)
-        self.mmio.write(self.ctrl*4, cntr)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
         return 0
     
     def SetTimeOfFlight(self, time_of_flight):
@@ -168,6 +188,6 @@ class Acquisition_driver(_FIREQDriver):
             print("time of flight is out of range")
             return -3
 
-        cntr = self.mmio.read(self.ctrl*4)
+        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _SetBits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
-        self.mmio.write(self.ctrl*4, cntr)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)

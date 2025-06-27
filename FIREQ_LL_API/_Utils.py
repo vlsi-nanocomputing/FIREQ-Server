@@ -2,7 +2,7 @@ from pynq import DefaultIP
 from pynq import MMIO
 import numpy as np
 
-__all__ = ['_FIREQDriver', '_GetBit', '_GetBits', '_SetBit', '_SetBits', '_ComputePincPoff']
+__all__ = ['_FIREQDriver', '_DebugMMIO', '_GetBit', '_GetBits', '_SetBit', '_SetBits', '_ComputePincPoff']
 
 class _FIREQDriver(DefaultIP):
 
@@ -17,23 +17,76 @@ class _FIREQDriver(DefaultIP):
         """
         pass
 
-    def InitAxiFullInterface(self, base_address : int):
+    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
         """
         Initialize the axi full interface for this IP
         
         :param base_address: Base address of the axi full interface
         :type base_address: int
+        :param axi_depth: Depth of the axi interface, in bytes
+        :type axi_depth: int
         """
-        pass
+        if self.AxiFullInterfaceMMIO is None:
+            self.AxiFullInterfaceMMIO = MMIO(base_address, axi_depth)
 
-    def InitAxiLiteInterface(self, base_address : int):
+    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
         """
-        Initialize the axi full interface for this IP
+        Initialize the axi lite interface for this IP
         
-        :param base_address: Base address of the axi full interface
+        :param base_address: Base address of the axi lite interface
         :type base_address: int
+        :param axi_depth: Depth of the axi interface, in bytes
+        :type axi_depth: int
         """
-        pass
+        if self.AxiLiteInterfaceMMIO is None:
+            self.AxiLiteInterfaceMMIO = MMIO(base_address, axi_depth)
+
+class _DebugMMIO():
+
+    def __init__(self, replaces, debug_level, file):
+        """
+        Init the object
+        
+        :param replaces: mmio object that it replaces
+        :type replaces: MMIO
+        :param file: file handler, to write axi transactions
+        :type file: FILE
+        """
+        self._file_handler = file
+        self.replaces = replaces
+        self.debug_level = debug_level
+        self.memory = []
+        # TODO: check this
+        self.base_addr = self.replaces.start_address
+    
+    def read(self, address):
+
+        if address%4 != 0:
+            print("mmio error, read at address not word aligned")
+            return 0
+        if address not in self.memory.keys():
+            return 0
+        return self.memory[address]
+    
+    def write(self, address, data):
+
+        if address%4 != 0:
+            print("mmio error, read at address not word aligned")
+            return 0
+        with self._file_handler:
+            if type(data) is int:
+                self._file_handler.write("write address " + hex(address) + " write data " + hex(data) + " " + str(data) + "\n")
+            elif type(data) is bytes:
+                length = len(data)
+                num_words = length >> 2
+                if length % 4:
+                    raise MemoryError("Unaligned write: data length must be multiple of 4.")
+                buf = np.frombuffer(data, np.uint32, num_words, 0)
+                for i in range(len(buf)):
+                    self._file_handler.write("write address " + hex(address) + " write data " + hex(buf[i]) + " " + str(buf[i]) + "\n")
+            else:
+                raise ValueError("Data type must be int or bytes.")
+
 
 def _SetBit(value : int, pos : int, setvalue : int):
     """
@@ -143,3 +196,7 @@ def _ComputePincPoff(frequency : int, phase : int, samplerate : int, phase_depth
         poff = (2**phase_depth - 1)*(bounded_phase/(2*np.pi))
     
     return (round(pinc), round(poff))
+
+
+def _DebugAxiInterface(self, address_offset : int, data):
+
