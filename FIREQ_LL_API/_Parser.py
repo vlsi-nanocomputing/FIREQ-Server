@@ -58,7 +58,19 @@ class FIREQ_parser:
         return return_dict
     
     def GetConnectivity(self, master_module : ET.Element, module_list : list):
-        
+        """
+        Get the connectivity path of the master interfaces of master module.\n
+        The return is a dictionary that encodes the connections in a graph like manner,
+        where each node is a module and the connections are defined by the axi bus
+        names.
+         
+        :param master_module: Module to check connectivity from
+        :type master_module: xml.etree.ElementTree.Element
+        :param module_list: list of xml.etree.ElementTree.Element modules
+        :type module_list: list
+        :return: Connectivity graph
+        :rtype: dict[str, Any]
+        """
         # get the name for the master module
         master_module_name = master_module.attrib['INSTANCE']
         # create the return dictionary
@@ -89,14 +101,24 @@ class FIREQ_parser:
         return return_dict
     
     def GetAddressMapping(self):
-
+        """
+        Gets the AXI Memory mapping of the PS/PL master interface
+        
+        :return: Dict describing the mapping for ips
+        :rtype: dict | None
+        """
         retdict = {}
-        for module in self._Modules.iter('MODULE'):
+        # find the zynq
+        for module in self._Root.findall("./MODULES//MEMORYMAP/.."):
             if module.attrib['VLNV'].startswith('xilinx.com:ip:zynq_ultra_ps_e:'):
-                mmap =  module.find('MEMORYMAP')
-                for item in mmap:
-                    retdict[item.attrib['INSTANCE']] = item.attrib.copy()
-                    del retdict[item.attrib['INSTANCE']]['INSTANCE']
+                # get all memrange children
+                for mapping in module.findall("./MEMORYMAP/MEMRANGE"):
+                    # append to return dict the memory mapping
+                    try:
+                        retdict[mapping.attrib['INSTANCE']].append(mapping.attrib.copy())
+                    except:
+                        retdict[mapping.attrib['INSTANCE']] = [mapping.attrib.copy()]
+                    # remove instance name from memory mapping since we are using it for the dict keys
+                    del retdict[mapping.attrib['INSTANCE']][-1]['INSTANCE']
+                # return the dictionary with the memroy mapping 
                 return retdict
-
-
