@@ -7,6 +7,8 @@ __all__ = ['_FIREQDriver', '_DebugMMIO', '_get_bit', '_get_bits', '_set_bit', '_
 class _FIREQDriver(DefaultIP):
 
     bindto = []
+    AxiFullInterfaceMMIO = None
+    AxiLiteInterfaceMMIO = None
 
     def __init__(self, description):
         super().__init__(description=description)

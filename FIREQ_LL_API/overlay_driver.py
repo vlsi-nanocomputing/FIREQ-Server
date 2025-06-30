@@ -52,12 +52,12 @@ class FIREQ_SoC(Overlay):
             # then check the type of the ip driver, call fireq specific functions if it's a fireq ip
             if isinstance(ip_object, _FIREQDriver):
                 for map in mmap[ip]:
-                    axi_base = map['BASEVALUE']
-                    axi_range = map['HIGHVALUE'] - axi_base + 1
-                    if map['SLAVEBUSINTERFACE'] == 's01_axi':
-                        ip_object.InitAxiFullInterface(axi_base, axi_range)
-                    elif map['SLAVEBUSINTERFACE'] == 's00_axi':
-                        ip_object.InitAxiLiteInterface(axi_base, axi_range)
+                    axi_base = int(map['BASEVALUE'], 16)
+                    axi_range = int(map['HIGHVALUE'], 16) - axi_base + 1
+                    if map['SLAVEBUSINTERFACE'] == 's00_axi':
+                        ip_object.init_axi_full_interface(axi_base, axi_range)
+                    elif map['SLAVEBUSINTERFACE'] == 's01_axi':
+                        ip_object.init_axi_lite_interface(axi_base, axi_range)
                 # since we are iterating over the ips, create the list of readout and generation ips
                 if isinstance(ip_object, GeneratorDriver):
                     self._generation_ips.append(ip_object)

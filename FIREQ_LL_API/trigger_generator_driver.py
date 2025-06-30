@@ -83,9 +83,9 @@ class TriggerGeneratorDriver(_FIREQDriver):
         """
 
         # write inc LOW
-        self.mmio.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write(self.experiment_dur_h*4, duration >> 32)
+        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_h*4, duration >> 32)
 
     def set_number_of_shots(self, value):
         """
@@ -98,13 +98,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.MaxHWRepetitions))
             return
 
-        self.mmio.write(self.shots_num_l*4,int(value-1))
+        self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value-1))
 
     def start_experiment(self):
         """
         Start the generation of triggers
         """
-        self.mmio.write(0,1 << self.ManTrigPos)
+        self.AxiLiteInterfaceMMIO.write(0,1 << self.ManTrigPos)
 
     def is_done(self):
         """
@@ -113,7 +113,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :return: 1 if the experiment is finished, 0 if still running
         :rtype: Literal[1, 0]
         """
-        cntr = self.mmio.read(0)
+        cntr = self.AxiLiteInterfaceMMIO.read(0)
         if ((cntr&0x40000000) == 0x40000000):
             return 1
         else:
@@ -161,6 +161,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error, channel selection out of range")
             return -3
         # write inc LOW
-        self.mmio.write((self.readout_delay_l + (channel-1)*2)*4, delay & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write((self.readout_delay_l + (channel-1)*2)*4, delay & 0xFFFFFFFF)
         # write inc HIGH
-        self.mmio.write((self.readout_delay_h + (channel-1)*2)*4, delay >> 32)
+        self.AxiLiteInterfaceMMIO.write((self.readout_delay_h + (channel-1)*2)*4, delay >> 32)

@@ -47,7 +47,7 @@ class AcquistionDriver(_FIREQDriver):
     def init_axi_lite_interface(self, base_address : int, axi_depth : int):
         super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
-        del self.AxiLiteInterfaceMMIO
+        del self.mmio
     
     def set_debug_level(self, level : int, file_handler):
         
@@ -135,40 +135,40 @@ class AcquistionDriver(_FIREQDriver):
         self.AxiLiteInterfaceMMIO.write(0,cntr)
         return
     
-    def set_acquisition_duration(self, dur):
+    def set_acquisition_duration(self, duration):
         """
         Set the acquistion duration
         
-        :param dur: Duration in clock cycles
-        :type dur: uint
+        :param duration: Duration in clock cycles
+        :type duration: uint
         :return: Error Code
         :rtype: int
         """
         
         # TODO: check if this is correct in terms of the actual size of acquistion
-        if (dur < 1 or dur > self.MaximumDuration):
+        if (duration < 1 or duration > self.MaximumDuration):
             print("acquistion duration is out of range")
             return -3
 
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _set_bits(cntr, self.TriggerChannels, self.DurationWidth, dur-1)
+        cntr = _set_bits(cntr, self.TriggerChannels, self.DurationWidth, duration-1)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4,cntr)
     
-    def set_trigger_channel(self, trigger):
+    def set_trigger_channel(self, channel):
         """
         set the readout trigger channel
 
-        :param trigger: trigger selection, set to 0 to deactivate external triggers
-        :type trigger: uint
+        :param channel: channel selection, set to 0 to deactivate external triggers
+        :type channel: uint
         :return: Error code
         :rtype: int
         """
 
-        if trigger < 0 or trigger > self.TriggerChannels:
+        if channel < 0 or channel > self.TriggerChannels:
             print("source choice is out of range")
             return -3
 
-        mask = (1 << trigger) >> 1
+        mask = (1 << channel) >> 1
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _set_bits(cntr, 0, self.TriggerChannels, mask)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
