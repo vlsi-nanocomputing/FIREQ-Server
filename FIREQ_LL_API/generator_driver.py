@@ -6,7 +6,7 @@ __all__ = ['GeneratorDriver']
 
 class GeneratorDriver(_FIREQDriver):
 
-    bindto = ['user.org:user:axisGeneratorIP:1.0']
+    bindto = ['user.org:user:axisGeneratorIP:2.0']
     
     # a dictionary that stores useful data about the envelopes that have been written to 
     # the envelope memory
