@@ -8,8 +8,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
-    FifoInterfaceMMIO = None
-
     def __init__(self, description):
 
         super().__init__(description=description)
@@ -147,7 +145,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         
         real_delay = (delay - 1) | (generate_trigger << 31)
         real_address = (channel-1)*self.ChannelFifoDepth + index - 1
-        self.FifoInterfaceMMIO.write(real_address*4, int(real_delay))
+        self.AxiFullInterfaceMMIO.write(real_address*4, int(real_delay))
         return 0
     
     def set_readout_delay(self,delay : int,channel : int):
