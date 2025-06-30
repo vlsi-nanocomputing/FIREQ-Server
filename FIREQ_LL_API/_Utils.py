@@ -2,7 +2,7 @@ from pynq import DefaultIP
 from pynq import MMIO
 import numpy as np
 
-__all__ = ['_FIREQDriver', '_DebugMMIO', '_GetBit', '_GetBits', '_SetBit', '_SetBits', '_ComputePincPoff']
+__all__ = ['_FIREQDriver', '_DebugMMIO', '_get_bit', '_get_bits', '_set_bit', '_set_bits', '_compute_pinc_poff']
 
 class _FIREQDriver(DefaultIP):
 
@@ -11,13 +11,13 @@ class _FIREQDriver(DefaultIP):
     def __init__(self, description):
         super().__init__(description=description)
 
-    def WriteDescription(self):
+    def write_description(self):
         """
         Print the description of the IP
         """
         pass
 
-    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
+    def init_axi_full_interface(self, base_address : int, axi_depth : int):
         """
         Initialize the axi full interface for this IP
         
@@ -29,7 +29,7 @@ class _FIREQDriver(DefaultIP):
         if self.AxiFullInterfaceMMIO is None:
             self.AxiFullInterfaceMMIO = MMIO(base_address, axi_depth)
 
-    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
+    def init_axi_lite_interface(self, base_address : int, axi_depth : int):
         """
         Initialize the axi lite interface for this IP
         
@@ -88,7 +88,7 @@ class _DebugMMIO():
                 raise ValueError("Data type must be int or bytes.")
 
 
-def _SetBit(value : int, pos : int, setvalue : int):
+def _set_bit(value : int, pos : int, setvalue : int):
     """
     Set the bit at index pos of value to setvalue
     
@@ -104,7 +104,7 @@ def _SetBit(value : int, pos : int, setvalue : int):
         bitvalue = 1
     return (value & ~(bitvalue << pos)) | (bitvalue << pos)
 
-def _GetBit(value : int, pos : int):
+def _get_bit(value : int, pos : int):
     """
     Gets the bit at position pos of argument value
     
@@ -117,7 +117,7 @@ def _GetBit(value : int, pos : int):
     """
     return (value & (1 << pos)) >> pos
 
-def _SetBits(value : int, start : int, length : int, setvalue : int):
+def _set_bits(value : int, start : int, length : int, setvalue : int):
     """
     Set bits from start for a length equal to length to setvalue
     
@@ -136,7 +136,7 @@ def _SetBits(value : int, start : int, length : int, setvalue : int):
     safe_setvalue = (setvalue << start) & mask
     return (value & ~(mask)) | safe_setvalue
 
-def _GetBits(value : int, start : int, length : int):
+def _get_bits(value : int, start : int, length : int):
     """
     Get a number of sequential bits from argument value
     
@@ -152,7 +152,7 @@ def _GetBits(value : int, start : int, length : int):
     mask = ((1 << length) - 1) << start
     return (value & mask) >> start
 
-def _ComputePincPoff(frequency : int, phase : int, samplerate : int, phase_depth : int):
+def _compute_pinc_poff(frequency : int, phase : int, samplerate : int, phase_depth : int):
     """
     Compute the phase increment and phase offset depending on the input frequency and phase
     
@@ -196,7 +196,3 @@ def _ComputePincPoff(frequency : int, phase : int, samplerate : int, phase_depth
         poff = (2**phase_depth - 1)*(bounded_phase/(2*np.pi))
     
     return (round(pinc), round(poff))
-
-
-def _DebugAxiInterface(self, address_offset : int, data):
-

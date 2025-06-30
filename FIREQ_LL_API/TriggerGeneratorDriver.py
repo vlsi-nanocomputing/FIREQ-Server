@@ -2,9 +2,9 @@ from pynq import MMIO
 import numpy as np
 from ._Utils import *
 
-__all__ = ['Trigger_driver']
+__all__ = ['TriggerGeneratorDriver']
 
-class Trigger_driver(_FIREQDriver):
+class TriggerGeneratorDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
@@ -38,21 +38,21 @@ class Trigger_driver(_FIREQDriver):
         # Bit position definition
         self.ManTrigPos = 31
 
-    def WriteDescription(self):
+    def write_description(self):
         print("trigger channels: " + str(self.TriggerChannels))
         print("fifo interface axi depth: " + str(self.FifoInterfaceMemoryDepth))
         print("fifo channel depth: " + str(self.ChannelFifoDepth))
         print("maximum number of hardware repetitions: " + str(self.MaxHWRepetitions))
     
-    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
-        super().InitAxiFullInterface(base_address, axi_depth)
+    def init_axi_full_interface(self, base_address : int, axi_depth : int):
+        super().init_axi_full_interface(base_address, axi_depth)
 
-    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
-        super().InitAxiLiteInterface(base_address, axi_depth)
+    def init_axi_lite_interface(self, base_address : int, axi_depth : int):
+        super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
         del self.mmio
     
-    def SetDebugLevel(self, level : int, file_handler):
+    def set_debug_level(self, level : int, file_handler):
         
         if level == self.DebugLevel:
             return 0
@@ -74,7 +74,7 @@ class Trigger_driver(_FIREQDriver):
         self.DebugLevel = level
         return 0
     
-    def SetExperimentDuration(self,duration):
+    def set_experiment_duration(self,duration):
         """
         Set the experiment duration for a single shot
         
@@ -87,7 +87,7 @@ class Trigger_driver(_FIREQDriver):
         # write inc HIGH
         self.mmio.write(self.experiment_dur_h*4, duration >> 32)
 
-    def SetNumberOfShots(self, value):
+    def set_number_of_shots(self, value):
         """
         Set the number of shots to execute in hardware
         
@@ -100,13 +100,13 @@ class Trigger_driver(_FIREQDriver):
 
         self.mmio.write(self.shots_num_l*4,int(value-1))
 
-    def StartExperiment(self):
+    def start_experiment(self):
         """
         Start the generation of triggers
         """
         self.mmio.write(0,1 << self.ManTrigPos)
 
-    def IsDone(self):
+    def is_done(self):
         """
         Check if the experiment is finished
         
@@ -119,7 +119,7 @@ class Trigger_driver(_FIREQDriver):
         else:
             return 0
 
-    def InsertDelayDriveFifo(self, channel, index, delay, generate_trigger):
+    def insert_drive_delay(self, channel, index, delay, generate_trigger):
         """
         Insert a delay value in the FIFO of a drive channel at index. The generate_trigger input is used to 
         tell the trigger generator if a trigger should be generated at the end of the delay
@@ -150,7 +150,7 @@ class Trigger_driver(_FIREQDriver):
         self.FifoInterfaceMMIO.write(real_address*4, int(real_delay))
         return 0
     
-    def SetReadoutDelay(self,delay : int,channel : int):
+    def set_readout_delay(self,delay : int,channel : int):
         """
         Set the experiment duration for a single shot
         

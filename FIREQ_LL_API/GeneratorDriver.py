@@ -2,9 +2,9 @@ from pynq import MMIO
 import numpy as np
 from ._Utils import *
 
-__all__ = ['Generator_driver']
+__all__ = ['GeneratorDriver']
 
-class Generator_driver(_FIREQDriver):
+class GeneratorDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisGeneratorIP:1.0']
     
@@ -66,17 +66,17 @@ class Generator_driver(_FIREQDriver):
         self.ManTrigSel = 28
         self.ManTrigPos = 31
     
-    def InitAxiFullInterface(self, base_address : int, axi_depth : int):
-        super().InitAxiFullInterface(base_address, axi_depth)
+    def init_axi_full_interface(self, base_address : int, axi_depth : int):
+        super().init_axi_full_interface(base_address, axi_depth)
         # reset envelope dictionary and memory
-        self.ResetEnvelopeDict()
+        self.reset_envelope_dict()
 
-    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
-        super().InitAxiLiteInterface(base_address, axi_depth)
+    def init_axi_lite_interface(self, base_address : int, axi_depth : int):
+        super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
         del self.mmio
     
-    def SetDebugLevel(self, level : int, file_handler):
+    def set_debug_level(self, level : int, file_handler):
         
         if level == self.DebugLevel:
             return 0
@@ -99,7 +99,7 @@ class Generator_driver(_FIREQDriver):
         return 0
             
 
-    def WriteDescription(self):
+    def write_description(self):
         print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
         print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")
@@ -114,7 +114,7 @@ class Generator_driver(_FIREQDriver):
         print("MemoryMappedFifoSegmentDepth: " + str(self.MemoryMappedFifoSegmentDepth) + ", memory mapped FIFO segment depth (bytes)")
         print("SeedLfsrWidth: " + str(self.SeedLfsrWidth) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
 
-    def ResetEnvelopeDict(self):
+    def reset_envelope_dict(self):
         """
         Resets the cached information about the envelope memory. The actual memory is not modified by this function. \n
         Since resetting this memory invalidates the wave definition words, the wave memory cache is also cleared 
@@ -128,9 +128,9 @@ class Generator_driver(_FIREQDriver):
         self.EnvelopeMemoryDict["_RECTANGULAR"] = {"is_interp" : 0, "size" : any, "is_sym" : 0,
                                                    "i_even" : 0, "q_even" : 0, "start" : 0}
         self.EnvelopeMemoryDictReservedNames.append("_RECTANGULAR")
-        self.ResetWaveMemoryDict()
+        self.reset_wave_memory_dict()
 
-    def ResetWaveMemoryDict(self):
+    def reset_wave_memory_dict(self):
         """
         Resets the cached information about the wave memory and also clears the generator wave memory.
 
@@ -142,7 +142,7 @@ class Generator_driver(_FIREQDriver):
         for address in range(self.TotalSampleMemorySegmentDepth,self.TotalSampleMemorySegmentDepth+self.WaveMemorySegmentDepth,4):
             self.AxiFullInterfaceMMIO.write(address, 0)
 
-    def SetManualTrigger(self):
+    def trigger_manually(self):
         """
         Trigger the generator manually
 
@@ -150,17 +150,17 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, _SetBit(register, self.ManTrigPos, 1))
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, _set_bit(register, self.ManTrigPos, 1))
         return 0
 
-    def SetTriggerChannel(self, channel, ttype):
+    def set_trigger_channel(self, channel, ttype):
         """
         Set the channel where the generator is listening for a trigger for the readout and drive trigger types.\n
         Set the channel to 0 if you want to disable external triggers
 
         :param channel: Channel number, 1 to TriggerChannels
         :type channel: int
-        :param ttype: trigger type: 0 for drive, 1 for readout
+        :param ttype: trigger type: 'drive' or 'readout'
         :type ttype: int
         :return: Error code
         :rtype: int
@@ -168,18 +168,22 @@ class Generator_driver(_FIREQDriver):
         if channel < 0 or channel > self.TriggerChannels:
             print("channel choice is out of range")
             return -3
-        if ttype != 0 and ttype != 1:
+            
+        if ttype == 'drive':
+            selector = 0
+        elif ttype == 'readout':
+            selector = 1
+        else:
             print("type choice is out of range")
             return -3
-
         # write to the control register
         trigger_mask = (1 << channel) >> 1
-        control = _SetBits(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), ttype*self.TriggerChannels, self.TriggerChannels, trigger_mask)
+        control = _set_bits(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), selector*self.TriggerChannels, self.TriggerChannels, trigger_mask)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
 
         return 0
 
-    def GetTriggerChannel(self, ttype):
+    def get_trigger_channel(self, ttype):
         """
         get the trigger channel for the generator where triggers are received
 
@@ -187,22 +191,25 @@ class Generator_driver(_FIREQDriver):
         :type ttype: int
         :return: Error code
         :rtype: int
-        """
-        if ttype != 0 and ttype != 1:
+        """ 
+
+        if ttype == 'drive':
+            selector = 0
+        elif ttype == 'readout':
+            selector = 1
+        else:
             print("type choice is out of range")
             return -3
 
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
 
-        channel = _GetBits(cntr, ttype*self.TriggerChannels, self.TriggerChannels)
-        if ttype == 0:
-            print("Trigger Drive mask: " + format(channel, f"0{self.TriggerChannels}b"))
-        else:
-            print("Trigger Readout mask: " + format(channel, f"0{self.TriggerChannels}b"))
+        channel = _get_bits(cntr, selector*self.TriggerChannels, self.TriggerChannels)
+
+        print("Trigger " + ttype + " mask: " + format(channel, f"0{self.TriggerChannels}b"))
 
         return 0
 
-    def SetSource(self, source):
+    def set_drive_order_source(self, source):
         """
         set the source for the generator: lfsr or fifo
 
@@ -215,11 +222,11 @@ class Generator_driver(_FIREQDriver):
             print("source choice is out of range")
             return -3
 
-        register = _SetBit(value= self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
+        register = _set_bit(value= self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
         return 0
 
-    def GetSource(self):
+    def get_drive_order_source(self):
         """
         get the source for the generator: lfsr or fifo
 
@@ -227,14 +234,14 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        if _GetBit(cntr, self.SourcePos) == 0:
+        if _get_bit(cntr, self.SourcePos) == 0:
             print("Source: FIFO")
         else:
             print("Source: LFSR")
 
         return 0
 
-    def SetLFSRSeed(self, seed):
+    def set_lfsr_seed(self, seed):
         """
         set the seed for lfsr
 
@@ -247,11 +254,11 @@ class Generator_driver(_FIREQDriver):
             print("source choice is out of range")
             return -3
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _SetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth, seed)
+        cntr = _set_bits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth, seed)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
         return 0
 
-    def GetLFSRSeed(self):
+    def get_lfsr_seed(self):
         """
         get the seed for lfsr
 
@@ -259,12 +266,12 @@ class Generator_driver(_FIREQDriver):
         :rtype: int
         """
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
-        cntr = _GetBits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth)
+        cntr = _get_bits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth)
         print(f"LFSR seed: {cntr}")
 
         return 0
 
-    def SetReadoutIncOff(self, inc, off):
+    def _set_readout_pinc_poff(self, inc, off):
         """
         Set readout phase increment and phase offset values, used to generate the 
         modulation carrier for waves on the readout output line
@@ -288,7 +295,7 @@ class Generator_driver(_FIREQDriver):
 
         return 0
 
-    def GetReadoutIncOff(self):
+    def _get_readout_pinc_poff(self):
         """
         Get readout phase increment and phase offset values
 
@@ -309,7 +316,7 @@ class Generator_driver(_FIREQDriver):
 
         return 0
 
-    def SetDriveInc(self, inc):
+    def _set_drive_pinc(self, inc):
         """
         Set drive phase increment value, used to generate the 
         modulation carrier for waves on the drive output line
@@ -326,7 +333,7 @@ class Generator_driver(_FIREQDriver):
 
         return 0
 
-    def GetDriveInc(self):
+    def _get_drive_pinc(self):
         """
         Get drive phase increment value
 
@@ -342,38 +349,42 @@ class Generator_driver(_FIREQDriver):
 
         return 0
 
-    def SetManualTriggerDestination(self, destination):
+    def set_manual_wave_destination_output_channel(self, destination):
         """
         Set the destination of a manually generated wave.
         The wave to be generated is the one set for readout but you can select 
         if the manually generated wave should output on the readout or drive line.
 
-        :param destination: 1 for readout output line, 0 for drive output line
+        :param destination: 'readout' or 'drive'
         :type destination: int
         :return: Error code
         :rtype: int
         """
-        if destination < 0 or destination > 1:
-            print("source choice is out of range")
+        if destination == 'drive':
+            selector = 0
+        elif destination == 'readout':
+            selector = 1
+        else:
+            print("type choice is out of range")
             return -3
 
-        register = _SetBit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= destination)
+        register = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= selector)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
         return 0
     
-    def GetManualTriggerDestination(self):
+    def get_manual_wave_destination_output_channel(self):
         """
         Get the destination output line for the generator when triggered from the manual trigger
         
         """
-        dest = _GetBit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), self.ManTrigSel)
+        dest = _get_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), self.ManTrigSel)
         if dest:
             print("Manual trigger destination is readout line")
         else: 
             print("Manual trigger destination is drive line")
         return 0
     
-    def SetReadoutDDSParameters(self, frequency : float, phase : float, dac_samplerate : int):
+    def set_readout_dds_parameters(self, frequency : float, phase : float, dac_samplerate : int):
         """
         Set frequency and phase for the readout carrier signal
         
@@ -392,13 +403,13 @@ class Generator_driver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _ComputePincPoff(frequency*1000000, phase, dac_samplerate, self.PhaseDepth)
+        value_tuple = _compute_pinc_poff(frequency*1000000, phase, dac_samplerate, self.PhaseDepth)
 
         # write registers
-        self.SetReadoutIncOff(value_tuple[0],value_tuple[1])
+        self._set_readout_pinc_poff(value_tuple[0],value_tuple[1])
         return 0
 
-    def SetDriveDDSParameters(self, frequency, dac_samplerate):
+    def set_drive_dds_parameters(self, frequency, dac_samplerate):
         """
         Set modulation frequency for the drive output channel
         
@@ -415,13 +426,13 @@ class Generator_driver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _ComputePincPoff(frequency*1000000, 0, dac_samplerate, self.PhaseDepth)
+        value_tuple = _compute_pinc_poff(frequency*1000000, 0, dac_samplerate, self.PhaseDepth)
 
         # write registers
-        self.SetDriveInc(value_tuple[0])
+        self._set_drive_pinc(value_tuple[0])
         return 0
     
-    def WriteEnvelopeMemory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
+    def add_envelope_to_envelope_memory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
         """
         Write to the envelope memory (sample memory) a series of samples to be used to generate a wave. \n
         An envelope description is cached and a name is associated to it. \n
@@ -509,7 +520,7 @@ class Generator_driver(_FIREQDriver):
                 self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_to_channel.tobytes())
         return 0
     
-    def CreateWaveDefinitionWord(self, envelope_name : str, duration: int, gain: float, switch_iq : bool):
+    def create_wave_definition_word(self, envelope_name : str, duration: int, gain: float, switch_iq : bool):
         """
         Function to generate a wave definition word, uses cached envelopes stored in envelope memory to
         correctly generate a wave.\n For envelopes not marked for interpolation, it is advised
@@ -530,7 +541,7 @@ class Generator_driver(_FIREQDriver):
         # check input parameters
         if (envelope_name not in self.EnvelopeMemoryDict.keys()):
             print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
-            print("HINT: use the 'WriteEnvelopeMemory' function to add the envelope to memory")
+            print("HINT: use the 'add_envelope_to_envelope_memory' function to add the envelope to memory")
             return -3
         
         
@@ -613,7 +624,7 @@ class Generator_driver(_FIREQDriver):
         # return wave definition
         return wavedef
     
-    def AddWaveInWaveMemory(self, wave_definition : int, wave_name : str):
+    def add_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
         """
         Add a wave definition word in the wave memory, there are no checks on the 
         word so the it should only be generated with provided functions
@@ -646,7 +657,7 @@ class Generator_driver(_FIREQDriver):
         
         return 0
     
-    def WriteWaveToDriveSequence(self, index : int, wave_name : str):
+    def add_wave_to_drive_wave_sequence(self, index : int, wave_name : str):
         """
         Write to memory mapped fifo the address of the wave memory containing the wave definiton defined by 
         wave_name
@@ -677,12 +688,12 @@ class Generator_driver(_FIREQDriver):
         actual_address = fifo_start_address + (index-1)*4
         self.AxiFullInterfaceMMIO.write(actual_address, wave_addr)
 
-    def WriteReadoutWave(self, wave_definition : int):
+    def write_readout_wave(self, wave_definition : int):
         """
         Write the readout wave definition to the IP.\n
         This is the wave definition that will be used for manual and readout waves.\n
         HINT: for manual waves, you can set the output DAC (readout or drive channel) 
-        with the "SetManualTriggerDestination" function.
+        with the "trigger_manuallyDestination" function.
          
         :param wave_definition: 128-bit wave defintion
         :type wave_definition: int
@@ -695,9 +706,9 @@ class Generator_driver(_FIREQDriver):
         for i in range(4):
             self.AxiLiteInterfaceMMIO.write((self.readout_wave_l+i)*4, (wave_definition >> i*32) & 0xFFFFFFFF)
 
-    def ReplaceWaveInWaveMemory(self, wave_definition : int, wave_name : str):
+    def replace_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
         """
-        Replace a certain word definition with another one
+        Replace a certain wave definition word with another one
         
         :param wave_definition: Wave definition word for the new wave
         :type wave_definition: uint128

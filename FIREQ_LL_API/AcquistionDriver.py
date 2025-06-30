@@ -2,9 +2,9 @@ from pynq import MMIO
 import numpy as np
 from ._Utils import *
 
-__all__ = ['Acquisition_driver']
+__all__ = ['AcquistionDriver']
 
-class Acquisition_driver(_FIREQDriver):
+class AcquistionDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisAcquistionIP:1.0']
 
@@ -36,7 +36,7 @@ class Acquisition_driver(_FIREQDriver):
         # Bit position definition
         self.ManTrigPos = 31
 
-    def WriteDescription(self):
+    def write_description(self):
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
         print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
         print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the acquistion (samples/clock cycle)")
@@ -44,12 +44,12 @@ class Acquisition_driver(_FIREQDriver):
         print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
         print("TimeOfFlightWidth: " + str(self.TimeOfFlightWidth) + ", width of the time of flight timer (bits)")
 
-    def InitAxiLiteInterface(self, base_address : int, axi_depth : int):
-        super().InitAxiLiteInterface(base_address, axi_depth)
+    def init_axi_lite_interface(self, base_address : int, axi_depth : int):
+        super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
         del self.AxiLiteInterfaceMMIO
     
-    def SetDebugLevel(self, level : int, file_handler):
+    def set_debug_level(self, level : int, file_handler):
         
         if level == self.DebugLevel:
             return 0
@@ -67,7 +67,7 @@ class Acquisition_driver(_FIREQDriver):
         self.DebugLevel = level
         return 0
 
-    def SetAcquistionParameters(self, frequency, phase, duration, adc_samplerate):
+    def set_acquistion_parameters(self, frequency, phase, duration, adc_samplerate):
         """
         Set parameters for acquistion such as demodulation frequency, the phase offset of the demodulation
         and the duration of the acquistion
@@ -89,7 +89,7 @@ class Acquisition_driver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _ComputePincPoff(frequency*1000000, phase, adc_samplerate, self.PhaseDepth)
+        value_tuple = _compute_pinc_poff(frequency*1000000, phase, adc_samplerate, self.PhaseDepth)
 
         # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
         # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
@@ -97,13 +97,13 @@ class Acquisition_driver(_FIREQDriver):
         poff = value_tuple[1]&(2**self.PhaseDepth - 2)
 
         # write registers
-        self.SetReadoutIncOff(pinc,poff)
+        self._set_readout_pinc_poff(pinc,poff)
 
         # write the duration, note that this function removes one from duration before writing 
-        self.SetDuration(duration)
+        self.set_acquisition_duration(duration)
         return 0
     
-    def SetReadoutIncOff(self, inc, off):
+    def _set_readout_pinc_poff(self, inc, off):
         """
         Set readout increment and offset values
 
@@ -126,7 +126,7 @@ class Acquisition_driver(_FIREQDriver):
 
         return 0
     
-    def ManualTrigger(self):
+    def trigger_manually(self):
         """
         trigger the acquisition manually
         """
@@ -135,7 +135,7 @@ class Acquisition_driver(_FIREQDriver):
         self.AxiLiteInterfaceMMIO.write(0,cntr)
         return
     
-    def SetDuration(self, dur):
+    def set_acquisition_duration(self, dur):
         """
         Set the acquistion duration
         
@@ -151,10 +151,10 @@ class Acquisition_driver(_FIREQDriver):
             return -3
 
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _SetBits(cntr, self.TriggerChannels, self.DurationWidth, dur-1)
+        cntr = _set_bits(cntr, self.TriggerChannels, self.DurationWidth, dur-1)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4,cntr)
     
-    def SetTriggerChannel(self, trigger):
+    def set_trigger_channel(self, trigger):
         """
         set the readout trigger channel
 
@@ -170,11 +170,11 @@ class Acquisition_driver(_FIREQDriver):
 
         mask = (1 << trigger) >> 1
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _SetBits(cntr, 0, self.TriggerChannels, mask)
+        cntr = _set_bits(cntr, 0, self.TriggerChannels, mask)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
         return 0
     
-    def SetTimeOfFlight(self, time_of_flight):
+    def set_time_of_flight(self, time_of_flight):
         """
         Set time of flight
         
@@ -189,5 +189,5 @@ class Acquisition_driver(_FIREQDriver):
             return -3
 
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _SetBits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
+        cntr = _set_bits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
