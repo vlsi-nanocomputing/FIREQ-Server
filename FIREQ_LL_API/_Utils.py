@@ -58,8 +58,7 @@ class _DebugMMIO():
         self.replaces = replaces
         self.debug_level = debug_level
         self.memory = []
-        # TODO: check this
-        self.base_addr = self.replaces.start_address
+        self.base_addr = self.replaces.base_addr
     
     def read(self, address):
 
