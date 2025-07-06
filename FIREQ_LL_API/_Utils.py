@@ -103,7 +103,7 @@ def _set_bit(value : int, pos : int, setvalue : int):
     bitvalue = 0
     if setvalue:
         bitvalue = 1
-    return (value & ~(bitvalue << pos)) | (bitvalue << pos)
+    return (value & ~(1 << pos)) | (bitvalue << pos)
 
 def _get_bit(value : int, pos : int):
     """
