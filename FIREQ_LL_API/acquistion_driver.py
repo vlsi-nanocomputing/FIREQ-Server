@@ -35,7 +35,7 @@ class AcquistionDriver(_FIREQDriver):
 
         # Bit position definition
         self.ManTrigPos = 31
-        self.AccumulateSelPos = 28
+        self.AccumulateSelPos = 27
 
     def write_description(self):
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
@@ -214,3 +214,4 @@ class AcquistionDriver(_FIREQDriver):
         
         control = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl), self.AccumulateSelPos, bitvalue)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
+        return 0
