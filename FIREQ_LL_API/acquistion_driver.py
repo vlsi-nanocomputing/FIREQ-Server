@@ -35,6 +35,7 @@ class AcquistionDriver(_FIREQDriver):
 
         # Bit position definition
         self.ManTrigPos = 31
+        self.AccumulateSelPos = 28
 
     def write_description(self):
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
@@ -191,3 +192,25 @@ class AcquistionDriver(_FIREQDriver):
         cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
         cntr = _set_bits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
         self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
+
+    def set_decimated_output_type(self, type):
+        """
+        Sets the type of output data of the decimated stream.\n
+        Can be set to output the decimated samples or the accumulated values.
+        
+        :param type: Selection, allowed values are 'decimated' and 'accumulated'
+        :type type: 
+        """
+
+        bitvalue = None
+
+        if type == 'decimated':
+            bitvalue = 1
+        elif type == 'accumulated':
+            bitvalue = 0
+        else:
+            print("error, input value for type is not recognized, allowed values are 'decimated' and 'accumulated'")
+            return -3
+        
+        control = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl), self.AccumulateSelPos, bitvalue)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
