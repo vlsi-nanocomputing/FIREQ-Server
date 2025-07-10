@@ -205,9 +205,9 @@ class AcquistionDriver(_FIREQDriver):
         bitvalue = None
 
         if type == 'decimated':
-            bitvalue = 1
-        elif type == 'accumulated':
             bitvalue = 0
+        elif type == 'accumulated':
+            bitvalue = 1
         else:
             print("error, input value for type is not recognized, allowed values are 'decimated' and 'accumulated'")
             return -3
