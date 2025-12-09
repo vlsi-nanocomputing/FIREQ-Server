@@ -151,8 +151,6 @@ class DMATimeoutError(DMAError):
     This is a specific, recoverable case of DMA failure where the transfer
     simply took too long.
     
-    Recovery strategy: Usually FATAL - increase timeout or reduce data size.
-    
     Attributes:
         timeout_seconds: The timeout that was exceeded
         recovery_strategy: 'fatal' or 'recoverable'

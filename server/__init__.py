@@ -29,11 +29,8 @@ Exception Handling:
     ...     print(f"Invalid timing: {e}")
 """
 
-# Main facade (primary export)
-from .backend import FireqHardwareBackend
 
 # Exceptions (for error handling)
-from .utils import DMATimeoutError
 from .exceptions import (
     FireqHardwareError,
     DriverError,
@@ -46,11 +43,9 @@ from .exceptions import (
 from .inventory import HardwareInventory
 from .dma_engine import AcquisitionEngine
 from .timing import TimingValidator
-from .driver_wrappers import GeneratorAdapter, AcquisitionAdapter, TriggerAdapter
+from .driver_wrappers import GeneratorAdapter
 
 __all__ = [
-    # Main facade
-    'FireqHardwareBackend',
     
     # Exceptions
     'DMATimeoutError',
@@ -65,6 +60,5 @@ __all__ = [
     'AcquisitionEngine',
     'TimingValidator',
     'GeneratorAdapter',
-    'AcquisitionAdapter',
-    'TriggerAdapter',
+
 ]

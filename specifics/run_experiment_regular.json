@@ -1,0 +1,140 @@
+CLIENT
+
+{
+  "version": "1.0",
+  "cmd": "run_experiment",
+  "session_id": "abc123",
+
+  "experiment_id": "3pulses",
+  "shots": 1024,
+  "duration_cycles": null,
+
+  "sequence": [
+    {
+      "IP": "GENERATION_IP",
+      "t0_cycles": 10,
+      "generator": 0,
+      "channel": 0,
+      "wave_id": "WDW_DRIVE_1", //wave definition word già compilata
+      "ttype": "drive",
+      "role": "drive_pulse_1"
+    },
+    {
+      "IP": "GENERATION_IP",
+      "t0_cycles": 60,
+      "generator": 0,
+      "channel": 0,
+      "wave_id": "WDW_DRIVE_2", //wave definition word già compilata
+      "ttype": "drive",
+      "role": "drive_pulse_2"
+    },
+    {
+      "IP": "GENERATION_IP",
+      "t0_cycles": 120,
+      "generator": 0,
+      "channel": 0,
+      "wave_id": "WDW_DRIVE_3", //wave definition word già compilata
+      "ttype": "drive",
+      "role": "drive_pulse_3"
+    },
+    {
+      "IP": "GENERATION_IP",
+      "t0_cycles": 400,
+      "generator": 0,
+      "channel": 0,
+      "wave_id": "WDW_READOUT",
+      "ttype": "readout",
+      "role": "readout_pulse"
+    },
+    {
+      "IP": "ACQUISITION_IP",
+      "acq_duration_cycles": 320,
+      "tof_cycles": 10,
+      "adc_index": 0,
+      "num_samples": 2048,
+      "mode": "decimated",
+      "freq_mhz": 100.0,
+      "trigger_channel": 1
+    }
+  ],
+
+  "timeout": 5.0 // opzionale per controllare il DMA timeout (default 2 secondi)
+}
+
+
+SERVER RESPONSE:
+
+{
+  "ok": true,
+  "cmd": "run_experiment",
+  "session_id": "abc123",
+  "experiment_id": "exp_001",
+
+  "error_log": null, // forward degli error log defiiti in driver adapters
+  "result": {
+    "mode": "decimated", 
+    "adc_index": 0,
+    "data_format": "complex64", // dipende dal mode di acquisizione
+    "num_samples": 1000, // nel caso accumulato si può comunque mettere la dimensione della finestra di accumulazione
+    "shots": 1024,
+    "data": {
+      "I": [
+        [0.01, 0.02, 0.03, 0.00], // shot 1
+        [0.00, -0.01, 0.01, 0.02], // shot 2
+        [0.00, -0.01, 0.02, 0.01]  // shot 3
+          ...
+      ],
+      "Q": [
+        [0.00, -0.01, -0.02, 0.01], // shot 1
+        [0.01, 0.00, -0.01, 0.00], // shot 2
+        [0.02, 0.01, 0.00, -0.01]  // shot 3
+          ...
+      ]
+    },
+    "timing": {
+      "duration_cycles_requested": null,
+      "duration_cycles_effective": 10000 // debug della modalità "null" per calcolo automatico esperimento
+    },
+    "hardware_config": {
+      "generators": [
+        {
+          "index": 0,
+          "samplerate_ghz": 4.0,
+          "nyquist_zone": 2
+        }
+      ],
+      "acquisitions": [
+        {
+          "adc_index": 0,
+          "mode": "decimated",
+          "freq_mhz": 100.0
+        }
+      ]
+    }
+  }
+}
+
+
+ESEMPIO DI ERRORE:
+
+{
+  "ok": false,
+  "cmd": "run_experiment",
+  "session_id": "abc123",
+  "experiment_id": "exp_001",
+  "error_log": [
+    {
+      "level": "ERROR",
+      "source": "AcquisitionAdapter",
+      "code": "DMATimeout",
+      "message": "DMA timeout while waiting for decimated data on ADC0",
+      "details": {
+        "timeout_s": 5.0,
+        "mode": "decimated",
+        "adc_index": 0
+      }
+    }
+  ],
+  "result": null
+}
+

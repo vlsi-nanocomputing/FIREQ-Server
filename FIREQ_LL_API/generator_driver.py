@@ -520,7 +520,7 @@ class GeneratorDriver(_FIREQDriver):
                 self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_to_channel.tobytes())
         return 0
     
-    def create_wave_definition_word(self, envelope_name : str, duration: int, gain: float, switch_iq : bool):
+    def create_wave_definition_word(self, envelope_name : str, duration: int, gain: float, switch_iq : bool, keep_last: bool = False):
         """
         Function to generate a wave definition word, uses cached envelopes stored in envelope memory to
         correctly generate a wave.\n For envelopes not marked for interpolation, it is advised
@@ -534,6 +534,8 @@ class GeneratorDriver(_FIREQDriver):
         :type gain: float
         :param switch_iq: Switch the envelope I and Q values, useful for Y-Gates
         :type switch_iq: bool
+        :param keep_last: If True, holds the last value of the envelope indefinitely (CW Mode)
+        :type keep_last: bool
         :return: Error code
         :rtype: Literal[-3] | int
         """
@@ -584,6 +586,10 @@ class GeneratorDriver(_FIREQDriver):
                 natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
                 real_duration = natural_envelope_duration
 
+        # set the keep_last bit (Bit 122)
+        if keep_last:
+            wavedef = wavedef | (1 << 122)
+
         # set the symmetric bit
         if (envelope_def["is_sym"]):
             wavedef = wavedef | (1 << 127)
@@ -624,6 +630,42 @@ class GeneratorDriver(_FIREQDriver):
         # return wave definition
         return wavedef
     
+    def set_constant_waveform(self, gain: float, output_channel: str = 'drive'):
+        #TODO: remove
+        """
+        Configures the generator to output a Continuous Wave (CW) tone by using the KEEP_LAST feature.
+        To turn the tone OFF, call this function with gain=0.
+        
+        Note: You must set the frequency separately using set_drive_dds_parameters 
+        or set_readout_dds_parameters.
+        
+        :param gain: Amplitude [-1.0, 1.0]. Set to 0 to stop the tone.
+        :param output_channel: 'drive' or 'readout'
+        :return: Error code
+        """
+        # 1. Create a "Frozen" Wave Definition
+        # We use _RECTANGULAR + KEEP_LAST=True
+        # Duration is small (16 samples) because it freezes immediately.
+        # If gain is 0, this holds 0V indefinitely (turning off the tone).
+        wdw = self.create_wave_definition_word(
+            envelope_name="_RECTANGULAR", 
+            duration=16, 
+            gain=gain, 
+            switch_iq=False, 
+            keep_last=True 
+        )
+        
+        # 2. Configure Manual Trigger Routing
+        if self.set_manual_wave_destination_output_channel(output_channel) < 0:
+            return -3
+        
+        # 3. Upload the Wave to the Readout Wave Register (used for Manual Triggers)
+        self.write_readout_wave(wdw)
+        
+        # 4. Fire!
+        # The manual trigger starts the pulse. Because keep_last=True, it holds the value forever.
+        return self.trigger_manually()
+
     def add_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
         """
         Add a wave definition word in the wave memory, there are no checks on the 

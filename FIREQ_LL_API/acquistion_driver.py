@@ -25,6 +25,11 @@ class AcquistionDriver(_FIREQDriver):
         # maximum time of flight delay
         self.TimeOfFlightWidth = int(description["parameters"]["TimeOfFlightCounterWidth"])
         self.TimeOfFlightMax = pow(2,self.TimeOfFlightWidth)
+        # not decimated output width
+        self.NDCMT_OutputWidth = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
+        # decimated output width
+        self.DCMT_OutputWidth = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
+
 
         # Reg definition
         self.ctrl = 0

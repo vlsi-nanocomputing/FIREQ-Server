@@ -1,0 +1,142 @@
+
+
+REQUEST :
+{
+  "version": "1.0",
+  "cmd": "run_sweep",
+  "session_id": "abc123",
+  "sweep_id": "gain_freq_2d",
+  "base_experiment": {
+    "shots": 512,
+    "duration_cycles": null,
+    "sequence": [
+      {
+        "IP": "GENERATION_IP",
+        "t0_cycles": 10,
+        "generator": 0,
+        "channel": 0,
+        "ttype": "drive",
+        "role": "drive_pulse",
+        "wave_template": {
+          "envelope": "GAUSS_X",
+          "duration_samples": 256,
+          "gain": 0.40,
+          "switch_iq": false,
+          "keep_last": false
+        }
+      },
+      {
+        "IP": "GENERATION_IP",
+        "t0_cycles": 400,
+        "generator": 0,
+        "channel": 0,
+        "ttype": "readout",
+        "role": "readout_pulse",
+        "wave_template": {
+          "envelope": "_RECTANGULAR",
+          "duration_samples": 1024,
+          "gain": 0.80,
+          "switch_iq": false,
+          "keep_last": false
+        }
+      },
+      {
+        "IP": "ACQUISITION_IP",
+        "acq_duration_cycles": 320,
+        "tof_cycles": 10,
+        "adc_index": 0,
+        "num_samples": 1000,
+        "mode": "decimated",
+        "freq_mhz": 100.0,
+        "trigger_channel": 1
+      }
+    ]
+  },
+  "sweep": {
+    "mode": "cartesian", // cartesian is M x N grid whole , "zipped" is a  1D trajctory with M + N points
+      {
+        "ip": "GENERATION_IP",
+        "role": "drive_pulse",
+        "param": "gain",
+        "type": "range",
+        "start": 0.10,
+        "stop": 0.40,
+        "num_points": 4,
+        "scale": "linear"
+      },
+      {
+        "ip": "ACQUISITION_IP",
+        "role": "readout_window",
+        "param": "freq_mhz",
+        "type": "range",
+        "start": 99.0,
+        "stop": 101.0,
+        "num_points": 3,
+        "scale": "linear"
+      }
+    ],
+    "block_config": {
+      "max_points_per_block": 200,
+      "max_waves_per_block": 200
+    }
+  },
+  "timeout": 120.0
+}
+
+
+RESPONSE : 
+{
+  "ok": true,
+  "cmd": "run_sweep",
+  "session_id": "abc123",
+  "sweep_id": "gain_freq_2d",
+  "error_log": null,
+  "result": {
+    "mode": "decimated",
+    "adc_index": 0,
+    "data_format": "complex64",
+    "num_samples": 1000,
+    "shots": 512,
+    "num_points": 9,
+    "sweep_mode": "cartesian",
+    "axes": [
+      {
+        "ip": "GENERATION_IP",
+        "role": "drive_pulse",
+        "param": "gain",
+        "values": [0.10, 0.20, 0.30, 0.40]
+      },
+      {
+        "ip": "ACQUISITION_IP",
+        "role": "readout_window",
+        "param": "freq_mhz",
+        "values": [99.0, 100.0, 101.0]
+      }
+    ],
+    "data": {
+      "I": [
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...]
+      ],
+      "Q": [
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...],
+        [[...], [...], ...]
+      ]
+    }
+  }
+}
+
