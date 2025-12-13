@@ -1,4 +1,5 @@
-from pynq import Overlay
+from pynq import Overlay, PL
+import xrfdc
 import xrfclk
 import os
 
@@ -47,7 +48,7 @@ class FIREQ_SoC(Overlay):
         except Exception as e:
             # better to raise an exception: server aware of the problem
             raise RuntimeError(f"FIREQ: error during overlay creation: {e}") from e
-
+        
         # 2) HWH + parser
         self._FIREQ_hwh_file = os.path.splitext(self.bitfile_name)[0] + ".hwh"
         self._FIREQ_parser = FIREQ_parser(self._FIREQ_hwh_file)
@@ -61,7 +62,11 @@ class FIREQ_SoC(Overlay):
         self._readout_ips = []     # type: list[AcquistionDriver]
         self._trigger_ips = []     # type: list[TriggerGeneratorDriver]
 
-        # 5) FIREQ Custom IPs discovery
+        # 5) Low-level discovery (bind AXI + classify IPs)
+        self._rf = getattr(self, "usp_rf_data_converter_0", None)
+        self._axis_switch = getattr(self, "axis_switch_0", None)
+        self._dma = getattr(self, "axi_dma_0", None)
+        
         self._discover_fireq_ips()
 
         # Basic resource sanity check
@@ -70,38 +75,24 @@ class FIREQ_SoC(Overlay):
         if not self._readout_ips:
             raise RuntimeError("FIREQ_SoC: no Acquisition IPs found in overlay.")
         if not self._trigger_ips:
-            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")
+            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")      
 
-        # 6) Infra IPs discovery (RF-DC, AXIS switch, DMA)
-        self._rf = getattr(self, "usp_rf_data_converter_0", None)
-        self._axis_switch = getattr(self, "axis_switch_0", None)
-        self._dma = getattr(self, "axi_dma_0", None)
-
-        # 7) Build hardware specs for high-level user (
+        # 6) Hardware specs (clock validation, sample rates, etc.)
         self.hw_specs = self._build_hw_specs()
-        # 8) Health flag
+        # 7) Health flag
         self._healthy = True  # if _build_hw_specs did not raise exceptions
+        # 8) recomended PL reset
+        PL.reset()
+        
 
     # ------------------------------------------------------------------
     # Discovery helpers
     # ------------------------------------------------------------------
     def _discover_fireq_ips(self) -> None:
         """
-        Discovers, initializes, and categorizes FIREQ custom IP drivers based on the hardware handoff.
-
-        This method iterates through the address map provided by the parser. For each identified
-        FIREQ IP present in the overlay, it performs the following operations:
-
-        1.  **Interface Binding:** Configures the AXI backend by injecting the
-            base address and range derived from the HWH file.
-        2.  **Classification:** Sorts the driver instance into the appropriate internal registry
-            (Generators, Acquisitions, or Triggers) based on its class type.
-
-        This step is essential to transform the raw PYNQ IP objects into functional
-        FIREQ drivers capable of communication.
-
-        :return: None
-        :rtype: None
+        Use FIREQ_parser.GetAddressMapping() to:
+        - Bind AXI interfaces on FIREQ IPs.
+        - Populate IP lists: _generation_ips, _readout_ips, _trigger_ips.
         """
         mmap = self._FIREQ_parser.GetAddressMapping()
 
@@ -135,26 +126,22 @@ class FIREQ_SoC(Overlay):
 
     def _build_hw_specs(self) -> dict:
         """
-        Constructs and validates the comprehensive hardware specification dictionary for high-level users.
+        Build a validated dictionary of hardware specifications: scalability aware.
 
-        This method performs a deep inspection of both the Hard IP (RF-DC) and the Soft IP
-        (FIREQ drivers) to build a unified configuration map. It enforces strict synchronization
-        constraints to ensure signal coherence.
+        Return structure (high level):
 
-        **Validation Logic:**
+            {
+              "rf": { ... },              # DAC/ADC tiles, sample rate, nyquist, ecc.
+              "acquisitions": [ {...} ],  # one per AcquistionDriver
+              "generators":   [ {...} ],  # one per GeneratorDriver
+              "triggers":     [ {...} ],  # one per TriggerGeneratorDriver
+              "summary": { ... }          # convenient global aggregates
+            }
 
-        * **RF-DC Integrity:** Verifies that the RF Data Converter IP is present and accessible.
-        * **Clock Synchronization:** Checks that all enabled DAC and ADC tiles are locked and
-            operating at identical sample rates. A mismatch in sample rates across tiles of the
-            same type is considered a critical hardware configuration error.
-        * **IP Configuration:** Extracts static parameters (resolution, memory depth, parallelism,
-            trigger capabilities for experiment timing) from the instantiated custom drivers.
-
-        :return: A dictionary containing the validated specifications for RF, Acquisitions,
-                 Generators, Triggers, and also a global summary.
-        :rtype: dict
-        :raises RuntimeError: If the RF-DC hierarchy is missing, if PLLs are unlocked, or if
-                              inconsistent sample rates are detected across synchronized tiles.
+        Strong constraint: DAC/ADC clocks (RF-DC tiles) must be synchronous
+        among themselves (multi-tile sync). If not, an exception is raised.
+        For the rest (parallelism, memories, etc.) differences are accepted
+        among the IPs, which are reflected in the acquisitions/generators lists.
         """
         rf = self._rf
         if rf is None:
@@ -163,35 +150,22 @@ class FIREQ_SoC(Overlay):
                 "(usp_rf_data_converter_0 is missing)."
             )
 
-        # ------------------------------------------------------------------
-        # RF-DC: DAC/ADC tiles, sample rate, nyquist, lock status
-        # ------------------------------------------------------------------
-        dac_tiles = getattr(rf, "dac_tiles", [])
-        adc_tiles = getattr(rf, "adc_tiles", [])
-
-        if not dac_tiles:
-            raise RuntimeError("FIREQ_SoC: no DAC tiles found in RF-DC.")
-        if not adc_tiles:
-            raise RuntimeError("FIREQ_SoC: no ADC tiles found in RF-DC.")
-
-        dac_sr = None
-        adc_sr = None
+         # --- DAC Validation ---
+        found_dac_sr = None
         dac_tile_specs = []
-        adc_tile_specs = []
 
-        # --- DAC tiles (constraint: all must have the same sample rate) ---
-        for i, tile in enumerate(dac_tiles):
+        for i, tile in enumerate(rf.dac_tiles):
             try:
                 lock_stat = getattr(tile, "PLLLockStatus", "Unknown")
-                sr_ghz = tile.PLLConfig["SampleRate"]  # typically in GHz
+                sr_ghz = tile.PLLConfig["SampleRate"]  # tipicamente in GHz
                 sr = float(sr_ghz) * 1e9
 
-                if dac_sr is None:
-                    dac_sr = sr
-                elif abs(sr - dac_sr) > 1e3:  # tolerance 1 kHz
+                if found_dac_sr is None:
+                    found_dac_sr = sr
+                elif abs(sr - found_dac_sr) > 1e3:  # tolleranza 1 kHz
                     raise RuntimeError(
                         f"FIREQ_SoC: DAC Clock mismatch! "
-                        f"Tile {i} has {sr} Hz vs {dac_sr} Hz."
+                        f"Tile {i} has {sr} Hz vs {found_dac_sr} Hz."
                     )
 
                 dac_tile_specs.append(
@@ -202,23 +176,31 @@ class FIREQ_SoC(Overlay):
                     }
                 )
             except Exception as e:
-                raise RuntimeError(
-                    f"FIREQ_SoC: error reading DAC tile {i}: {e}"
-                ) from e
+                # se una tile è spenta / non valida, la skippiamo
+                # (comportamento analogo a HardwareInventory)
+                continue
 
-        # --- ADC tiles (same synchronization constraint) ---
-        for i, tile in enumerate(adc_tiles):
+        if found_dac_sr is None:
+            raise RuntimeError("FIREQ_SoC: no active DAC tiles found in the RF-DC.")
+
+        dac_sr = found_dac_sr
+
+        # --- ADC Validation ---
+        found_adc_sr = None
+        adc_tile_specs = []
+
+        for i, tile in enumerate(rf.adc_tiles):
             try:
                 lock_stat = getattr(tile, "PLLLockStatus", "Unknown")
                 sr_ghz = tile.PLLConfig["SampleRate"]
                 sr = float(sr_ghz) * 1e9
 
-                if adc_sr is None:
-                    adc_sr = sr
-                elif abs(sr - adc_sr) > 1e3:
+                if found_adc_sr is None:
+                    found_adc_sr = sr
+                elif abs(sr - found_adc_sr) > 1e3:
                     raise RuntimeError(
                         f"FIREQ_SoC: ADC Clock mismatch! "
-                        f"Tile {i} has {sr} Hz vs {adc_sr} Hz."
+                        f"Tile {i} has {sr} Hz vs {found_adc_sr} Hz."
                     )
 
                 adc_tile_specs.append(
@@ -228,10 +210,13 @@ class FIREQ_SoC(Overlay):
                         "pll_lock": lock_stat,
                     }
                 )
-            except Exception as e:
-                raise RuntimeError(
-                    f"FIREQ_SoC: error reading ADC tile {i}: {e}"
-                ) from e
+            except Exception:
+                continue
+
+        if found_adc_sr is None:
+            raise RuntimeError("FIREQ_SoC: no active ADC tiles found in the RF-DC.")
+
+        adc_sr = found_adc_sr
 
         rf_specs = {
             "dac_sr_hz": dac_sr,
@@ -243,7 +228,7 @@ class FIREQ_SoC(Overlay):
         }
 
         # ------------------------------------------------------------------
-        # AcquisitionDrivers: one entry per each readout IP
+        # AcquistionDrivers: una entry per ciascun IP di readout
         # ------------------------------------------------------------------
         acquisitions_specs = []
         for idx, acq in enumerate(self._readout_ips):
@@ -264,15 +249,13 @@ class FIREQ_SoC(Overlay):
                 "time_of_flight_bits": getattr(acq, "TimeOfFlightWidth", None),
                 "time_of_flight_max": getattr(acq, "TimeOfFlightMax", None),
 
-                # questi due attributi li hai mostrati tu in snippet:
-                # se non ci fossero nella tua versione locale, rimangono None
                 "raw_output_width_bits": getattr(acq, "NDCMT_OutputWidth", None),
                 "dec_output_width_bits": getattr(acq, "DCMT_OutputWidth", None),
             }
             acquisitions_specs.append(acq_specs)
 
         # ------------------------------------------------------------------
-        # GeneratorDrivers: one entry per each generation IP
+        # GeneratorDrivers: una entry per ciascun IP di generazione
         # ------------------------------------------------------------------
         generators_specs = []
         for idx, gen in enumerate(self._generation_ips):
@@ -290,7 +273,6 @@ class FIREQ_SoC(Overlay):
                 "duration_bits": getattr(gen, "DurationWidth", None),
                 "max_duration_cycles": getattr(gen, "MaximumDuration", None),
 
-                # Envelope memory / wave memory
                 "sample_mem_addr_bits": getattr(gen, "SampleMemoryAddressWidth", None),
                 "sample_mem_depth_words_per_channel": getattr(
                     gen, "ChannelSampleMemoryDepth", None
@@ -310,13 +292,12 @@ class FIREQ_SoC(Overlay):
                     gen, "TotalSampleMemorySegmentDepth", None
                 ),
 
-                # Random / LFSR
                 "lfsr_seed_bits": getattr(gen, "SeedLfsrWidth", None),
             }
             generators_specs.append(gen_specs)
 
         # ------------------------------------------------------------------
-        # TriggerGeneratorDrivers: one entry per each trigger IP
+        # TriggerGeneratorDrivers: una entry per ciascun IP di trigger
         # ------------------------------------------------------------------
         triggers_specs = []
         for idx, trig in enumerate(self._trigger_ips):
@@ -338,7 +319,6 @@ class FIREQ_SoC(Overlay):
                     trig, "FifoOutputWidth", None
                 ),
 
-                # limiti temporali/di ripetizione
                 "drive_delay_max": getattr(trig, "DriveDelayMax", None),
                 "experiment_timer_max": getattr(trig, "ExperimentTimerMax", None),
                 "max_hw_repetitions": getattr(trig, "MaxHWRepetitions", None),
@@ -405,6 +385,42 @@ class FIREQ_SoC(Overlay):
 
         return specs
 
+    # ------------------------------------------------------------------
+    # GeneratorIP low-level helpers 
+    # ------------------------------------------------------------------
+
+    _WDW_BYTES = 16  # 128-bit per WDW
+
+    def _get_gen(self, gen_index: int) -> GeneratorDriver:
+        if gen_index < 0 or gen_index >= len(self._generation_ips):
+            raise IndexError(f"gen_index out of range: {gen_index}")
+        return self._generation_ips[gen_index]
+
+    def envelope_cache(self, gen_index: int = 0) -> dict:
+        """Snapshot of GeneratorDriver envelope cache (name -> meta)."""
+        gen = self._get_gen(gen_index)
+        return dict(gen.EnvelopeMemoryDict)
+
+    def wave_cache(self, gen_index: int = 0) -> dict:
+        """Snapshot of GeneratorDriver wave cache (name/slot -> byte address)."""
+        gen = self._get_gen(gen_index)
+        return dict(gen.WaveMemoryDict)
+
+    def wave_mem_stats(self, gen_index: int = 0) -> dict:
+        """Wave memory usage in bytes/slots, derived from driver counters."""
+        gen = self._get_gen(gen_index)
+        used_bytes = int(gen.WaveMemoryDict.get("_NEXT", 0))
+        total_bytes = int(getattr(gen, "WaveMemorySegmentDepth", 0))
+        total_slots = (total_bytes // self._WDW_BYTES) if total_bytes else 0
+        used_slots = used_bytes // self._WDW_BYTES
+        return {
+            "used_bytes": used_bytes,
+            "total_bytes": total_bytes,
+            "used_slots": used_slots,
+            "total_slots": total_slots,
+            "free_slots": max(0, total_slots - used_slots),
+        }
+    
 
     # ------------------------------------------------------------------
     # Public properties
@@ -432,18 +448,6 @@ class FIREQ_SoC(Overlay):
         """Convenience shortcut: first TriggerGeneratorDriver, if any."""
         return self._trigger_ips[0] if self._trigger_ips else None
 
-    @property
-    def num_generators(self) -> int:
-        return len(self._generation_ips)
-
-    @property
-    def num_acquisitions(self) -> int:
-        return len(self._readout_ips)
-
-    @property
-    def num_triggers(self) -> int:
-        return len(self._trigger_ips)
-
     # Infra IPs
 
     @property
@@ -460,13 +464,6 @@ class FIREQ_SoC(Overlay):
     def dma(self):
         """AXI DMA (axi_dma_0), if present."""
         return self._dma
-
-    # Specs / health
-
-    @property
-    def hw_specs(self) -> dict:
-        """Validated hardware specifications (sample rates, Nyquist, etc.)."""
-        return dict(self._hw_specs) if self._hw_specs is not None else {}
 
     @property
     def is_healthy(self) -> bool:
@@ -485,3 +482,7 @@ class FIREQ_SoC(Overlay):
             "has_rf": self.rf is not None,
             "hw_specs": self.hw_specs,
         }
+
+def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQ_SoC:
+    """Helper per creare e inizializzare un FIREQ_SoC."""
+    return FIREQ_SoC(bitfile_name, ignore_version=False, init_clocks=init_clocks)

@@ -40,10 +40,9 @@ from .exceptions import (
 )
 
 # Sub-components (for advanced users)
-from .inventory import HardwareInventory
 from .dma_engine import AcquisitionEngine
 from .timing import TimingValidator
-from .driver_wrappers import GeneratorAdapter
+from .ol_adapter import OL_adapter
 
 __all__ = [
     

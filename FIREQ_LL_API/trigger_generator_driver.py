@@ -1,5 +1,5 @@
 from pynq import MMIO
-import numpy as np
+import numpy as  np
 from ._Utils import *
 
 __all__ = ['TriggerGeneratorDriver']

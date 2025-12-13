@@ -8,19 +8,22 @@ class GeneratorDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisGeneratorIP:2.0']
     
-    # a dictionary that stores useful data about the envelopes that have been written to 
-    # the envelope memory
-    EnvelopeMemoryDict = {}
-    EnvelopeMemoryDictReservedNames = []
-    # a dictionary that stores useful data about the wave definition words that have
-    # been written to the sequencer's wave memory
-    WaveMemoryDict = {}
-    WaveMemoryDictReservedNames = []
-    # the axi interface 
-    AxiFullInterfaceMMIO = None
-
+   
     def __init__(self, description):
+
         super().__init__(description=description)
+
+        # a dictionary that stores useful data about the envelopes that have been written to 
+        # the envelope memory
+        self.EnvelopeMemoryDict = {}
+        self.EnvelopeMemoryDictReservedNames = []
+        # a dictionary that stores useful data about the wave definition words that have
+        # been written to the sequencer's wave memory
+        self.WaveMemoryDict = {}
+        self.WaveMemoryDictReservedNames = []
+        # the axi interface 
+        self.AxiFullInterfaceMMIO = None
+
         # address width of the envelope memory, word aligned
         self.SampleMemoryAddressWidth = int(description["parameters"]["SampleMemoryAddressWidth"])
         # size of the envelope memory for every channel, in words
@@ -121,6 +124,8 @@ class GeneratorDriver(_FIREQDriver):
          
         """
         self.EnvelopeMemoryDict = {}
+        self.EnvelopeMemoryDictReservedNames = []
+        
         # set the memory free space in the envelope memory dictionary
         self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
         self.EnvelopeMemoryDictReservedNames.append("_FREESPACE")
@@ -136,6 +141,8 @@ class GeneratorDriver(_FIREQDriver):
 
         """
         self.WaveMemoryDict = {}
+        self.WaveMemoryDictReservedNames = []
+        
         # address of next wave in wave memory
         self.WaveMemoryDict["_NEXT"] = 0
         self.WaveMemoryDictReservedNames.append("_NEXT")
@@ -461,7 +468,8 @@ class GeneratorDriver(_FIREQDriver):
         if envelope_name in self.EnvelopeMemoryDict.keys():
             print("error, name '" + envelope_name + "' is already in use")
             return -3
-        if (envelope_samples.dtype != complex):
+        if not np.iscomplexobj(envelope_samples):
+            #NOTE: better than if (envelope_samples.dtype != complex) -> recover in case of any problem
             print("error, the provided samples for the envelope are not complex")
             return -3
         
@@ -505,7 +513,7 @@ class GeneratorDriver(_FIREQDriver):
         # commit to envelope dictionary
         self.EnvelopeMemoryDict[envelope_name] = new_dict_item
         self.EnvelopeMemoryDict["_FREESPACE"]["start"] = start_address + envelope_size
-        self.EnvelopeMemoryDict["_FREESPACE"]["size"] = free_space - envelope_size
+        self.EnvelopeMemoryDict["_FREESPACE"]["depth"] = free_space - envelope_size
 
         # commit to generator sample memory
         to_write_array = (envelope_samples.real.astype(np.int32) << 16) + envelope_samples.imag.astype(np.int16)
@@ -573,18 +581,42 @@ class GeneratorDriver(_FIREQDriver):
         natural_envelope_duration = 0
         # handle special envelope names
         if (envelope_name == "_RECTANGULAR"):
+            if (duration == 0):
+                print("error, rectangular wave requires a non-zero duration")
+                return -3
             # set the force one bit
             wavedef = wavedef | (1 << 121)
             real_duration = duration
             natural_envelope_duration = duration
         else: 
-            # TODO: duration check if not interp
+            # NOTE (non-interpolated envelopes):
+            # In non-interpolated mode the read address increment is fixed (typically 1/NumberOfChannels),
+            # so the LUT is read sequentially and the waveform length is effectively bounded by the amount
+            # of samples stored in memory (natural_envelope_duration).
+            #
+            # Policy:
+            # - duration == 0  -> use natural_envelope_duration (recommended default)
+            # - duration < natural_envelope_duration -> allowed (truncates the envelope)
+            # - duration > natural_envelope_duration -> NOT allowed because it would read past the loaded data
+            #   (undefined samples). If keep_last is enabled, we clamp to natural_envelope_duration and rely on
+            #   KEEP_LAST for CW behavior instead of reading out-of-range data.
+
             if (envelope_def["is_interp"]):
                 natural_envelope_duration = envelope_def["size"]*(1 + envelope_def["is_sym"]) - 1
-                real_duration = duration
+                real_duration = natural_envelope_duration if (duration == 0) else duration
             else:
                 natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
-                real_duration = natural_envelope_duration
+                if (duration == 0):
+                    real_duration = natural_envelope_duration
+                else:
+                    if (duration > natural_envelope_duration):
+                        if keep_last:
+                            real_duration = natural_envelope_duration
+                        else:
+                            print("error, duration exceeds envelope length for non-interpolated envelope")
+                            return -3
+                    else:
+                        real_duration = duration
 
         # set the keep_last bit (Bit 122)
         if keep_last:
@@ -617,9 +649,22 @@ class GeneratorDriver(_FIREQDriver):
         start_offset = 0
         increment = 0
         if (envelope_def["is_interp"]):
-            # TODO: handle the reminder
+            # NOTE (fixed-point interpolation fix):
+            # We compute the fractional address increment as num/den in Q(FractionalPrecision).
+            # Using integer division (//) truncates the ideal increment, introducing a small
+            # quantization error that accumulates along the envelope and biases the last samples.
+            # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
+            # half of it to start_offset we "center" the quantization error, reducing the peak
+            # error at the end without changing the hardware behavior.
             start_offset = envelope_def["start"] << self.FractionalPrecision
-            increment = ((natural_envelope_duration-1) << self.FractionalPrecision)//(real_duration-1)
+            num = ((natural_envelope_duration - 1) << self.FractionalPrecision)
+            den = (real_duration - 1)
+
+            increment = num // den
+            reminder  = num % den
+
+            # shift di mezzo resto per “centrare” l’errore (riduce il picco finale)
+            start_offset = start_offset + (reminder // 2)
         else:
             start_offset = envelope_def["start"] << self.FractionalPrecision
             # set the increment to 1/(number_of_channels), usually 1/16
@@ -630,42 +675,6 @@ class GeneratorDriver(_FIREQDriver):
         # return wave definition
         return wavedef
     
-    def set_constant_waveform(self, gain: float, output_channel: str = 'drive'):
-        #TODO: remove
-        """
-        Configures the generator to output a Continuous Wave (CW) tone by using the KEEP_LAST feature.
-        To turn the tone OFF, call this function with gain=0.
-        
-        Note: You must set the frequency separately using set_drive_dds_parameters 
-        or set_readout_dds_parameters.
-        
-        :param gain: Amplitude [-1.0, 1.0]. Set to 0 to stop the tone.
-        :param output_channel: 'drive' or 'readout'
-        :return: Error code
-        """
-        # 1. Create a "Frozen" Wave Definition
-        # We use _RECTANGULAR + KEEP_LAST=True
-        # Duration is small (16 samples) because it freezes immediately.
-        # If gain is 0, this holds 0V indefinitely (turning off the tone).
-        wdw = self.create_wave_definition_word(
-            envelope_name="_RECTANGULAR", 
-            duration=16, 
-            gain=gain, 
-            switch_iq=False, 
-            keep_last=True 
-        )
-        
-        # 2. Configure Manual Trigger Routing
-        if self.set_manual_wave_destination_output_channel(output_channel) < 0:
-            return -3
-        
-        # 3. Upload the Wave to the Readout Wave Register (used for Manual Triggers)
-        self.write_readout_wave(wdw)
-        
-        # 4. Fire!
-        # The manual trigger starts the pulse. Because keep_last=True, it holds the value forever.
-        return self.trigger_manually()
-
     def add_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
         """
         Add a wave definition word in the wave memory, there are no checks on the 
@@ -729,6 +738,7 @@ class GeneratorDriver(_FIREQDriver):
         fifo_start_address = self.TotalSampleMemorySegmentDepth + self.WaveMemorySegmentDepth
         actual_address = fifo_start_address + (index-1)*4
         self.AxiFullInterfaceMMIO.write(actual_address, wave_addr)
+        return 0
 
     def write_readout_wave(self, wave_definition : int):
         """
@@ -738,7 +748,7 @@ class GeneratorDriver(_FIREQDriver):
         with the "trigger_manuallyDestination" function.
          
         :param wave_definition: 128-bit wave defintion
-        :type wave_definition: int
+        :type wave_definition: intprint("CACHE ENTRY:", soc.envelope_cache(gen_index).get(ENV_NAME))
         :return: Error code
         :rtype: Literal[-3] | None
         """

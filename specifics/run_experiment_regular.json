@@ -9,56 +9,73 @@ CLIENT
   "shots": 1024,
   "duration_cycles": null,
 
-  "sequence": [
+  "IP_commands": [
+    //GenerationIP
     {
-      "IP": "GENERATION_IP",
-      "t0_cycles": 10,
-      "generator": 0,
-      "channel": 0,
-      "wave_id": "WDW_DRIVE_1", //wave definition word già compilata
-      "ttype": "drive",
-      "role": "drive_pulse_1"
+      "GENERATOR_IP0" : {
+        "drive" : 
+        {
+        "channel": const. ,
+        "frequency": f ,
+        "phase": phi,
+        "wave_id_list": ["wave_id0", "wave_id1", ...], // mapped to wdw in the board. This is the FIFO list 
+      },
+
+      "readout" : {
+        "channel": const. ,
+        "frequency": f ,
+        "phase": phi,
+        // no need for wdw -> unica e definita all'inizio (n.b. potrebbe essere limitante! In alcuni esperimenti è interessante usare envelope di readout diverse, anche concatenate!)
+      }
+
+      },
+      "GENERATION_IP1" : {
+        "channel": const. ,
+        "frequency": f ,
+        "phase": phi,
+        "wave_id_list": ["wave_id0", "wave_id1", ...], // mapped to wdw in the board
+      },
+      "GENERATION_IP2" : { ...},
+      ...
     },
+    // AcquisitionIP 
     {
-      "IP": "GENERATION_IP",
-      "t0_cycles": 60,
-      "generator": 0,
-      "channel": 0,
-      "wave_id": "WDW_DRIVE_2", //wave definition word già compilata
-      "ttype": "drive",
-      "role": "drive_pulse_2"
-    },
+      "ACQUISTION_IP0": {
+         "channel": const. ,
+        "frequency": f ,
+        "phase": phi,
+        "acquisition_duration": null , // null := calcolato da server o client
+      "ACQUISTION_IP1":{ ...},
+      "ACQUISTION_IP2":{...}
+    }, 
+    // TriggerGeneratorIP
     {
-      "IP": "GENERATION_IP",
-      "t0_cycles": 120,
-      "generator": 0,
-      "channel": 0,
-      "wave_id": "WDW_DRIVE_3", //wave definition word già compilata
-      "ttype": "drive",
-      "role": "drive_pulse_3"
-    },
-    {
-      "IP": "GENERATION_IP",
-      "t0_cycles": 400,
-      "generator": 0,
-      "channel": 0,
-      "wave_id": "WDW_READOUT",
-      "ttype": "readout",
-      "role": "readout_pulse"
-    },
-    {
-      "IP": "ACQUISITION_IP",
-      "acq_duration_cycles": 320,
-      "tof_cycles": 10,
-      "adc_index": 0,
-      "num_samples": 2048,
-      "mode": "decimated",
-      "freq_mhz": 100.0,
-      "trigger_channel": 1
+
+      "experiment_duration": #, // calcolato dal server o client
+      "shots" : const,
+      "channels": {
+
+        # channel1
+        {
+          "drive" : {
+            "delay" : ["t0", "t1", "t2", ...],
+            "generate_trigger": ["True/False", "True/False", ...]
+          },
+
+          "readout" : {
+            // predispone la possibiltà di esperimenti complessi con più readout pulse concatenati
+            "delay" : ["t0", "t1", ...]
+          }
+        },
+        # channel 2
+        {},
+        # channel 3
+        {}
+
+      }
     }
   ],
 
-  "timeout": 5.0 // opzionale per controllare il DMA timeout (default 2 secondi)
 }
 
 
