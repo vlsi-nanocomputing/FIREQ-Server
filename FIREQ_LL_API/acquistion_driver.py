@@ -73,24 +73,21 @@ class AcquistionDriver(_FIREQDriver):
         self.DebugLevel = level
         return 0
 
-    def set_acquistion_parameters(self, frequency, phase, duration, adc_samplerate):
+    def set_acquisition_dds_parameters(self, frequency, phase, adc_samplerate):
         """
         Set parameters for acquistion such as demodulation frequency, the phase offset of the demodulation
-        and the duration of the acquistion
         
         :param frequency: Frequency of the demodulation signal in MHz
         :type frequency: float
         :param phase: Phase offset of the demodulation signal in RADs
         :type phase: float
-        :param duration: Acquistion duration in clock cycles
-        :type duration: uint
         :param ADC_SAMPLERATE: Sampling frequency of the ADC in MHz
         :type ADC_SAMPLERATE: float
         :return: Error code
         :rtype: int
         """
         # check inputs
-        if(frequency < 0 or duration < 1  or duration > self.MaximumDuration):
+        if(frequency < 0):
             print("input parameters out of range")
             return -3
 
@@ -105,8 +102,6 @@ class AcquistionDriver(_FIREQDriver):
         # write registers
         self._set_readout_pinc_poff(pinc,poff)
 
-        # write the duration, note that this function removes one from duration before writing 
-        self.set_acquisition_duration(duration)
         return 0
     
     def _set_readout_pinc_poff(self, inc, off):

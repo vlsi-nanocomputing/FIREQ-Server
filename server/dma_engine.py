@@ -1,80 +1,134 @@
-# file: fireq_orchestrator/hardware/dma_engine.py
+# file: fireq-utils/server/hardware/dma_engine.py
 """
-Data Acquisition Engine Module - no Flush Version
-===============================================================
-- PYNQ high-level DMA acquisition engine.
-- Maintains:
-    * multi-shot handling
-    * mode-based buffer dimensioning
-    * AXI Stream Switch routing
-    * parsing I/Q in complex arrays
-=================================================================
+DMA-Engine.
+
+This module provides a high-level interface for managing Direct Memory Access (DMA) 
+transfers between FPGA-based Analog-to-Digital Converters (ADCs) and the 
+Processing System (PS). 
+It handles AXI-Stream routing via AXI-Switch, hardware buffer allocation
+and real-time data parsing for different acquisition modalities (raw, decimated, accumulated).
+
 """
 
 import logging
 import numpy as np
-import signal  # for timeout handling
+import time
+import signal
 from pynq import allocate
-from typing import Optional, Any, Literal, Dict
+from typing import Optional, Any, Literal, Dict, List
 
 from .exceptions import DMATimeoutError, DMAError 
+
+
 class AcquisitionEngine:
     """
-    High-level manager for DMA acquisitions.
+    High-level manager for AXI acquisitions.
 
-    Responsibilities:
-    - Configure stream routing (raw vs decimated/accumulated) via AXI Stream Switch.
-    - Allocate contiguous DDR buffers with `pynq.allocate`.
-    - Start the DMA S2MM channel with `recvchannel.transfer(...)`.
-    - Wait for completion with `recvchannel.wait()`.
-    - Parse the buffer into complex I/Q arrays, with multi-shot reshaping.
+    This class encapsulates the logic for hardware-timed data capture, managing 
+    the synchronization between the AXI-Stream switch and the DMA engine. 
+    It supports multi-shot acquisition and automatic data reshaping into 
+    complex-valued values.
 
+    :ivar dma: The PYNQ DMA overlay object.
+    :ivar switch: The AXI-Stream Switch object for signal routing.
+    :ivar logger: Logger instance for experiment status and error reporting.
+    :ivar hw_specs: Dictionary containing hardware constraints.
+    :ivar _inflight: Boolean flag indicating an ongoing DMA transfer.
     """
 
     def __init__(self, dma: Any, switch: Any, logger: Optional[logging.Logger] = None,
-                 hw_specs: Optional[Dict[str, Any]] = None) -> None:
+                 hw_specs: Optional[Dict[str, Any]] = None,
+                 acq_drivers: Optional[List[Any]] = None) -> None:
         """
-        :param dma: PYNQ DMA (e.g., overlay.axi_dma_0)
-        :param switch: AXI Stream Switch IP used to select the path (raw vs decimated)
-        :param logger: Optional logger
-        :param hw_specs: Optional dictionary with hardware specifications (adc_parallelism, etc.)
+        Initialize the Acquisition Engine and hardware register offsets.
+
+        Configures the memory-mapped I/O offsets for the AXI-Stream Switch 
+        and the S2MM DMA channel. It also triggers an initial check to 
+        ensure the DMA channel is in a running state.
+
+        :param dma: PYNQ DMA object for data transfer.
+        :param switch: PYNQ MMIO or IP object for AXI switching.
+        :param logger: Optional logging.Logger instance.
+        :param hw_specs: Dictionary of hardware parameters (e.g., ADC parallelism).
+        :param acq_drivers: List of driver objects for the acquisition IP cores.
         """
         self.dma = dma
         self.switch = switch
         self.logger = logger or logging.getLogger(__name__)
         self.hw_specs = hw_specs or {}
-
+        self.acq_drivers = acq_drivers or []
+        self._inflight = False
+        
         # Switch register definitions
-        #NOTE: evaluate to move elsewhere (inventory module?)
+        #NOTE : hardcoded, consider to exctract them from the board
         self.REG_CTRL = 0x00
         self.REG_MI_MUX_0 = 0x40
         self.MASK_COMMIT = 0x00000002
-        # --- DMA (S2MM) registers for "emergency" reset ---
+        
+        # --- DMA (S2MM) registers ---
         self.REG_S2MM_DMACR = 0x30
         self.REG_S2MM_DMASR = 0x34
-        self.MASK_RESET = 0x00000004   # bit Reset
-        self.MASK_IRQ_CLEAR = 0x00007000  # W1C su IOC, DM, ERR (valore classico)
+        self.MASK_RESET = 0x00000004
+        self.MASK_RUNSTOP = 0x00000001
+        self.MASK_IRQ_CLEAR = 0x00007000
+
+        self._ensure_started()
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-        
     def abort(self) -> None:
         """
-        Aborts any ongoing DMA transfer and performs a minimal hardware reset.
-        Useful in case of errors or timeouts to bring the DMA back to a known state.
-        """
-        try:
-            # prova a fermare gentilmente il canale PYNQ
-            if hasattr(self.dma.recvchannel, "stop"):
-                self.dma.recvchannel.stop()
-        except Exception:
-            pass
+        Immediately terminate any ongoing hardware acquisition.
 
-        # e comunque fai il reset hardware minimale
+        Triggers a hard reset of the DMA engine to clear the S2MM pipeline 
+        and reset the internal state machines.
+        """
         self._hard_reset()
 
+    def acquire(
+        self,
+        samp_per_shot: int,
+        shots: int,
+        mode: Literal["raw", "decimated", "accumulated"],
+        adc_index: int,
+        timeout: Optional[float] = None
+    ) -> np.ndarray:
+        """
+        Execute a complete acquisition cycle.
+
+        Arms the DMA engine, waits for the transfer to complete within the 
+        specified timeout, and returns the parsed data. If a failure occurs, 
+        it ensures the allocated buffers are freed to prevent memory leaks.
+
+        :param samp_per_shot: Number of samples to acquire for each trigger/shot.
+        :type samp_per_shot: int
+        :param shots: Total number of acquisition cycles (shots).
+        :type shots: int
+        :param mode: Acquisition modality: 'raw' (demodulated-not-filtered), 'decimated' (demodulated and filtered), 
+                     or 'accumulated' (demodulated, filtered and integrated).
+        :type mode: Literal["raw", "decimated", "accumulated"]
+        :param adc_index: Hardware index of the ADC source.
+        :type adc_index: int
+        :param timeout: Maximum wait time in seconds. Defaults to 5.0s.
+        :type timeout: Optional[float]
+        :return: Reshaped array of complex samples (numpy.complex64/128).
+        :rtype: np.ndarray
+        :raises DMATimeoutError: If the hardware fails to assert the TLAST signal.
+        :raises DMAError: For low-level AXI protocol or allocation failures.
+        """
+
+        buffer = self.arm_acquisition(samp_per_shot, shots, mode, adc_index)
+        try:
+            return self.retrieve_acquisition(buffer, mode, shots, timeout)
+        except Exception:
+            if hasattr(buffer, "freebuffer"):
+                try:
+                    buffer.freebuffer()
+                except Exception:
+                    pass
+            raise
 
     def arm_acquisition(
         self,
@@ -84,45 +138,47 @@ class AcquisitionEngine:
         adc_index: int,
     ) -> Any:
         """
-        Configures routing and DMA and starts the transfer.
+        Configure hardware and initiate the DMA transfer.
 
-        Does not wait for completion (to do so, use `retrieve_acquisition`).
+        Performs AXI-Switch routing, configures the acquisition IP cores 
+        (decimators/integrators), allocates contiguous memory (CMA), 
+        and triggers the S2MM channel.
 
-        :param samp_per_shot: Number of samples desired per shot (interpretation
-                              depends on the mode, as per the firmware).
-        :param shots: Number of shots to aggregate in the buffer.
-        :param mode: 'raw', 'decimated', 'accumulated'
-        :param adc_index: Index of the ADC from which we are reading (used for the mux).
-        :return: DMA buffer (allocate object) ready to be passed to `retrieve_acquisition`.
+        :param samp_per_shot: Samples per shot.
+        :type samp_per_shot: int
+        :param shots: Number of shots.
+        :type shots: int
+        :param mode: Acquisition mode.
+        :type mode: str
+        :param adc_index: Source ADC channel.
+        :type adc_index: int
+        :return: PYNQ Buffer object (Contiguous Memory Allocation).
+        :rtype: Any
         """
+        try:
+            if not self.dma.recvchannel.idle:
+                self.logger.warning("DMA was busy/stuck before arming. Forcing Hard Reset.")
+                self._hard_reset()
+        except Exception:
+            self._hard_reset()
+
         if shots < 1:
             raise DMAError("Shots must be >= 1")
 
-        self.logger.debug(
-            f"Arming DMA (simple): samples/shot={samp_per_shot}, shots={shots}, "
-            f"mode={mode}, adc_index={adc_index}"
-        )
-
-        # 1. Switch routing
+        self._configure_acquisition_ip(adc_index, mode)
         self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
 
-        # 2. Calculate buffer size in words (u4)
         total_words = self._compute_total_words(samp_per_shot, shots, mode)
-
-        self.logger.debug(
-            f"Allocating DMA buffer: {total_words} words for {shots} shots (Mode: {mode})"
-        )
 
         try:
             buffer = allocate(shape=(total_words,), dtype="u4")
         except Exception as e:
             raise DMAError(f"DMA allocation failed: {e}") from e
 
-        # 3. Start DMA (no manual MMIO)
         try:
             self.dma.recvchannel.transfer(buffer)
         except Exception as e:
-            # If start fails, free the buffer to avoid leaks
+            self.logger.error(f"DMA transfer start failed: {e}")
             self._hard_reset()
             if hasattr(buffer, "freebuffer"):
                 try:
@@ -133,97 +189,65 @@ class AcquisitionEngine:
 
         return buffer
 
-    def retrieve_acquisition(
-        self,
-        buffer: Any,
-        mode: str,
-        shots: int,
-        timeout: Optional[float] = None,
-    ) -> np.ndarray:
+    def retrieve_acquisition(self, buffer, mode, shots, timeout=None):
         """
-        Waits for DMA completion and retrieves data as complex numpy array.
+        Retrieve data from the DMA .
+        It uses a SIGALRM watchdog to ensure the process does not hang if the 
+        FPGA hardware fails to assert TLAST.
 
-        Timeout handling:
-            - If `timeout` is None or <= 0 block until the DMA finishes or raises an exception.
-            - If `timeout` > 0 (seconds): we arm a UNIX signal-based timer
-              (ITIMER_REAL). If `recvchannel.wait()` does not return within the
-              given time, a TimeoutError is raised and converted into a
-              DMATimeoutError, and a minimal DMA hard-reset is performed.
-        :param buffer: DMA buffer previously allocated and passed to `arm_acquisition`.
-        :param mode: 'raw', 'decimated', 'accumulated'
-        :param shots: Number of shots to aggregate in the buffer.
-        :param timeout: Optional timeout in seconds for the wait operation.
-        :return: numpy array with complex data (reshaped if shots > 1).
+        :param buffer: Contiguous memory buffer where data is stored.
+        :type buffer: PynqBuffer
+        :param mode: Acquisition modality (raw, decimated, or accumulated).
+        :type mode: str
+        :param shots: Number of triggers/shots acquired.
+        :type shots: int
+        :param timeout: Time limit in seconds before raising a timeout error.
+        :type timeout: Optional[float]
+        :return: Parsed and reshaped complex data array.
+        :rtype: np.ndarray
+        :raises DMATimeoutError: If the transfer does not complete within the timeout.
+        :raises DMAError: If the DMA engine reports an internal error during wait.
         """
-        # --- Setup optional timeout via signals (UNIX only) ---
-        timeout_sec: Optional[float] = None
-        old_handler = None
+        timeout_sec = int(timeout) if timeout and timeout > 0 else 5
 
-        if timeout is not None and timeout > 0:
-            timeout_sec = float(timeout)
-            # Define the timeout handler
-            def _timeout_handler(signum, frame):
-                raise TimeoutError("DMA wait timeout")
+        # Define a local timeout handler for the SIGALRM signal
+        def _internal_timeout_handler(signum, frame):
+            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec}s")
 
-            # Save the old handler to restore it later
-            old_handler = signal.getsignal(signal.SIGALRM)
-            signal.signal(signal.SIGALRM, _timeout_handler)
-            # Use ITIMER_REAL to support fractional timeouts
-            signal.setitimer(signal.ITIMER_REAL, timeout_sec)
+        # Register the signal handler and set the alarm
+        old_handler = signal.signal(signal.SIGALRM, _internal_timeout_handler)
+        signal.alarm(timeout_sec)
 
         try:
-            # Block until DMA finishes / until timeout handler fires
+            # Wait for the hardware interrupt (TLAST) to trigger completion
             self.dma.recvchannel.wait()
-        except TimeoutError as e:
-            # Timeout: reset DMA and signal DMATimeoutError
-            self._hard_reset()
-
-            if hasattr(buffer, "freebuffer"):
-                try:
-                    buffer.freebuffer()
-                except Exception:
-                    pass
-
-            raise DMATimeoutError(
-                f"DMA transfer timed out after {timeout_sec:.3f} s"
-            ) from e
-
         except Exception as e:
-            # Altro errore PYNQ/DMA: reset e DMAError
+            # Perform a hard reset if the transfer fails or times out
             self._hard_reset()
-
             if hasattr(buffer, "freebuffer"):
                 try:
                     buffer.freebuffer()
                 except Exception:
                     pass
-
-            raise DMAError(f"DMA transfer failed: {e}") from e
-
+            # Re-raise the timeout or DMA error to the caller
+            if "timed out" in str(e):
+                raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec}s") from e
+            raise DMAError(f"DMA wait failed: {e}") from e
         finally:
-            # Restore old signal handler and disable timer
-            # The handler is restored such that it can be used again later without re-definition
-            if timeout_sec is not None:
-                try:
-                    signal.setitimer(signal.ITIMER_REAL, 0.0)
-                except Exception:
-                    pass
-                if old_handler is not None:
-                    try:
-                        signal.signal(signal.SIGALRM, old_handler)
-                    except Exception:
-                        pass
+            # Always disable the alarm and restore the previous signal handler
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
-        # Invalidate buffer cache (best-effort)
+        # Refresh the cache visibility for the CPU
         try:
             buffer.invalidate()
         except Exception:
             pass
 
+        # Parse and reshape the data according to the acquisition mode
         try:
             data = self._parse(buffer, mode, shots)
         finally:
-            # Sempre liberare il buffer dopo l'uso
             if hasattr(buffer, "freebuffer"):
                 try:
                     buffer.freebuffer()
@@ -233,8 +257,27 @@ class AcquisitionEngine:
         return data
 
     # ------------------------------------------------------------------
-    # Internal methods: routing, dimensions, parsing, reset
+    # Internal methods
     # ------------------------------------------------------------------
+
+    def _ensure_started(self) -> None:
+        """
+        Verify and enforce the active state of the DMA receive channel.
+
+        Checks if the S2MM channel is running. If the standard PYNQ start 
+        sequence fails, it attempts a low-level hard reset to recover 
+        the hardware interface.
+        """
+        ch = self.dma.recvchannel
+        try:
+            if hasattr(ch, "running"):
+                if not ch.running:
+                    ch.start()
+            else:
+                ch.start()
+        except Exception as e:
+            self.logger.warning(f"Standard DMA start failed ({e}), attempting hard reset init...")
+            self._hard_reset()
 
     def _compute_total_words(
         self,
@@ -242,73 +285,60 @@ class AcquisitionEngine:
         shots: int,
         mode: Literal["raw", "decimated", "accumulated"],
     ) -> int:
-        """
-        Calcola il numero totale di word (u32) da allocare in memoria
-        in base a:
-        - numero di sample per shot,
-        - numero di shot,
-        - formato dati del firmware (mode).
-        """
         if mode == "accumulated":
-            # Accumulated: un risultato complesso per shot (I e Q a 32 bit ciascuno)
-            words_per_shot = 2  # I, Q
-            total_words = words_per_shot * shots
-            self.logger.debug(
-                f"Accumulated mode: {words_per_shot} words/shot, total={total_words}"
-            )
-            return total_words
+            return 2 * shots
 
         if mode == "raw":
-            # Raw: stream demodulato full-bandwidth.
-            # Ogni sample complesso è codificato in un'unica word (I16 | Q16).
-            # Tuttavia l'hardware produce i sample a blocchi di `adc_parallelism`.
             par = int(self.hw_specs.get("adc_parallelism", 8))
             samples_per_shot = int(samp_per_shot)
-
-            # Ceiling per garantire di avere almeno samp_per_shot sample
             acq_cycles_per_shot = (samples_per_shot + par - 1) // par
             actual_samples_per_shot = acq_cycles_per_shot * par
-            total_words = actual_samples_per_shot * shots
+            return actual_samples_per_shot * shots
 
-            self.logger.debug(
-                f"Raw mode: requested={samples_per_shot} samples/shot -> "
-                f"actual={actual_samples_per_shot} samples/shot, total_words={total_words}"
-            )
-            return total_words
+        return int(samp_per_shot) * shots
 
-        # Decimated: 1 sample complesso = 1 word a 32 bit (I16 | Q16)
-        samples_per_shot = int(samp_per_shot)
-        total_words = samples_per_shot * shots
-        self.logger.debug(
-            f"Decimated mode: {samples_per_shot} words/shot, total={total_words}"
-        )
-        return total_words
+    def _configure_acquisition_ip(self, adc_index: int, mode: str) -> None:
+        """
+        Set the operational mode of the upstream acquisition IP cores.
+
+        Communicates with the specific ADC driver to configure its output 
+        type (e.g., decimated or accumulated). This ensures that the 
+        AXI-Stream data format matches the expected DMA transfer size.
+
+        :param adc_index: Index of the target ADC/Driver.
+        :param mode: Desired acquisition modality.
+        """
+        if not self.acq_drivers:
+            return
+        if not (0 <= adc_index < len(self.acq_drivers)):
+            return
+        if mode == "raw":
+            return
+        if mode in ("decimated", "accumulated"):
+            driver = self.acq_drivers[adc_index]
+            try:
+                if hasattr(driver, "set_decimated_output_type"):
+                    driver.set_decimated_output_type(mode)
+            except Exception:
+                pass
 
     def _route_switch(self, adc_index: int, raw_mode: bool) -> None:
         """
-        Configura l'AXI Stream Switch per selezionare il path corretto.
+        Configure the AXI-Stream Switch to route the correct signal to the DMA.
 
-        Convenzione:
-            - Porta pari  (2*adc_index)     -> RAW (full bandwidth)
-            - Porta dispari (2*adc_index+1) -> Decimated / Accumulated
+        Calculates the target port based on the ADC index and the acquisition 
+        mode (raw vs. processed) and commits the configuration to the 
+        Switch registers.
 
-        Questa funzione è volutamente semplice:
-            - nessun flush di pipeline
-            - nessun reset DMA
-            - solo scrittura del registro di mux + commit.
+        :param adc_index: Source ADC index.
+        :param raw_mode: If True, routes the high-speed raw data stream.
+        :raises DMAError: If the AXI-Lite write to the switch fails.
         """
         if not self.switch:
             return
-
         base_port = int(adc_index) * 2
         target_port = base_port + (0 if raw_mode else 1)
-
-        self.logger.info(
-            f"Routing AXI switch: adc={adc_index}, raw_mode={raw_mode} -> port={target_port}"
-        )
-
         try:
-            # Scrivi il nuovo valore di mux e committa
             self.switch.mmio.write(self.REG_MI_MUX_0, target_port)
             self.switch.mmio.write(self.REG_CTRL, self.MASK_COMMIT)
         except Exception as e:
@@ -316,80 +346,71 @@ class AcquisitionEngine:
 
     def _parse(self, buffer: Any, mode: str, shots: int) -> np.ndarray:
         """
-        Converts the raw DMA buffer into a complex numpy array.
-        Ease the handling of data once retrieved from the DMA.
-        Data formats (from firmware):
-        - decimated/raw:
-            32 bit per complex sample:
-                [31:16] = Q (signed int16)
-                [15:00] = I (signed int16)
-        - accumulated:
-            I and Q separate, 32 bit each:
-                word[0] = I0, word[1] = Q0, word[2] = I1, word[3] = Q1, ...
+        Convert raw binary buffer data into complex-valued NumPy tensors.
+
+        It performs bit-masking to extract 16-bit In-phase (I) and Quadrature (Q) 
+        components from 32-bit words and handles multi-shot reshaping.
+
+        :param buffer: The source PYNQ buffer.
+        :type buffer: Any
+        :param mode: The acquisition mode used for specific bit-mapping logic.
+        :type mode: str
+        :param shots: Number of shots for tensor reshaping.
+        :type shots: int
+        :return: Array of complex numbers (real + 1j*imag).
+        :rtype: np.ndarray
         """
         if mode == "accumulated":
-            # I, Q:  32 bit, alternated
             i_data = buffer[0::2].astype(np.int32)
             q_data = buffer[1::2].astype(np.int32)
             complex_data = i_data + 1j * q_data
-
         elif mode in ("decimated", "raw"):
-            # I16 | Q16 in a single word
             raw_u4 = buffer.view(np.uint32)
             i_data = (raw_u4 & 0xFFFF).astype(np.int16)
             q_data = (raw_u4 >> 16).astype(np.int16)
             complex_data = i_data + 1j * q_data
-
         else:
             raise DMAError(f"Unknown acquisition mode for parsing: {mode}")
 
-        # --- Gestione multi-shot ---
         if shots > 1:
             total_len = len(complex_data)
             samples_per_shot = total_len // shots
             if samples_per_shot == 0:
-                # Fall-back: niente reshape sensato possibile
-                self.logger.warning(
-                    f"Cannot reshape DMA data for {shots} shots: total_len={total_len}"
-                )
                 return complex_data
-
             trimmed = complex_data[: samples_per_shot * shots]
             try:
                 return trimmed.reshape((shots, samples_per_shot))
-            except Exception as e:
-                self.logger.warning(
-                    f"Reshape failed for {shots} shots (samples_per_shot={samples_per_shot}): {e}. "
-                    "Returning flat array."
-                )
+            except Exception:
                 return complex_data
-
         return complex_data
 
-    def _hard_reset(self) -> None:
+    def _hard_reset(self):
         """
-        Reset 'minimale' del canale S2MM del DMA.
+        Perform a low-level reset of the AXI DMA S2MM channel.
 
-        Non tocca lo switch, non fa flush: serve solo a riportare il core
-        in stato sano dopo un errore, evitando di dover riflashare l'overlay.
+        Writes to the DMACR register to trigger a soft reset, waits for 
+        acknowledgment, and then re-enables the S2MM channel and clears 
+        pending interrupts.
         """
         try:
             mmio = self.dma.mmio
 
-            # 1) Set the reset bit
             mmio.write(self.REG_S2MM_DMACR, self.MASK_RESET)
-            # 2) Clear the reset bit (becomes operational again)
-            mmio.write(self.REG_S2MM_DMACR, 0x00000000)
-            # 3) Clear interrupts / error flags (write-1-to-clear)
-            mmio.write(self.REG_S2MM_DMASR, self.MASK_IRQ_CLEAR)
+            time.sleep(0.01)
 
-            # 4) Reset internal PYNQ state (important for the first transfer)
-            if hasattr(self.dma.recvchannel, "_first_transfer"):
-                self.dma.recvchannel._first_transfer = True
+            for _ in range(100):
+                if not (mmio.read(self.REG_S2MM_DMACR) & self.MASK_RESET):
+                    break
 
-            self.logger.info("DMA S2MM hard-reset completed.")
+            mmio.write(self.REG_S2MM_DMASR, 0x00007000)
+            mmio.write(self.REG_S2MM_DMACR, self.MASK_RUNSTOP)
+
+            ch = self.dma.recvchannel
+            if hasattr(ch, '_first_transfer'):
+                ch._first_transfer = True
+
         except Exception as e:
-            self.logger.error(f"DMA hard-reset failed: {e}")
             raise DMAError(f"DMA hard-reset failed: {e}") from e
+
 
 __all__ = ["AcquisitionEngine"]

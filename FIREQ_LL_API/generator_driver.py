@@ -758,30 +758,52 @@ class GeneratorDriver(_FIREQDriver):
         for i in range(4):
             self.AxiLiteInterfaceMMIO.write((self.readout_wave_l+i)*4, (wave_definition >> i*32) & 0xFFFFFFFF)
 
-    def replace_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
+    def replace_wave_in_wave_memory(self, wave_definition: int, old_wave_name: str, new_wave_name: str = None):
         """
-        Replace a certain wave definition word with another one
-        
-        :param wave_definition: Wave definition word for the new wave
-        :type wave_definition: uint128
-        :param wave_name: Name of the wave to replace
-        :type wave_name: str
+        Replace a certain wave definition word with another one.
+        Optionally rename the wave key in the local cache dictionary.
+
+        :param wave_definition: Wave definition word for the new wave (uint128)
+        :param old_wave_name: Existing wave name to replace
+        :param new_wave_name: New wave name (optional). If None or same as old, no rename.
         :return: Error code
         :rtype: Literal[-3, 0]
         """
-        if wave_name not in self.WaveMemoryDict.keys():
+        if old_wave_name not in self.WaveMemoryDict:
             print("error, a wave was not found in the cached wave memory with the same name")
             print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
             return -3
-        if wave_name in self.WaveMemoryDictReservedNames:
-            print("wave name is a reserved keyword")
+
+        if old_wave_name in self.WaveMemoryDictReservedNames:
+            print("old wave name is a reserved keyword")
             return -3
-        
+
+        # default: no rename
+        if new_wave_name is None:
+            new_wave_name = old_wave_name
+
+        # validate rename
+        if new_wave_name != old_wave_name:
+            if new_wave_name in self.WaveMemoryDictReservedNames:
+                print("new wave name is a reserved keyword")
+                return -3
+            if new_wave_name in self.WaveMemoryDict:
+                print("new wave name already exists in cached wave memory")
+                return -3
+
         # get the address where the wave definition will end up
-        address = self.WaveMemoryDict[wave_name]
-        
-        # write to wave memory
+        address = self.WaveMemoryDict[old_wave_name]
+
+        # write to wave memory (same address)
         for i in range(4):
-            self.AxiFullInterfaceMMIO.write((self.TotalSampleMemorySegmentDepth + i*4 + address), (wave_definition >> (i*32)) & 0xFFFFFFFF)
-        
+            self.AxiFullInterfaceMMIO.write(
+                (self.TotalSampleMemorySegmentDepth + i*4 + address),
+                (wave_definition >> (i*32)) & 0xFFFFFFFF
+            )
+
+        # update dictionary key if rename requested
+        if new_wave_name != old_wave_name:
+            self.WaveMemoryDict[new_wave_name] = address
+            del self.WaveMemoryDict[old_wave_name]
+
         return 0
