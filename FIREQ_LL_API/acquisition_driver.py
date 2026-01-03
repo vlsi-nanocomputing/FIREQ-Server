@@ -2,9 +2,9 @@ from pynq import MMIO
 import numpy as np
 from ._Utils import *
 
-__all__ = ['AcquistionDriver']
+__all__ = ['AcquisitionDriver']
 
-class AcquistionDriver(_FIREQDriver):
+class AcquisitionDriver(_FIREQDriver):
 
     bindto = ['user.org:user:axisAcquistionIP:1.0']
 

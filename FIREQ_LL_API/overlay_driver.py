@@ -6,7 +6,7 @@ from typing import Dict, Tuple
 import re
 from ._Parser import FIREQ_parser
 from ._Utils import _FIREQDriver
-from .acquisition_driver import AcquistionDriver
+from .acquisition_driver import AcquisitionDriver
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
@@ -60,7 +60,7 @@ class FIREQ_SoC(Overlay):
 
         # 4) FIREQ IPs lists
         self._generation_ips = []  # type: list[GeneratorDriver]
-        self._acquistion_ips = []     # type: list[AcquistionDriver]
+        self._acquistion_ips = []     # type: list[AcquisitionDriver]
         self._trigger_ip = []     # type: list[TriggerGeneratorDriver]
         self._GEN_RF_MAP: Dict[int, Dict[str, Tuple[int, int]]] = {} 
         self._ACQ_RF_MAP: Dict[int, Tuple[int, int]] = {}
@@ -130,7 +130,7 @@ class FIREQ_SoC(Overlay):
             # Classification by driver type
             if isinstance(ip_object, GeneratorDriver):
                 self._generation_ips.append(ip_object)
-            elif isinstance(ip_object, AcquistionDriver):
+            elif isinstance(ip_object, AcquisitionDriver):
                 self._acquistion_ips.append(ip_object)
             elif isinstance(ip_object, TriggerGeneratorDriver):
                 self._trigger_ip.append(ip_object)
@@ -238,7 +238,7 @@ class FIREQ_SoC(Overlay):
 
             {
               "rf": { ... },              # DAC/ADC tiles, sample rate, nyquist, ecc.
-              "acquisitions": [ {...} ],  # one per AcquistionDriver
+              "acquisitions": [ {...} ],  # one per AcquisitionDriver
               "generators":   [ {...} ],  # one per GeneratorDriver
               "triggers":     [ {...} ],  # one per TriggerGeneratorDriver
               "summary": { ... }          # convenient global aggregates
@@ -334,7 +334,7 @@ class FIREQ_SoC(Overlay):
         }
 
         # ------------------------------------------------------------------
-        # AcquistionDrivers: una entry per ciascun IP di readout
+        # AcquisitionDrivers: una entry per ciascun IP di readout
         # ------------------------------------------------------------------
         acquisitions_specs = []
         for idx, acq in enumerate(self._acquistion_ips):
@@ -650,7 +650,7 @@ class FIREQ_SoC(Overlay):
 
     @property
     def acquisitions(self):
-        """List of AcquistionDriver instances."""
+        """List of AcquisitionDriver instances."""
         return list(self._acquistion_ips)
 
     @property
