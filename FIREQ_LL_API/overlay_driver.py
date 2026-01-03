@@ -6,7 +6,7 @@ from typing import Dict, Tuple
 import re
 from ._Parser import FIREQ_parser
 from ._Utils import _FIREQDriver
-from .acquistion_driver import AcquistionDriver
+from .acquisition_driver import AcquistionDriver
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
