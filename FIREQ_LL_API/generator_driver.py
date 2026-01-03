@@ -1,6 +1,6 @@
 from pynq import MMIO
 import numpy as np
-from ._Utils import *
+from ._utils import *
 
 __all__ = ['GeneratorDriver']
 
