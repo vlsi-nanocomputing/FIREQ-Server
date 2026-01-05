@@ -102,7 +102,7 @@ class GeneratorDriver(_FIREQDriver):
         return 0
             
 
-    def write_description(self):
+    def print_description(self):
         print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
         print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")

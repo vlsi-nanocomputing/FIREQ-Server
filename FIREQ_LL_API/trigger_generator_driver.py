@@ -36,7 +36,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # Bit position definition
         self.ManTrigPos = 31
 
-    def write_description(self):
+    def print_description(self):
         print("trigger channels: " + str(self.TriggerChannels))
         print("fifo interface axi depth: " + str(self.FifoInterfaceMemoryDepth))
         print("fifo channel depth: " + str(self.ChannelFifoDepth))

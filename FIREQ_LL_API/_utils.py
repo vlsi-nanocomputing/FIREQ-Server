@@ -13,7 +13,7 @@ class _FIREQDriver(DefaultIP):
     def __init__(self, description):
         super().__init__(description=description)
 
-    def write_description(self):
+    def print_description(self):
         """
         Print the description of the IP
         """

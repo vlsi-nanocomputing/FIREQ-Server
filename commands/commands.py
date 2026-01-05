@@ -5,7 +5,7 @@ VALUE_ERROR = -3        # parameter type or range wrong
 WRONG_IP = -4           # function not preset fo r the IP
 
 
-def write_description(ip=None, *options):
+def print_description(ip=None, *options):
     """
     Print the description of the IP
 

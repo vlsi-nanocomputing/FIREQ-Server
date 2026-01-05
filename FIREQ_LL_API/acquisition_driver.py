@@ -45,7 +45,7 @@ class AcquisitionDriver(_FIREQDriver):
         self.ManTrigPos = 31
         self.AccumulateSelPos = 27
 
-    def write_description(self):
+    def print_description(self):
         print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
         print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
         print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the acquistion (samples/clock cycle)")
