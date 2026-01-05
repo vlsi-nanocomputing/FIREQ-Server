@@ -1,17 +1,22 @@
 from pynq import DefaultIP
 from pynq import MMIO
 import numpy as np
+from typing import TextIO
 
 __all__ = ['_FIREQDriver', '_DebugMMIO', '_get_bit', '_get_bits', '_set_bit', '_set_bits', '_compute_pinc_poff']
 
 class _FIREQDriver(DefaultIP):
+    """
+    Base driver class for FIREQ IP drivers.\n
+    This class provides methods to initialize the axi lite and full interfaces of an IP.
+    """
 
     bindto = []
-    AxiFullInterfaceMMIO = None
-    AxiLiteInterfaceMMIO = None
-
+    
     def __init__(self, description):
         super().__init__(description=description)
+        self.AxiFullInterfaceMMIO = None
+        self.AxiLiteInterfaceMMIO = None
 
     def print_description(self):
         """
@@ -42,17 +47,51 @@ class _FIREQDriver(DefaultIP):
         """
         if self.AxiLiteInterfaceMMIO is None:
             self.AxiLiteInterfaceMMIO = MMIO(base_address, axi_depth)
+    
+    def set_debug_level(self, level : int, axi_lite_file_handler : TextIO, axi_full_file_handler : TextIO | None):
+        """
+        Set the level of debugging on the axi interfaces.
+        
+        :param level: 0 for no debugging, 1 for file logging
+        :type level: int
+        :param axi_lite_file_handler: File where to log the axi lite transactions
+        :type axi_lite_file_handler: TextIO
+        :param axi_full_file_handler: File where to log the axi full transactions
+        :type axi_full_file_handler: TextIO
+        """
+        
+        if level == self.DebugLevel:
+            return 0
+        
+        if level == 0:
+            # no debug
+            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
+            full_mmio = self.AxiFullInterfaceMMIO.replaces
+            del self.AxiLiteInterfaceMMIO
+            del self.AxiFullInterfaceMMIO
+            self.AxiLiteInterfaceMMIO = lite_mmio
+            self.AxiFullInterfaceMMIO = full_mmio
+        elif level == 1:
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, axi_lite_file_handler)
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, axi_full_file_handler)
+        else:
+            return 0
+        
+        self.DebugLevel = level
+        return 0
 
 class _DebugMMIO():
+    """
+    MMIO like class used for debug purposes.\n
+    The intended use is to (completely or partially) replace an MMIO handler to log axi transactions to a file.
+    """
 
-    def __init__(self, replaces, debug_level, file):
+    def __init__(self, replaces : MMIO, debug_level : int, file : TextIO):
         """
-        Init the object
-        
         :param replaces: mmio object that it replaces
         :type replaces: MMIO
         :param file: file handler, to write axi transactions
-        :type file: FILE
+        :type file: TextIO
         """
         self._file_handler = file
         self.replaces = replaces
@@ -60,8 +99,13 @@ class _DebugMMIO():
         self.memory = []
         self.base_addr = self.replaces.base_addr
     
-    def read(self, address):
-
+    def read(self, address : int):
+        """
+        Read a 32 bit unsigned value at a certain address.
+        
+        :param address: Byte aligned address
+        :type address: int
+        """
         if address%4 != 0:
             print("mmio error, read at address not word aligned")
             return 0
@@ -69,8 +113,15 @@ class _DebugMMIO():
             return 0
         return self.memory[address]
     
-    def write(self, address, data):
-
+    def write(self, address : int, data : int):
+        """
+        Write a 32 bit unsigned value (data) at a certain address.
+        
+        :param address: Byte aligned unsigned address
+        :type address: int
+        :param data: 32 bit data
+        :type data: int
+        """
         if address%4 != 0:
             print("mmio error, read at address not word aligned")
             return 0

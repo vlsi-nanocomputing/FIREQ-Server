@@ -82,36 +82,6 @@ class GeneratorDriver(_FIREQDriver):
         super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
         del self.mmio
-    
-    def set_debug_level(self, level : int, file_handler):
-        """
-        Set the level of logging, currently work in progress
-        
-        :param self: Description
-        :param level: Description
-        :type level: int
-        :param file_handler: Description
-        """
-        
-        if level == self.DebugLevel:
-            return 0
-        
-        if level == 0:
-            # no debug
-            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
-            full_mmio = self.AxiFullInterfaceMMIO.replaces
-            del self.AxiLiteInterfaceMMIO
-            self.AxiLiteInterfaceMMIO = lite_mmio
-            del self.AxiFullInterfaceMMIO
-            self.AxiFullInterfaceMMIO = full_mmio
-        elif level == 1:
-            self.AxiFullInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, file_handler)
-            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, file_handler)
-        else:
-            return 0
-        
-        self.DebugLevel = level
-        return 0
             
 
     def print_description(self):
