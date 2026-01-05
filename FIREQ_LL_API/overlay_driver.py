@@ -4,7 +4,7 @@ import xrfclk
 import os
 from typing import Dict, Tuple
 import re
-from ._parser import FIREQ_parser
+from ._fireq_parser import FIREQ_parser
 from ._utils import _FIREQDriver
 from .acquisition_driver import AcquisitionDriver
 from .generator_driver import GeneratorDriver
