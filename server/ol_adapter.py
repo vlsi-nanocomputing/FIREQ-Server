@@ -19,7 +19,7 @@ import logging
 from typing import Any, Dict, List, Optional, Literal
 import numpy as np
 from dataclasses import dataclass
-from FIREQ_LL_API.overlay_driver import FIREQ_SoC
+from FIREQ_LL_API.fireq_soc import FIREQ_SoC
 from .dma_engine import AcquisitionEngine
 from .exceptions import *
 from typing import Any, Callable, Optional, Dict, TypedDict

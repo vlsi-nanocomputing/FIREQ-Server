@@ -13,14 +13,7 @@ from .trigger_generator_driver import TriggerGeneratorDriver
 __all__ = ["FIREQ_SoC"]
 
 
-def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
-    """
-    Initialise the LMK and LMX clocks for the RF-DC hierarchy.
 
-    The radio clocks are required to talk to the RF-DCs and only need
-    to be initialised once per session.
-    """
-    xrfclk.set_ref_clks(lmk_freq=lmk_freq, lmx_freq=lmx_freq)
 
 
 class FIREQ_SoC(Overlay):
@@ -56,7 +49,7 @@ class FIREQ_SoC(Overlay):
 
         # 3) RF clocks initialisation
         if init_clocks:
-            _init_rf_clks()
+            self._init_rf_clks()
 
         # 4) FIREQ IPs lists
         self._generation_ips = []  # type: list[GeneratorDriver]
@@ -94,6 +87,16 @@ class FIREQ_SoC(Overlay):
         self._healthy = True  # if _build_hw_specs did not raise exceptions
         # 8) recomended PL reset
         PL.reset()
+
+    @staticmethod
+    def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
+        """
+        Initialise the LMK and LMX clocks for the RF-DC hierarchy.
+
+        The radio clocks are required to talk to the RF-DCs and only need
+        to be initialised once per session.
+        """
+        xrfclk.set_ref_clks(lmk_freq=lmk_freq, lmx_freq=lmx_freq)
         
 
     # ------------------------------------------------------------------
