@@ -5,12 +5,16 @@ from ._utils import *
 __all__ = ['TriggerGeneratorDriver']
 
 class TriggerGeneratorDriver(_FIREQDriver):
+    """
+    Driver class for the trigger generator IP.
+    Provides methods to set the generation time of pulses and acquisition events.
+    """
 
     bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
     def __init__(self, description):
 
-        super().__init__(description=description)
+        super().__init__(description= description)
         # parse the number of channels of the trigger generator
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
         # parse the fifo interface depth and create mmio handle
@@ -51,6 +55,14 @@ class TriggerGeneratorDriver(_FIREQDriver):
         del self.mmio
     
     def set_debug_level(self, level : int, file_handler):
+        """
+        Set logging level for debug purposes, work in progress.
+        
+        :param self: Description
+        :param level: Description
+        :type level: int
+        :param file_handler: Description
+        """
         
         if level == self.DebugLevel:
             return 0
@@ -96,7 +108,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.MaxHWRepetitions))
             return
 
-        self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value-1))
+        self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value - 1))
 
     def start_experiment(self):
         """
@@ -112,7 +124,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: Literal[1, 0]
         """
         cntr = self.AxiLiteInterfaceMMIO.read(0)
-        if ((cntr&0x40000000) == 0x40000000):
+        if ((cntr & 0x40000000) == 0x40000000):
             return 1
         else:
             return 0
@@ -144,7 +156,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
             return -3
         
         real_delay = (delay - 1) | (generate_trigger << 31)
-        real_address = (channel-1)*self.ChannelFifoDepth + index - 1
+        real_address = (channel - 1)*self.ChannelFifoDepth + index - 1
         self.AxiFullInterfaceMMIO.write(real_address*4, int(real_delay))
         return 0
     
@@ -159,6 +171,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error, channel selection out of range")
             return -3
         # write inc LOW
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_l + (channel-1)*2)*4, delay & 0xFFFFFFFF)
+        self.AxiLiteInterfaceMMIO.write((self.readout_delay_l + (channel - 1)*2)*4, delay & 0xFFFFFFFF)
         # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_h + (channel-1)*2)*4, delay >> 32)
+        self.AxiLiteInterfaceMMIO.write((self.readout_delay_h + (channel - 1)*2)*4, delay >> 32)
