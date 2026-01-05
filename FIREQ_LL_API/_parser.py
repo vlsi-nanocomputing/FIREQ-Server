@@ -2,25 +2,35 @@ import xml.etree.ElementTree as ET
 
 __all__ = ['FIREQ_parser']
 
+# stings found in .hwh file that define a module as a master for a certain axi connection
 MASTER_TYPE_LIST = ['MASTER', 'INITIATOR']
+# names of ips that are considered to be transparent to a master slave connection for our purposes
 PASS_THROUGH_MODULES = ['xilinx.com:ip:axis_dwidth_converter:', 'xilinx.com:ip:axis_data_fifo:', 'xilinx.com:ip:axis_register_slice:', 'xilinx.com:ip:axis_switch:']
 
 class FIREQ_parser:
-
-    _FilePath = ""
+    """
+    FIREQ parser class, used to parse the .hwh file to retrive module connectivity and memory mappings.
+    """
 
     def __init__ (self, HWHFile : str):
-
-        # set filepath
+        # set .hwh file path
         self._FilePath = HWHFile
-        # set tree
+        # generate a tree from file (xml)
         self._Tree = ET.parse(HWHFile)
-        # set root
+        # get the tree root
         self._Root = self._Tree.getroot()
-        # find the modules 
+        # find all modules (IPs) in the design
         self._Modules = self._Root.find('MODULES')
 
     def _GetModule(self, module_name : str):
+        """
+        Get the xml description of the IP named by module_name.
+        
+        :param module_name: IP instance name given in vivado block diagram
+        :type module_name: str
+        :return: xml element defining the IP or None if no ips were found
+        :rtype: xml.etree.ElementTree.Element | None
+        """
 
         # find the module
         for module in self._Modules:
@@ -38,13 +48,15 @@ class FIREQ_parser:
         
         :param module: Child object of xml file with tag MODULE
         :type module: xml.etree.ElementTree.Element
+        :return: Dictionary with bus name as key and dictionary description of bus as item
+        :rtype: dict[str, dict[str, str]]
         """
         return_dict = {}
         # get the axi bus interfaces for this module
-        thisModuleBusInterfaces = module.find('BUSINTERFACES')
+        module_bus_interfaces = module.find('BUSINTERFACES')
         
         # parse the bus interfaces
-        for businterface in thisModuleBusInterfaces.iter('BUSINTERFACE'):
+        for businterface in module_bus_interfaces.iter('BUSINTERFACE'):
             busname = businterface.attrib['BUSNAME']
             return_dict[busname] = businterface.attrib.copy()
             del return_dict[busname]['BUSNAME']
