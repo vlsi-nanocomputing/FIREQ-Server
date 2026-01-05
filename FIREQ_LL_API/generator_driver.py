@@ -5,13 +5,17 @@ from ._utils import *
 __all__ = ['GeneratorDriver']
 
 class GeneratorDriver(_FIREQDriver):
+    """
+    Driver class for the generator IP.\n
+    Provides methods to set up envelopes, pulse sequences, readout pulse and modulation frequency and phase.
+    """
 
     bindto = ['user.org:user:axisGeneratorIP:2.0']
     
    
     def __init__(self, description):
 
-        super().__init__(description=description)
+        super().__init__(description= description)
 
         # a dictionary that stores useful data about the envelopes that have been written to 
         # the envelope memory
@@ -80,6 +84,14 @@ class GeneratorDriver(_FIREQDriver):
         del self.mmio
     
     def set_debug_level(self, level : int, file_handler):
+        """
+        Set the level of logging, currently work in progress
+        
+        :param self: Description
+        :param level: Description
+        :type level: int
+        :param file_handler: Description
+        """
         
         if level == self.DebugLevel:
             return 0
@@ -446,7 +458,7 @@ class GeneratorDriver(_FIREQDriver):
         Important note: symmetric waves should have an odd number of samples and only half of the samples
         (including the center sample) should be passed to this function. \n
         Warning: the values in the array should be representable in int16, if not they will be saturated 
-        to the maximum or negative value.
+        to the maximum or negative value (values must be within -2^15 and +2^15-1).
         
         :param envelope_samples: complex array of samples, real and imaginary part used as I/Q values
         :type envelope_samples: complex int16 numpy array
@@ -572,10 +584,10 @@ class GeneratorDriver(_FIREQDriver):
         real_gain = 0
         if (gain < 0):
             invert = True
-            real_gain = round(-gain*(2**self.SampleSize-1))
+            real_gain = round(-gain*(2**self.SampleSize - 1))
         else: 
             invert = False
-            real_gain = round(gain*(2**self.SampleSize-1))
+            real_gain = round(gain*(2**self.SampleSize - 1))
 
         real_duration = 0
         natural_envelope_duration = 0
