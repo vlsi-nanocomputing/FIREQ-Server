@@ -5,31 +5,34 @@ from ._utils import *
 __all__ = ['AcquisitionDriver']
 
 class AcquisitionDriver(_FIREQDriver):
+    """
+    Driver class that controls the FIREQ Acquisition IP.
+    Provides methods to define acquisition behaviour and output type (when applicable).
+    """
 
     bindto = ['user.org:user:axisAcquistionIP:1.0']
 
     def __init__(self, description):
         super().__init__(description=description)
-        # maximum acquistion duration
+        # maximum acquistion duration in clock cycles
         self.DurationWidth = int(description["parameters"]["DurationWidth"])
         self.MaximumDuration = pow(2,self.DurationWidth)
-        # size of the samples
+        # size of the samples in bits
         self.SampleSize = int(description["parameters"]["SampleSize"])
-        # parallelism of the acquistion
+        # parallelism of the acquistion in number of samples
         self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
         self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
-        # depth of the phase increment and offset
+        # depth of the phase increment and offset in bits
         self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
         # number of triggers on the input trigger channel
         self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
-        # maximum time of flight delay
+        # maximum time of flight delay in clock cycles
         self.TimeOfFlightWidth = int(description["parameters"]["TimeOfFlightCounterWidth"])
         self.TimeOfFlightMax = pow(2,self.TimeOfFlightWidth)
-        # not decimated output width
+        # not decimated output width in bits
         self.NDCMT_OutputWidth = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
-        # decimated output width
+        # decimated output width in bits
         self.DCMT_OutputWidth = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
-
 
         # Reg definition
         self.ctrl = 0
@@ -56,6 +59,9 @@ class AcquisitionDriver(_FIREQDriver):
         del self.mmio
     
     def set_debug_level(self, level : int, file_handler):
+        """
+        Set debug level, currently work in progress
+        """
         
         if level == self.DebugLevel:
             return 0
@@ -86,6 +92,7 @@ class AcquisitionDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
+
         # check inputs
         if(frequency < 0):
             print("input parameters out of range")
@@ -115,6 +122,7 @@ class AcquisitionDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
+
         # write inc LOW
         self.AxiLiteInterfaceMMIO.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
@@ -131,6 +139,7 @@ class AcquisitionDriver(_FIREQDriver):
         """
         trigger the acquisition manually
         """
+
         ormask = 0x80000000
         cntr = self.AxiLiteInterfaceMMIO.read(0) | ormask
         self.AxiLiteInterfaceMMIO.write(0,cntr)
@@ -146,7 +155,6 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
         
-        # TODO: check if this is correct in terms of the actual size of acquistion
         if (duration < 1 or duration > self.MaximumDuration):
             print("acquistion duration is out of range")
             return -3
@@ -184,7 +192,7 @@ class AcquisitionDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        # TODO: check if this is correct in terms of the actual time of flight
+
         if (time_of_flight < 1 or time_of_flight > self.TimeOfFlightMax):
             print("time of flight is out of range")
             return -3
