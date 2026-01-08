@@ -1,4 +1,4 @@
-# file: fireq_orchestrator/hardware/exceptions.py
+# file: fireq-utils/server/exceptions.py
 """
 Custom exceptions for the hardware layer.
 

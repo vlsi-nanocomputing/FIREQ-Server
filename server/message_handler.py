@@ -1,0 +1,1339 @@
+#file: fireq-utils/server/message_handler.py
+"""
+Server-side message orchestration for FIREQ experiments.
+
+This module translates high-level JSON-like experiment configurations into concrete
+hardware actions through an adapter (``OL_adapter``). It provides:
+
+- Result containers to standardize success/error reporting.
+- Sweep utilities for variable substitution and point generation.
+- Specialized handlers (status/reset/envelope/wave) to isolate concerns.
+- A high-level ``MessageHandler`` that executes single experiments and optimized sweeps.
+
+Design intent
+-------------
+The code favors execution stages (upload -> compile -> configure -> run),
+and uses a sweep "fast path" to reduce repeated reconfiguration when only numeric parameters
+change between points. Instead of reconfigure each IP for every sweeping point, the idea is to 
+reconfigure only that specific parameters actually changing, to speed up execution.
+"""
+
+import logging
+import numpy as np
+from typing import Any, Callable, Dict, List, Optional, Set
+from dataclasses import dataclass
+from itertools import product
+from threading import Event
+
+# ====================================================
+#        DATA STRUCTURES 
+# ====================================================
+
+@dataclass
+class HardwareStatusResult:
+    """
+    Structured status snapshot for a single generator.
+
+    This is an object meant to return user-friendly status queries.
+    
+    Invariants
+    ----------
+    - When ``ok`` is True, the fields ``envelopes`` and ``waves_count`` reflect the current
+    generator caches, and ``hw_summary`` is included for context/debugging.
+    - When ``ok`` is False, ``error`` contains a human-readable failure reason and other
+    fields may be partial defaults.
+
+    Notes
+    -----
+    The payload is intentionally JSON-friendly: it is designed to be sent over a network
+    OR logged without carrying heavy binary buffers.
+    """
+
+    ok: bool
+    gen_index: int
+    envelopes: List[str]
+    waves_count: int
+    readout_wave: Optional[dict] = None
+    hw_summary: Optional[dict] = None
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """
+        Convert to dictionary for JSON serialization.
+        :return: Dict representation of the status.
+        :rtype: dict
+        """
+        # Keep the status payload JSON-safe and lightweight with summaries only.
+
+        return {
+            "ok": self.ok,
+            "gen_index": self.gen_index,
+            "envelopes": self.envelopes,
+            "waves_count": self.waves_count,
+            "readout_wave": self.readout_wave,
+            "hw_summary": self.hw_summary,
+            "error": self.error
+        }
+
+@dataclass
+class ResetResult:
+    """
+    Outcome of a reset operation on a generator-owned memory region.
+
+    Reset operations are used to recover from stale state (e.g., compiled waves referring
+    to removed envelopes) or to enforce a clean execution environment for a new session.
+
+    Fields
+    ------
+    - ``action`` identifies the reset type (e.g., wave_reset, envelope_reset).
+    - ``details`` contains adapter-specific metadata for debugging (kept optional).
+    """
+
+    ok: bool
+    gen_index: int
+    action: str
+    details: dict
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """
+        Convert to dictionary for JSON serialization.
+        :return: Dict representation of the reset outcome.
+        :rtype: dict
+        """
+        return {
+            "ok": self.ok,
+            "gen_index": self.gen_index,
+            "action": self.action,
+            "details": self.details,
+            "error": self.error
+        }
+
+@dataclass
+class EnvelopeResult:
+    """
+    Result of an envelope upload stage.
+
+    The upload stage is separated from wave compilation because envelopes should be reused
+    across many experiments/sweep points, and transferring large sample arrays is
+    expensive compared to referencing cached envelope names.
+    """
+
+    ok: bool
+    result: Dict[int, Dict[str, List[str]]]  # {gen_idx: {loaded, skipped, failed}}
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """
+        Convert to dictionary for JSON serialization.
+        :return: Dict representation of the upload result.
+        :rtype: dict
+        """
+        return {
+            "ok": self.ok,
+            "result": {str(k): v for k, v in self.result.items()},
+            "error": self.error
+        }
+
+@dataclass
+class WaveResult:
+    """
+    Result of a wave compilation stage.
+
+    Wave compilation resolves references (e.g., envelope names) and produces/updates the
+    hardware-side "wave definition words" (WDWs). On failure, ``error`` should explain
+    the first blocking issue (e.g., missing envelope), and ``payload`` may contain per-gen
+    details useful for debugging.
+    """
+
+    ok: bool
+    payload: Dict[int, Dict[str, List[str]]]  # {gen_idx: {waves, replaced, skipped, failed}}
+    error: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        """
+        Convert to dictionary for JSON serialization.
+        :return: Dict representation of the compilation result.
+        :rtype: dict
+        """
+        return {
+            "ok": self.ok,
+            "payload": {str(k): v for k, v in self.payload.items()},
+            "error": self.error
+        }
+
+@dataclass
+class ExperimentResult:
+    """
+    Result of a single experiment execution.
+
+    This encapsulates the end-to-end outcome of ``MessageHandler.run()``:
+    - optional preparation steps (envelope upload, wave compilation),
+    - hardware configuration (generators/acquisitions/trigger),
+    - acquisition execution and returned samples.
+
+    ``config_log`` is designed as a review/debug aid: it captures high-level applied
+    settings without requiring access to hardware internals.
+    """
+
+    ok: bool
+    data: Optional[Dict[int, np.ndarray]] = None
+    error: Optional[str] = None
+    config_log: Optional[List[str]] = None
+    
+    def to_dict(self) -> dict:
+        """
+        Convert result to dictionary, formatting NumPy arrays for JSON.
+        :return: Dict with I/Q data and execution logs.
+        :rtype: dict
+        """
+        d = {"ok": self.ok}
+        if self.ok and self.data is not None:
+            d["data"] = {}
+            for adc_idx, arr in self.data.items():
+                if arr is not None:
+                    d["data"][adc_idx] = {
+                        "I": np.real(arr).tolist(),
+                        "Q": np.imag(arr).tolist()
+                    }
+        if self.error:
+            d["error"] = self.error
+        if self.config_log:
+            d["config_log"] = self.config_log
+        return d
+
+@dataclass
+class SweepPointResult:
+    """
+    Result emitted for each sweep point.
+
+    The sweep loop reports progress incrementally through ``on_point`` so the caller can
+    either stream the result or collect them in larger chunks.
+
+    ``point`` stores the resolved variable values (already cast to int/float as required).
+    """
+
+    point_index: int
+    n_total: int
+    variables: Dict[str, Any]
+    data: Dict[int, np.ndarray]
+    
+    def to_dict(self) -> dict:
+        d = {
+            "point_index": self.point_index,
+            "n_total": self.n_total,
+            "variables": self.variables,
+            "data": {}
+        }
+        for adc_idx, arr in self.data.items():
+            if arr is not None:
+                d["data"][adc_idx] = {
+                    "I": np.real(arr).tolist(),
+                    "Q": np.imag(arr).tolist()
+                }
+        return d
+
+@dataclass 
+class SweepStatus:
+    """
+    Final sweep summary.
+
+    This is the "end-of-run" status of ``MessageHandler.run_sweep()`` and is meant to be
+    small and robust: it reports whether the sweep completed successfully, how many points
+    were requested vs completed, and the first blocking error if any.
+    """
+
+    ok: bool
+    sweep_id: str
+    n_points: int
+    n_completed: int
+    error: Optional[str] = None
+    
+    def to_dict(self) -> dict:
+        return {
+            "ok": self.ok,
+            "sweep_id": self.sweep_id,
+            "n_points": self.n_points,
+            "n_completed": self.n_completed,
+            "error": self.error
+        }
+
+# ====================================================
+#                 SWEEP HELPERS
+# ====================================================
+
+def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[str, Set[str]]:
+    """
+    Discover where sweep variables are used inside a nested config structure.
+
+    A "variable use" is detected when a string equals ``"$<name>"`` where ``name`` is
+    one of ``var_names``. The function returns a mapping:
+
+        var_name -> set(paths)
+
+    where each path is a dot-separated string that may include list indices, e.g.
+    ``"generators.0.frequency_mhz"``.
+
+    Motivation
+    ---------
+    This function has optimization and speed up purposes.
+    These paths are recomputed so the "sweep fast-path" can selectively reconfigure only
+    the hardware blocks impacted by the variables, instead of re-running the full setup.
+
+    :param obj: Arbitrary nested structure (dict/list/scalars) representing the base config.
+    :type obj: Any
+    :param var_names: Variable names without the ``$`` prefix.
+    :type var_names: set[str]
+    :param path: Internal recursion state (do not set manually).
+    :type path: str
+    :return: Map from variable name to the set of config paths where it appears.
+    :rtype: dict[str, set[str]]
+    """
+
+    out: Dict[str, Set[str]] = {v: set() for v in var_names}
+
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            new_path = f"{path}.{key}" if path else key
+            sub = find_variable_paths(value, var_names, new_path)
+            for v in var_names:
+                out[v].update(sub[v])
+
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            sub = find_variable_paths(item, var_names, f"{path}.{i}")
+            for v in var_names:
+                out[v].update(sub[v])
+    
+    # DESIGN NOTE:
+    # Variables are represented as JSON-serializable strings ("$NAME") so that:
+    # - configs remain portable (no Python-only objects),
+    # - sweep substitution is explicit and inspectable,
+    # - the same config can be logged/transmitted without custom encoders.
+    elif isinstance(obj, str):
+        clean_val = obj.lstrip("$")
+        if clean_val in var_names:
+            out[clean_val].add(path)
+
+    return out
+
+
+def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
+    """
+    Classify whether generators/acquisitions/trigger require reconfiguration in a sweep.
+
+    The returned dict is used to decide whether the sweep loop can use a selective setup
+    for subsequent points, or whether a full reconfiguration is needed.
+
+    :param variable_paths: Flattened set of dot-paths where variables appear.
+    :type variable_paths: set[str]
+    :return: Flags indicating which subsystems are affected by the sweep variables.
+    :rtype: dict[str, bool]
+    """
+
+    return {
+        "generator": any(p.startswith("generators") for p in variable_paths),
+        "acquisition": any(p.startswith("acquisitions") for p in variable_paths),
+        "trigger": any(p.startswith("trigger") for p in variable_paths),
+        "waves": any(p.startswith("waves") for p in variable_paths),  
+    }
+
+def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
+    """
+    Create a point-specific config by replacing variable placeholders.
+
+    This replaces any string leaf equal to ``"$VAR"`` with ``point["VAR"]``.
+
+    Safety / expectations
+    ---------------------
+    - Intended for numeric fields (timings, gains, frequencies, etc.).
+    - The base config should not use ``$``-prefixed strings for unrelated purposes,
+    otherwise they will be substituted.
+
+    :param config: Base experiment configuration containing ``"$VAR"`` placeholders.
+    :type config: dict
+    :param point: Concrete variable assignment for one sweep point.
+    :type point: dict[str, Any]
+    :return: New config dict with placeholders replaced (original ``config`` unchanged).
+    :rtype: dict
+    """
+
+    def substitute(obj):
+        if isinstance(obj, dict):
+            return {k: substitute(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [substitute(item) for item in obj]
+        elif isinstance(obj, str):
+            clean_val = obj.lstrip("$")
+            if clean_val in point:
+                return point[clean_val]
+            return obj
+        return obj
+    
+    return substitute(config)  
+
+def generate_sweep_points(
+    variables: List[dict],
+    mode: str = "cartesian",
+    var_cast: Optional[Dict[str, str]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Generate the list of sweep points from variable specifications.
+
+    Supported variable formats
+    --------------------------
+    Each variable spec supports either:
+    - explicit list: ``{"name": "X", "values": [...]}`` , or
+    - linspace spec: ``{"name": "X", "start": a, "stop": b, "num": n}``.
+
+    Casting policy
+    --------------
+    The ``var_cast`` mapping controls whether each variable is coerced to int or float.
+    This is critical because some hardware fields are discrete (cycle counts, indices)
+    while others are continuous (gain, phase, frequency).
+
+    Sweep modes
+    -----------
+    - ``cartesian``: full Cartesian product of all variable values.
+    - ``zipped``: point-wise zip; all variables must produce the same number of values.
+
+    Example 
+    Given two variables to sweep, said x with points [1, 2, 3] and y with [a, b, c].
+    - "Cartesian": sweep all the 9 "xy" possible configurations : 
+        [(1,a) , (1, b), (1,c),
+         (2,a) , (2, b), (2,c),
+         (1,a) , (1, b), (1,c) ]
+    - "zipped" : pointwise sweep (Cartesian-mode main diagonal)
+        [(1,a), (2,b) , (3,c)]
+
+    :param variables: List of variable specifications.
+    :type variables: list[dict]
+    :param mode: "cartesian" or "zipped".
+    :type mode: str
+    :param var_cast: Map ``var_name -> "int"|"float"`` to enforce HW-appropriate types.
+    :type var_cast: dict[str, str]
+    :return: List of points; each point is ``{var_name: value}``.
+    :rtype: list[dict[str, Any]]
+    :raises ValueError: If ``mode`` is unknown or zipped lengths are inconsistent.
+    """
+
+    if not variables:
+        return [{}]
+
+    var_cast = var_cast or {}
+
+    var_names = [v["name"] for v in variables]
+    var_values: List[List[Any]] = []
+
+    for v in variables:
+        name = v["name"]
+        kind = var_cast.get(name, "float")  # "int" or "float"
+
+        
+        if "values" in v:
+            vals = v["values"]
+            if kind == "int":
+                vals = [int(np.rint(x)) for x in vals]
+            elif kind == "float":
+                vals = [float(x) for x in vals]
+            else:
+                vals = list(vals)
+            var_values.append(vals)
+            continue
+
+        # Nuova spec: server-side linspace
+        start = v["start"]
+        stop = v["stop"]
+        num = int(v["num"])
+        space = v.get("space", "lin")
+
+        if space != "lin":
+            raise ValueError(f"Unknown/unsupported space='{space}' for variable '{name}'")
+
+        axis = np.linspace(start, stop, num)
+
+        if kind == "int":
+            axis = np.rint(axis).astype(int)   # round all'intero più vicino
+            vals = axis.tolist()
+        else:
+            vals = axis.astype(float).tolist()
+
+        var_values.append(vals)
+
+    # DESIGN NOTE:
+    # cartesian explores the full combinatorial space; zipped enforces aligned dimensions.
+    # Use both because they map to distinct experimental intents (grid search vs coordinated scan).
+    if mode == "cartesian":
+        return [dict(zip(var_names, combo)) for combo in product(*var_values)]
+    elif mode == "zipped":
+        return [dict(zip(var_names, values)) for values in zip(*var_values)]
+    else:
+        raise ValueError(f"Unknown sweep mode: {mode}")
+   
+# ====================================================
+#              SPECIALIZED HANDLERS
+# ====================================================
+
+class StatusHandler:
+    """
+    Status/inspection API over the hardware adapter.
+
+    This handler exists to keep read-only operations separate from experiment execution,
+    so status calls remain safe and do not accidentally mutate hardware state.
+
+    It also caches the hardware summary because it is assumed immutable at runtime and
+    is frequently used for handshake/status responses (e.g. opening single-client connections many times).
+    """
+
+
+    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+        self.adapter = adapter
+        self.logger = logger or logging.getLogger(__name__)
+        # Cache hardware summary: expected immutable at runtime and frequently reused (handshake/status).
+        self._hw_summary = adapter._summary
+    
+    @property
+    def hw_summary(self) -> dict:
+        """Hardware summary for handshake."""
+        return self._hw_summary
+    
+    @property
+    def num_generators(self) -> int:
+        return self._hw_summary.get("num_generators", 0)   
+
+    @property
+    def num_acquisitions(self) -> int:
+        return self._hw_summary.get("num_acquisitions", 0)   
+    
+    def get_all_generators_status(self) -> List[dict]:
+        """
+        Get status for ALL generators in one call.
+        Useful for 'status' command without manual iteration.
+        """
+        statuses = []
+        for gen_idx in range(self.num_generators):
+            status = self.get_gen_status(gen_idx)
+            statuses.append(status.to_dict())
+        return statuses
+    
+    def get_gen_status(self, gen_index: int) -> HardwareStatusResult:
+        """
+        Retrieve the current state of a specific generator from hardware and cache.
+        :param gen_index: Target generator index.
+        :type gen_index: int
+        :return: Structured hardware status.
+        :rtype: HardwareStatusResult
+        """
+        try:
+            envelopes = self.adapter.get_envelope_names(gen_index)
+            # Expose only high-level cache metadata (counts/names), not samples.
+            wave_cache = self.adapter.get_wave_cache(gen_index)
+            readout_wave = self.adapter.get_readout_wave_cache(gen_index)
+            
+            ro_dict = readout_wave.__dict__ if readout_wave else None
+
+            return HardwareStatusResult(
+                ok=True,
+                gen_index=gen_index,
+                envelopes=envelopes,
+                waves_count=len(wave_cache),
+                readout_wave=ro_dict,
+                hw_summary=self.adapter._summary
+            )
+        except Exception as e:
+            self.logger.error(f"Status check failed for gen {gen_index}: {e}")
+            return HardwareStatusResult(ok=False, gen_index=gen_index, envelopes=[], waves_count=0, error=str(e))
+
+    def get_system_info(self) -> dict:
+        """Return hardware summary for handshake/status."""
+        return self.adapter._summary
+
+class ResetHandler:
+    """
+    Recovery-oriented reset operations for generator-owned memories.
+
+    Separating reset logic from the main execution path makes it explicit the operation
+    of discarding cached state (waves/envelopes) and why. This is useful both for safety
+    and for reviewability.
+    """
+
+
+    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the ResetHandler.
+        :param adapter: OL_adapter instance.
+        :type adapter: OL_adapter
+        """
+        self.adapter = adapter
+        self.logger = logger or logging.getLogger(__name__)
+
+    def reset_waves(self, gen_index: int, preserve_specs: bool = True) -> ResetResult:
+        """
+        Reset wave memory for a generator.
+        :param gen_index: Target generator index.
+        :type gen_index: int
+        :param preserve_specs: If True, keeps definitions but invalidates compiled WDWs.
+        :type preserve_specs: bool
+        :return: Outcome of the wave reset.
+        :rtype: ResetResult
+        """
+        try:
+            res = self.adapter.reset_wave_memory(
+                gen_index=gen_index, 
+                # "preserve_specs" keeps logical wave definitions while invalidating compiled artifacts (WDWs).
+                # This enables fast recompilation without forcing the client to rebuild the full registry.
+                preserve_specs=preserve_specs
+            )
+            return ResetResult(ok=True, gen_index=gen_index, action="wave_reset", details=res)
+        except Exception as e:
+            return ResetResult(ok=False, gen_index=gen_index, action="wave_reset", details={}, error=str(e))
+
+    def reset_envelopes(self, gen_index: int) -> ResetResult:
+        """
+        Reset envelope memory for a generator.
+        :param gen_index: Target generator index.
+        :type gen_index: int
+        :return: Outcome of the envelope reset.
+        :rtype: ResetResult
+        """
+        try:
+            res = self.adapter.reset_envelopes(gen_index=gen_index)
+            return ResetResult(ok=True, gen_index=gen_index, action="envelope_reset", details=res)
+        except Exception as e:
+            return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
+
+    def reset_all_generators(self, preserve_wave_specs: bool = False) -> List[ResetResult]:
+        """
+        Reset waves and envelopes for ALL generators.
+        Returns list of results (one per generator).
+        """
+        results = []
+        num_gens = self.adapter._summary.get("num_generators", 0)  
+        for gen_idx in range(num_gens):
+            wave_res = self.reset_waves(gen_idx, preserve_specs=preserve_wave_specs)
+            env_res = self.reset_envelopes(gen_idx)
+            results.append({
+                "gen_index": gen_idx,
+                "waves": wave_res.to_dict(),
+                "envelopes": env_res.to_dict()
+            })
+        
+        return results
+    
+class EnvelopeHandler:
+    """
+    Envelope upload handler.
+
+    Envelopes can be large (sample arrays) and are expensive to transfer. This
+    stage is thus isolated so experiments and sweep points can reuse already-uploaded envelopes
+    by name, minimizing I/O and latency.
+    """
+
+
+    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the EnvelopeHandler.
+        :param adapter: OL_adapter instance.
+        :type adapter: OL_adapter
+        """
+        self.adapter = adapter
+        self.logger = logger or logging.getLogger(__name__)
+
+    def upload(self, config: dict) -> EnvelopeResult:
+        """
+        Process the 'envelopes' section of the configuration.
+        :param config: Dictionary containing envelope specifications.
+        :type config: dict
+        :return: Detailed result of the upload process.
+        :rtype: EnvelopeResult
+        """
+        result: Dict[int, Dict[str, List[str]]] = {}
+        
+        try:
+            envelopes_cfg = config.get("envelopes", {})
+            for gen_idx, envelopes in envelopes_cfg.items():
+                gen_idx_int = int(gen_idx)
+
+                # Upload is separated from compilation so 
+                # large envelope buffers are transferred at most once per session.
+                res = self.adapter.upload_envelopes(
+                    gen_index=gen_idx_int,
+                    envelopes=envelopes,
+                    auto_pad_noninterp=True
+                )
+
+                # Build per-generator result
+                gen_result = {
+                    "loaded": res.get("loaded", []),
+                    "skipped": res.get("skipped", []),
+                    "failed": []
+                }
+                
+                if res.get("failed"):
+                    gen_result["failed"] = [f"{f['name']}: {f['error']}" for f in res["failed"]]
+                    error_msg = f"Failed envelopes on gen {gen_idx}: {', '.join(gen_result['failed'])}"
+                    self.logger.error(error_msg)
+                    result[gen_idx_int] = gen_result
+                    return EnvelopeResult(ok=False, result=result, error=error_msg)
+                
+                result[gen_idx_int] = gen_result
+                self.logger.info(f"Gen {gen_idx}: loaded={gen_result['loaded']}, skipped={gen_result['skipped']}")
+
+            return EnvelopeResult(ok=True, result=result)
+        except Exception as e:
+            self.logger.exception("Envelope upload failed")
+            return EnvelopeResult(ok=False, result=result, error=str(e))
+
+class WaveHandler:
+    """
+    Wave compilation handler.
+
+    This stage resolves envelope references and produces generator-side compiled wave
+    descriptors. It is isolated because compilation failures should be reported with
+    clear per-generator diagnostics.
+    """
+
+
+    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the WaveHandler.
+        :param adapter: OL_adapter instance.
+        :type adapter: OL_adapter
+        """
+        self.adapter = adapter
+        self.logger = logger or logging.getLogger(__name__)
+
+    def compile(self, config: dict) -> WaveResult:
+        """
+        Process the 'waves' section of the configuration.
+        :param config: Dictionary containing wave definitions.
+        :type config: dict
+        :return: Detailed result of the compilation.
+        :rtype: WaveResult
+        """
+        payload: Dict[int, Dict[str, List[str]]] = {}
+        
+        try:
+            waves_cfg = config.get("waves", {})
+            for gen_idx, waves in waves_cfg.items():
+                gen_idx_int = int(gen_idx)
+                res = self.adapter.compile_waves(
+                    gen_index=gen_idx_int,
+                    waves=waves,
+                    replace=True
+                )
+
+                # Build per-generator payload
+                gen_payload = {
+                    "waves": [w.get("wave_id") for w in res.get("waves", [])],
+                    "replaced": res.get("replaced", []),
+                    "skipped": res.get("skipped", []),
+                    "failed": []
+                }
+
+                # Fail fast on missing dependencies (e.g., missing envelope) to avoid running partially-defined hardware state.
+                if res.get("failed"):
+                    gen_payload["failed"] = [f"{f['wave_id']}: {f['error']}" for f in res["failed"]]
+                    error_msg = f"Compilation failed on gen {gen_idx}: {', '.join(gen_payload['failed'])}"
+                    payload[gen_idx_int] = gen_payload
+                    return WaveResult(ok=False, payload=payload, error=error_msg)
+                
+                payload[gen_idx_int] = gen_payload
+                self.logger.info(f"Gen {gen_idx}: compiled={gen_payload['waves']}, replaced={gen_payload['replaced']}")
+
+            return WaveResult(ok=True, payload=payload)
+        except Exception as e:
+            self.logger.exception("Wave compilation failed")
+            return WaveResult(ok=False, payload=payload, error=str(e))
+
+# ====================================================
+#              MAIN MESSAGE ORCHESTRATOR
+# ====================================================
+
+class MessageHandler:
+    """
+    High-level orchestrator for FIREQ experiment execution.
+
+    This class provides two main entry points:
+    - ``run``: execute a single experiment end-to-end.
+    - ``run_sweep``: execute a multi-point sweep with an optimized "fast path".
+
+    Architecture
+    ------------
+    The handler composes specialized sub-handlers (status/reset/envelope/wave) to keep
+    responsibilities separated.
+
+    Sweep "fast-path" contract
+    ------------------------
+    The sweep optimizer assumes that the *structure* of the experiment is unchanged across
+    points (same number of generators/acquisitions, same routing/topology). Only numeric
+    leaf parameters change via sspecific, early-declared variables.
+    """
+
+    def __init__(self, adapter, *, logger: Optional[logging.Logger] = None):
+        """
+        Initialize the orchestrator and its specialized sub-handlers.
+
+        Sub-handlers are built once so they can reuse cached adapter information.
+
+        :param adapter: Hardware adapter implementing the FIREQ control surface.
+        :type adapter: OL_adapter
+        :param logger: Optional logger used across all sub-handlers for consistent tracing.
+        :type logger: logging.Logger | None
+        """
+
+        self.adapter = adapter
+        self.logger = logger or logging.getLogger(__name__)
+        
+        # Composition: specialized custom handlers are initialized here
+        self.status_h = StatusHandler(adapter, self.logger)
+        self.reset_h = ResetHandler(adapter, self.logger)
+        self.env_h = EnvelopeHandler(adapter, self.logger)
+        self.wave_h = WaveHandler(adapter, self.logger)
+
+    # =========================================================================
+    #           EXPERIMENT EXECUTION METHODS
+    # =========================================================================
+
+    def run(self, config: dict) -> ExperimentResult:
+        """
+        Execute a single experiment configuration.
+
+        Execution stages
+        ----------------
+        1) Optional memory preparation:
+        - upload envelopes (if present)
+        - compile waves (if present)
+
+        2) Hardware configuration:
+        - configure generators
+        - configure acquisitions
+        - configure trigger routing
+        3) Acquisition run and data return.
+
+        Partial configs
+        ---------------
+        The method supports partial configs to enable reuse of previously uploaded/compiled
+        state. For example, omitting ``"envelopes"`` assumes they are already present on the
+        hardware session. 
+
+        :param config: Full or partial experiment configuration dictionary.
+        :type config: dict
+        :return: ExperimentResult with acquired data on success, or error info on failure.
+        :rtype: ExperimentResult
+        """
+
+        # Intentionally collect a concise, human-readable config_log instead of dumping full configs.
+        # This supports reproducibility and debugging without logging large buffers or
+        # device-specific internals that would make reviews "noisy" and non-portable.
+        log = []
+        
+        try:
+            # Stage 1: preparation steps, kept modular to allow caching across runs.
+            # Preparation stages are optional by design to enable caching across runs:
+            # - envelopes can be uploaded once and referenced by name;
+            # - waves can be compiled once and reused as long as their dependencies do not change.
+            # This keeps latency and bandwidth bounded when running repeated experiments.
+
+            if "envelopes" in config:
+                res = self.env_h.upload(config)
+                if not res.ok: raise Exception(f"Envelope preparation failed: {res.error}")
+            
+            if "waves" in config:
+                res = self.wave_h.compile(config)
+                if not res.ok: raise Exception(f"Wave compilation failed: {res.error}")
+            
+            # # Stage 2: IPs configuration
+            for gen_cfg in config.get("generators", []):
+                self._setup_generator(gen_cfg, log)
+            
+            for acq_cfg in config.get("acquisitions", []):
+                self._setup_acquisition(acq_cfg, log)
+            
+            trigger_cfg = config.get("trigger", {})
+            self._setup_trigger(trigger_cfg, log)
+            
+            # 3. run the experiment and acquire data
+            data = self._run_acquisition(config, log)
+            
+            return ExperimentResult(ok=True, data=data, config_log=log)
+            
+        except Exception as e:
+            self.logger.exception("Experiment execution sequence aborted")
+            return ExperimentResult(ok=False, error=str(e), config_log=log)
+
+    def run_sweep(
+        self,
+        msg: dict,
+        on_point: Callable[[SweepPointResult], None],
+        stop_event: Optional[Event] = None
+    ) -> SweepStatus:
+        """
+        Execute a multi-point sweep with an optimized "fast path".
+
+        High-level algorithm
+        --------------------
+        - Parse sweep definition (base config + variables + mode).
+        - Detect where variables appear in the config (paths).
+        - Per-variable casting (int vs float) based on affected HW fields.
+        - Run the first point with full preparation + full configuration.
+        - Enter sweep mode (``adapter.prepare_sweep``) and for remaining points:
+        selectively reconfigure only affected subsystems, then acquire.
+
+        Key assumption
+        --------------
+        All sweep points share the same experiment topology (same generators/acquisitions/trigger
+        structure). Only numeric leaf parameters are swept.
+
+        :param msg: Sweep message containing ``base`` (or full config), ``variables``, and ``sweep_mode``.
+        :type msg: dict
+        :param on_point: Callback invoked for each point with ``SweepPointResult``.
+        :type on_point: Callable[[SweepPointResult], None]
+        :param stop_event: Optional threading event to stop early.
+        :type stop_event: threading.Event | None
+        :return: Final sweep status summary.
+        :rtype: SweepStatus
+        :raises ValueError: If variable casting is ambiguous (touches both int and float fields).
+        """
+
+        sweep_id = msg.get("sweep_id", "unnamed")
+        base_config = msg.get("base", msg)
+        variables = msg.get("variables", [])
+        sweep_mode = msg.get("sweep_mode", "cartesian")
+        
+        var_names = {v["name"] for v in variables}
+
+        # 1) Path per variabile
+        # Precompute variable usage paths once: enables selective reconfiguration for the fast path.
+        var_to_paths = find_variable_paths(base_config, var_names)
+
+        # 2) Flatten per classify_variable_paths (che vuole un set)
+        variable_paths: Set[str] = set()
+        for ps in var_to_paths.values():
+            variable_paths.update(ps)
+        setup_needed = classify_variable_paths(variable_paths)
+
+        # 3) Field-based casting enforces HW semantics: 
+            #timing/index fields are discrete ints, analog parameters are floats.
+        INT_FIELDS = {
+            "duration", "tof", "shots", "shot_duration",
+            "channel", "nyquist_zone", "safe_pad", "drive_start_index", "fifo_start_index", "delay",
+        }
+        FLOAT_FIELDS = {"frequency_mhz", "phase", "gain"}
+        
+        gen_paths = {p for p in variable_paths if p.startswith("generators")}
+        acq_paths = {p for p in variable_paths if p.startswith("acquisitions")}
+        trig_paths = {p for p in variable_paths if p.startswith("trigger")}
+
+        var_cast: Dict[str, str] = {}
+        for name, paths in var_to_paths.items():
+            if not paths:
+                self.logger.warning(f"Sweep variable '{name}' not used in base config")
+                var_cast[name] = "float"
+                continue
+
+            #NOTE:
+            # A single variable must not simultaneously drive discrete-time fields (ints) and analog knobs (floats).
+            # Enforcing this constraint avoids silent rounding/casting errors
+
+            touches_int = False
+            touches_float = False
+            for p in paths:
+                last = p.split(".")[-1]
+                if last in INT_FIELDS:
+                    touches_int = True
+                if last in FLOAT_FIELDS:
+                    touches_float = True
+            
+            # A single variable must not drive both discrete and continuous fields: that would be ambiguous and error-prone.
+            if touches_int and touches_float:
+                raise ValueError(
+                    f"Variable '{name}' touches both int and float fields: {sorted(paths)}"
+                )
+
+            if touches_int:
+                var_cast[name] = "int"
+            elif touches_float:
+                var_cast[name] = "float"
+            else:
+                var_cast[name] = "str"
+
+        # 4) Generate sweep points with appropriate cast
+        points = generate_sweep_points(variables, sweep_mode, var_cast)
+        n_points = len(points)
+
+        
+        self.logger.info(f"Sweep '{sweep_id}': {n_points} points, setup_needed={setup_needed}")
+        
+        n_completed = 0
+        # Avoid using logs for sweep experiments: there are too many points and it would result in huge payload
+        log = None
+        
+        try:
+            # 1. # Materialize the first point config: this is the only point that gets full preparation + full configuration.
+
+            first_config = substitute_variables(base_config, points[0])
+            
+            if "envelopes" in first_config:
+                res = self.env_h.upload(first_config)
+                if not res.ok: raise Exception(res.error)
+            if "waves" in first_config:
+                res = self.wave_h.compile(first_config)
+                if not res.ok: raise Exception(res.error)
+            
+            for gen_cfg in first_config.get("generators", []):
+                self._setup_generator(gen_cfg, log)
+            for acq_cfg in first_config.get("acquisitions", []):
+                self._setup_acquisition(acq_cfg, log)
+            self._setup_trigger(first_config.get("trigger", {}), log)
+            
+            # Run first experiment with full validation
+            data = self._run_acquisition(first_config, log)
+            on_point(SweepPointResult(0, n_points, points[0], data))
+            n_completed = 1
+            
+            if n_points == 1:
+                return SweepStatus(True, sweep_id, n_points, n_completed)
+            
+            # 2. Prepare for optimized sweep
+            # Enter sweep mode: subsequent points can reuse pre-validated acquisition setup and reduce control overhead.
+            adc_indices = self._get_adc_indices(first_config)
+            mode = self._get_acq_mode(first_config)
+
+            # "prepare_sweep()" switches the software into a state optimized for repeated points.
+            # Therefore it is require to execute "end_sweep()" on every exit path (success or exception) to avoid
+            # leaving the system in an ambiguous execution mode for subsequent commands.
+            self.adapter.prepare_sweep(mode, adc_indices)
+            
+           # 3. Optimized loop over remaining points
+            for i, point in enumerate(points[1:], start=1):
+                if stop_event and stop_event.is_set():
+                    self.logger.info(f"Sweep stopped at point {i}")
+                    break
+                # For each point, only variables change; rely on selective setup to skip expensive full reconfiguration.
+                config = substitute_variables(base_config, point)
+                
+                # Recompile waves if needed (WDW update)
+                if setup_needed["waves"]:
+                    if "waves" in config:
+                        self.wave_h.compile(config)  
+                
+                # Reconfigure only variable parameters
+                if setup_needed["generator"]:
+                    for gen_cfg in config.get("generators", []):
+                        gen_index = gen_cfg.get("gen_index", 0)
+                        local_gen_paths = {p for p in gen_paths if p.startswith(f"generators.{gen_index}.")}
+                        if local_gen_paths:
+                            self._setup_generator_selective(gen_cfg, local_gen_paths, log)
+
+                if setup_needed["acquisition"]:
+                    for acq_cfg in config.get("acquisitions", []):
+                        acq_index = acq_cfg.get("acq_index", 0)
+                        local_acq_paths = {p for p in acq_paths if p.startswith(f"acquisitions.{acq_index}.")}
+                        if local_acq_paths:
+                            self._setup_acquisition_selective(acq_cfg, local_acq_paths, log)
+
+                if setup_needed["trigger"] and trig_paths:
+                    self._setup_trigger(config.get("trigger", {}), log)
+
+                
+                data = self._run_acquisition(config, log)
+                on_point(SweepPointResult(i, n_points, point, data))
+                n_completed += 1
+
+            # Always close sweep mode to return the adapter/hardware to a clean state for subsequent commands.
+            self.adapter.end_sweep()
+            return SweepStatus(True, sweep_id, n_points, n_completed)
+            
+        except Exception as e:
+            self.logger.exception(f"Sweep '{sweep_id}' failed")
+            # Best-effort cleanup: even on failure try to exit sweep mode to avoid leaving hardware in a special state.
+            self.adapter.end_sweep()
+            return SweepStatus(False, sweep_id, n_points, n_completed, str(e))
+    
+    # =========================================================================
+    # INTERNAL SETUP METHODS
+    # =========================================================================
+
+    def _setup_generator(self, gen_cfg: dict, log: Optional[list] = None):
+        """
+        Configure a single generator from a config dictionary.
+
+        This method applies generator-level configuration in a stable order:
+        - modulation (DDS, phase/gain/frequency),
+        - wave selection and compilation artifacts,
+        - FIFO programming (when drive/readout pulses are scheduled).
+
+        :param gen_cfg: Generator configuration dictionary (single generator).
+        :type gen_cfg: dict
+        :param log: Optional list used to append human-readable configuration actions.
+        :type log: list | None
+        """
+
+        gen_index = gen_cfg.get("gen_index", gen_cfg.get("generator", 0))
+        self.logger.info(f"Setting up generator {gen_index}")
+        
+        # Drive Path
+        drive = gen_cfg.get("drive")
+        if drive:
+            if "frequency_mhz" in drive:
+                self.adapter.generator_modulation(gen_index, "drive", {
+                    "frequency_mhz": float(drive["frequency_mhz"]),
+                    "phase": float(drive.get("phase", 0.0))
+                })
+                if log is not None:
+                    log.append(f"gen {gen_index} drive frequency: {drive['frequency_mhz']} MHz")
+            
+            if "nyquist_zone" in drive:
+                self.adapter.set_nyquist_zone(gen_index, "drive", int(drive["nyquist_zone"]))
+            
+            if "channel" in drive:
+                self.adapter.gen_trigger2listen(gen_index, {"ttype": "drive", "channel": int(drive["channel"])})
+            
+            # FIFO programming is separated from modulation to keep waveform scheduling independent from RF parameter setup.
+            if "fifo" in drive:
+                self.adapter.program_drive_sequence(
+                    gen_index=gen_index,
+                    wave_id_list=drive["fifo"],
+                    start_index=drive.get("fifo_start_index", 1)
+                )
+                if log is not None:
+                    log.append(f"gen {gen_index} drive sequence programmed")
+
+        # Readout Path
+        readout = gen_cfg.get("readout")
+        if readout:
+            if "frequency_mhz" in readout:
+                self.adapter.generator_modulation(gen_index, "readout", {
+                    "frequency_mhz": float(readout["frequency_mhz"]),
+                    "phase": float(readout.get("phase", 0.0))
+                })
+
+            if "nyquist_zone" in readout:
+                self.adapter.set_nyquist_zone(gen_index, "readout", int(readout["nyquist_zone"]))
+            
+            if "channel" in readout:
+                self.adapter.gen_trigger2listen(gen_index, {"ttype": "readout", "channel": int(readout["channel"])})
+            
+            if "wave" in readout:
+                self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
+                if log is not None:
+                    log.append(f"gen {gen_index} readout wave uploaded")
+
+    def _setup_acquisition(self, acq_cfg: dict, log: Optional[list] = None):
+        """
+        Configure a single acquisition block from a config dictionary.
+
+        Acquisition is treated as independent from readout: an acquisition IP may be used for
+        loopback tests or standalone capture. The config is expected to fully specify its routing
+        (channel) and capture window.
+
+        :param acq_cfg: Acquisition configuration dictionary (single acquisition).
+        :type acq_cfg: dict
+        :param log: Optional list used to append human-readable configuration actions.
+        :type log: list | None
+        """
+
+        acq_index = acq_cfg.get("acq_index", acq_cfg.get("acquisition", 0))
+        
+        # 1. Setup modulation (DDS and automatic Nyquist zone)
+        if "frequency_mhz" in acq_cfg:
+            self.adapter.acquisition_modulation(acq_index, {
+                "frequency_mhz": float(acq_cfg["frequency_mhz"]),
+                "phase": float(acq_cfg.get("phase", 0.0))
+            })
+        
+        # 2. Setup Trigger Channel (Fixed: now passing a dict instead of int)
+        if "channel" in acq_cfg:
+            self.adapter.acq_trigger2listen(acq_index, {
+                "ttype": "acquisition", 
+                "channel": int(acq_cfg["channel"])
+            })
+            if log is not None:
+                log.append(f"acq {acq_index} listening to trigger channel {acq_cfg['channel']}")
+        
+        # 3. Setup Timing (ToF and integration duration)
+        if "duration" in acq_cfg:
+            tof = int(acq_cfg.get("tof", 0))
+            self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
+            if log is not None:    
+                log.append(f"acq {acq_index} timing set: tof={tof}")
+
+    def _setup_generator_selective(self, gen_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
+        """
+        Selective generator reconfiguration for sweep fast-path.
+
+        Only the fields affected by ``variable_paths`` are re-applied. This reduces overhead
+        compared to a full generator setup at every sweep point.
+
+        Limitations
+        -----------
+        This method is intentionally conservative: if a sweep starts modifying structural fields
+        (e.g., routing/channeling/Nyquist/topology), the fast-path should be extended or disabled
+        in favor of full setup.
+
+        :param gen_cfg: Generator configuration dictionary for the current point.
+        :type gen_cfg: dict
+        :param variable_paths: Set of dot-paths indicating which fields are variable-driven.
+        :type variable_paths: set[str]
+        :param log: Optional list used to append human-readable configuration actions.
+        :type log: list | None
+        """
+        
+
+        gen_index = gen_cfg.get("gen_index", 0)
+        
+        drive = gen_cfg.get("drive")
+
+        # Selective setup trades generality for speed: modify only subsystems proven variable-driven by path analysis.
+        if drive:
+            if any(p.endswith(".drive.frequency_mhz") or p.endswith(".drive.phase") for p in variable_paths):
+                self.adapter.generator_modulation(gen_index, "drive", {
+                    "frequency_mhz": float(drive["frequency_mhz"]),
+                    "phase": float(drive.get("phase", 0.0))
+                })
+            if any(".drive.fifo" in p for p in variable_paths) and "fifo" in drive:
+                self.adapter.program_drive_sequence(
+                    gen_index=gen_index,
+                    wave_id_list=drive["fifo"],
+                    start_index=drive.get("fifo_start_index", 1)
+                )
+
+        readout = gen_cfg.get("readout")
+        if readout:
+            if any(p.endswith(".readout.frequency_mhz") or p.endswith(".readout.phase") for p in variable_paths):
+                self.adapter.generator_modulation(gen_index, "readout", {
+                    "frequency_mhz": float(readout["frequency_mhz"]),
+                    "phase": float(readout.get("phase", 0.0))
+                })
+            if any(".readout.wave" in p for p in variable_paths) and "wave" in readout:
+                self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
+
+    def _setup_acquisition_selective(self, acq_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
+        """
+        Selective acquisition reconfiguration for sweep fast-path.
+
+        Re-apply only acquisition parameters that are variable-driven (e.g., delay/duration/shots),
+        assuming routing/topology remains unchanged across points.
+
+        :param acq_cfg: Acquisition configuration dictionary for the current point.
+        :type acq_cfg: dict
+        :param variable_paths: Set of dot-paths indicating which acquisition fields are variable-driven.
+        :type variable_paths: set[str]
+        :param log: Optional list used to append human-readable configuration actions.
+        :type log: list | None
+        """
+        # PERFORMANCE/SAFETY TRADEOFF:
+        # Selective setup is intentionally conservative: only subsystems proven variable-driven are modified.
+        # If new sweepable fields are added in the future, they must be explicitly handled here,
+        # otherwise the fast-path may not reflect intended parameter changes.
+        # Assumption: acquisition routing is stable across points. Changing channel/routing mid-sweep can
+        # invalidate the preconfigured pipeline; such changes should trigger a full reconfiguration.
+        
+        acq_index = acq_cfg.get("acq_index", 0)
+        
+        if any(p.endswith(".frequency_mhz") or p.endswith(".phase") for p in variable_paths):
+            self.adapter.acquisition_modulation(acq_index, {
+                "frequency_mhz": float(acq_cfg["frequency_mhz"]),
+                "phase": float(acq_cfg.get("phase", 0.0))
+            })
+        if any(p.endswith(".duration") or p.endswith(".tof") for p in variable_paths):
+            tof = int(acq_cfg.get("tof", 0))
+            self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
+
+    def _setup_trigger(self, trigger_cfg: dict, log: Optional[list] = None):
+        """
+        Configure trigger routing and timing.
+
+        Trigger configuration is performed after generators and acquisitions so that all involved
+        endpoints (channels, indices) are already known and validated.
+
+        :param trigger_cfg: Trigger configuration dictionary.
+        :type trigger_cfg: dict
+        :param log: Optional list used to append human-readable configuration actions.
+        :type log: list | None
+        """
+        shots = trigger_cfg.get("shots", 1)
+        
+        if "shot_duration" in trigger_cfg:
+            self.adapter.tg_set_duration(int(trigger_cfg["shot_duration"]))
+        
+        if "drive" in trigger_cfg or "readout" in trigger_cfg:
+            self.adapter.tg_program_delays(
+                drive=trigger_cfg.get("drive"),
+                readout=trigger_cfg.get("readout"),
+                drive_start_index=trigger_cfg.get("drive_start_index", 1),
+                safe_pad=trigger_cfg.get("safe_pad", 0)
+            )
+            if log is not None:
+                log.append(f"trigger delays programmed for {shots} shots")
+            
+    def _run_acquisition(self, config: dict, log: Optional[list] = None) -> Dict[int, np.ndarray]:
+        """
+        Run the acquisition sequence and return captured samples.
+
+        This is the "data plane" step: it is expected to produce large numerical buffers and
+        the only step that returns bulk data. All previous steps are control-plane.
+
+        :param config: Full experiment config for the current run/point.
+        :type config: dict
+        :param log: Optional list used to append human-readable actions.
+        :type log: list | None
+        :return: Map ``adc_index -> numpy array`` of acquired samples.
+        :rtype: dict[int, numpy.ndarray]
+        """
+
+        acquisitions = config.get("acquisitions", [])
+        trigger_cfg = config.get("trigger", {})
+
+        # Acquisition mode/ADC selection is derived from config.
+        adc_indices = [acq.get("acq_index", acq.get("acquisition", i)) for i, acq in enumerate(acquisitions)]
+        if not adc_indices: adc_indices = [0]
+        
+        first_acq = acquisitions[0] if acquisitions else {}
+        results = self.adapter.run_multi_acquisition(
+            adc_indices=adc_indices,
+            mode=first_acq.get("output_type", "decimated"),
+            shots=trigger_cfg.get("shots", 1),
+            samp_per_shot=int(first_acq.get("duration", 256)),
+            timeout=config.get("timeout", 10.0)
+        )
+        if log is not None:
+            log.append(f"Acquisition complete on ADCs: {adc_indices}")
+        return results
+    
+    def _get_adc_indices(self, config: dict) -> List[int]:
+        """
+        Extract the ADC indices involved in the current experiment.
+
+        This helper is used by sweep preparation to pre-configure the acquisition pipeline
+        once (fast-path), avoiding repeated validation/initialization.
+
+        :param config: Experiment configuration.
+        :type config: dict
+        :return: List of ADC indices to be captured.
+        :rtype: list[int]
+        """
+
+        acquisitions = config.get("acquisitions", [])
+        if not acquisitions:
+            return [0]
+        return [acq.get("acq_index", i) for i, acq in enumerate(acquisitions)]
+
+    def _get_acq_mode(self, config: dict) -> str:
+        """
+        Determine the acquisition mode requested by the experiment.
+
+        The mode is forwarded to the adapter so it can select the proper hardware capture path
+        (e.g., standard vs sweep-optimized acquisition).
+
+        :param config: Experiment configuration.
+        :type config: dict
+        :return: Acquisition mode identifier understood by the adapter.
+        :rtype: str
+        """
+
+        acquisitions = config.get("acquisitions", [])
+        if acquisitions:
+            return acquisitions[0].get("output_type", "decimated")
+        return "decimated"

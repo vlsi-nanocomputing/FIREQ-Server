@@ -233,6 +233,110 @@ class FIREQ_SoC(Overlay):
                         if acq_idx is not None:
                             self._ACQ_RF_MAP[acq_idx] = (tile, block)
 
+
+    
+    def _get_fifo_depth(self, *, acq_inst: str, mode: str) -> int:
+        """
+        FIFO depth extraction based on  HWH structure:
+
+        axisAcquistionIP_X (m00_axis or m01_axis)
+            -> axis_register_slice (S_AXIS shares BUSNAME)
+            -> axis_data_fifo (S_AXIS shares BUSNAME of regslice M_AXIS)
+            -> read FIFO_DEPTH (or C_FIFO_DEPTH)
+
+        mode: "raw" or "decimated"
+        """
+        # 1) Map mode -> which Acq output port we follow
+        #    (Swap these two if your design uses the opposite mapping)
+        mode_to_port = {
+            "decimated": "m01_axis",
+            "raw": "m00_axis",
+        }
+        if mode not in mode_to_port:
+            raise ValueError(f"Unknown mode={mode}. Expected one of {list(mode_to_port)}")
+
+        port_name = mode_to_port[mode]
+
+        # 2) Get Acq module XML and its BUSNAME for that port
+        acq_mod = self._FIREQ_parser._GetModule(acq_inst)
+        if acq_mod is None:
+            return -1
+
+        acq_busifs = self._FIREQ_parser._GetBusInterfaces(acq_mod)  # dict: busname -> attribs
+        start_busname = None
+        for busname, a in acq_busifs.items():
+            if a.get("NAME") == port_name:
+                start_busname = busname
+                break
+        if not start_busname:
+            return -1
+
+        # 3) Find the register slice whose S_AXIS shares that BUSNAME
+        regslice_inst = None
+        regslice_mod = None
+        for m in self._FIREQ_parser._Modules:
+            inst = m.attrib.get("INSTANCE", "")
+            vlnv = (m.attrib.get("VLNV", "") or "").lower()
+            if "axis_register_slice" not in vlnv:
+                continue
+
+            busifs = self._FIREQ_parser._GetBusInterfaces(m)
+            # we want the S_AXIS endpoint bound to the same BUSNAME
+            for busname, a in busifs.items():
+                if busname == start_busname and a.get("NAME") == "S_AXIS":
+                    regslice_inst = inst
+                    regslice_mod = m
+                    break
+            if regslice_inst:
+                break
+
+        if not regslice_inst:
+            return -1
+
+        # 4) From that register slice, take its M_AXIS BUSNAME
+        regslice_busifs = self._FIREQ_parser._GetBusInterfaces(regslice_mod)
+        next_busname = None
+        for busname, a in regslice_busifs.items():
+            if a.get("NAME") == "M_AXIS":
+                next_busname = busname
+                break
+        if not next_busname:
+            return -1
+
+        # 5) Find the axis_data_fifo whose S_AXIS shares next_busname
+        fifo_inst = None
+        for m in self._FIREQ_parser._Modules:
+            inst = m.attrib.get("INSTANCE", "")
+            vlnv = (m.attrib.get("VLNV", "") or "").lower()
+            if "axis_data_fifo" not in vlnv:
+                continue
+
+            busifs = self._FIREQ_parser._GetBusInterfaces(m)
+            for busname, a in busifs.items():
+                if busname == next_busname and a.get("NAME") == "S_AXIS":
+                    fifo_inst = inst
+                    break
+            if fifo_inst:
+                break
+
+        if not fifo_inst:
+            return -1
+
+        # 6) Read FIFO depth parameter (Vivado sometimes uses FIFO_DEPTH or C_FIFO_DEPTH)
+        depth = (
+            self._FIREQ_parser._GetParameter(fifo_inst, "FIFO_DEPTH")
+            or self._FIREQ_parser._GetParameter(fifo_inst, "C_FIFO_DEPTH")
+        )
+        try:
+            return int(depth)
+        except (TypeError, ValueError):
+            return -1
+
+
+
+    # ------------------------------------------------------------------
+    # Hardware specs builder    
+    # ------------------------------------------------------------------
     def _build_hw_specs(self) -> dict:
         """
         Build a validated dictionary of hardware specifications: scalability aware.
@@ -342,6 +446,11 @@ class FIREQ_SoC(Overlay):
         acquisitions_specs = []
         for idx, acq in enumerate(self._acquistion_ips):
             desc = getattr(acq, "description", {}) or {}
+            acq_inst = f"axisAcquistionIP_{idx}"
+
+            d_dec = self._get_fifo_depth(acq_inst=acq_inst, mode="decimated")
+            d_raw = self._get_fifo_depth(acq_inst=acq_inst, mode="raw")
+            
             acq_specs = {
                 "index": idx,
                 "name": desc.get("name"),
@@ -360,6 +469,9 @@ class FIREQ_SoC(Overlay):
 
                 "raw_output_width_bits": getattr(acq, "NDCMT_OutputWidth", None),
                 "dec_output_width_bits": getattr(acq, "DCMT_OutputWidth", None),
+
+                "raw_fifo_depth_words": d_raw,
+                "decimated_fifo_depth_words": d_dec,
             }
             acquisitions_specs.append(acq_specs)
 

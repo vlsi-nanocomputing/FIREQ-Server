@@ -657,6 +657,43 @@ class GeneratorDriver(_FIREQDriver):
         # return wave definition
         return wavedef
     
+    def create_vz_gate_definition_word(self, delta_phase_rad: float) -> int:
+        """
+        Create a Wave Definition Word (WDW) for a Virtual-Z gate.
+
+        WDW VZ format:
+        - Bit 119: IS_VZ_GATE = 1
+        - Bits [47:0]: PHASE_OFFSET (48-bit, two's complement)
+
+        Hardware meaning:
+        - During the experiment, for one cycle the carrier phase accumulator adds PHASE_OFFSET,
+          effectively implementing an instantaneous Z rotation (virtual frame update).
+
+        :param delta_phase_rad: Desired Z rotation in radians (can be any real number).
+        :return: 128-bit WDW packed into Python int
+        """
+        IS_VZ_GATE_BIT = 119
+        PHASE_W = 48  # phase offset width required by the IP (DSP accumulator is 48-bit)
+
+        # Map radians -> signed int48 phase word.
+        # Natural convention for an N-bit phase accumulator:
+        #   2π rad  <->  2^N counts
+        full_scale = 1 << PHASE_W
+        phase_word = int(np.round(delta_phase_rad * full_scale / (2.0 * np.pi)))
+
+        # Wrap into signed range [-2^(W-1), 2^(W-1)-1]
+        half = 1 << (PHASE_W - 1)
+        phase_word = ((phase_word + half) % (1 << PHASE_W)) - half
+
+        # Convert to unsigned two's complement for packing in bits [47:0]
+        phase_word_u = phase_word & ((1 << PHASE_W) - 1)
+
+        wavedef = 0
+        wavedef |= (1 << IS_VZ_GATE_BIT)
+        wavedef |= phase_word_u  # occupies bits [47:0]
+
+        return wavedef
+
     def add_wave_in_wave_memory(self, wave_definition : int, wave_name : str):
         """
         Add a wave definition word in the wave memory, there are no checks on the 

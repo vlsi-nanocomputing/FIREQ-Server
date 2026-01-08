@@ -134,3 +134,22 @@ class FIREQ_parser:
                     del retdict[mapping.attrib['INSTANCE']][-1]['INSTANCE']
                 # return the dictionary with the memroy mapping 
                 return retdict
+    
+    def _GetParameter(self, module_name: str, param_name: str):
+        """
+        Return the VALUE of a PARAMETER with NAME=param_name for module INSTANCE=module_name.
+        Returns None if not found.
+        """
+        mod = self._GetModule(module_name)
+        if mod is None:
+            return None
+
+        params = mod.find("PARAMETERS")
+        if params is None:
+            return None
+
+        for p in params.findall("PARAMETER"):
+            if p.attrib.get("NAME") == param_name:
+                return p.attrib.get("VALUE")
+
+        return None
