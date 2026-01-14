@@ -39,15 +39,15 @@ class MockGeneratorDriver:
     """
     def __init__(self, idx: int):
         self.idx = idx
-        self.EnvelopeMemoryDict: Dict[str, Any] = {}
-        self.WaveMemoryDict: Dict[str, Any] = {}
-        self.MemoryMappedFifoSegmentDepth = 4096 * 4
-        self.SampleSize = 16
-        self.NumberOfChannels = 16
-        self.MaxWaveformDuration = 65536
+        self.envelope_memory_dict: Dict[str, Any] = {}
+        self.wave_memory_dict: Dict[str, Any] = {}
+        self.memory_mapped_fifo_segment_depth = 4096 * 4
+        self.sample_size = 16
+        self.number_of_channels = 16
+        self.max_waveform_duration = 65536
 
     def add_envelope_to_envelope_memory(self, samples, for_interp, is_sym, i_even, q_even, name):
-        self.EnvelopeMemoryDict[name] = {"size": len(samples), "type": "interp" if for_interp else "std"}
+        self.envelope_memory_dict[name] = {"size": len(samples), "type": "interp" if for_interp else "std"}
         return 0
 
     def create_wave_definition_word(self, env_name, *args):
@@ -59,7 +59,7 @@ class MockGeneratorDriver:
             int: -3 if the envelope does not exist (Driver Error).
         """
         # Strict simulation: fail if envelope is missing
-        if env_name not in self.EnvelopeMemoryDict:
+        if env_name not in self.envelope_memory_dict:
             return -3 # Standard driver error code
         
         # Gain validation (example argument check)
@@ -71,16 +71,16 @@ class MockGeneratorDriver:
     def create_vz_gate_definition_word(self, phase_rad): return 99999 
     def write_readout_wave(self, wdw): return 0
     def add_wave_in_wave_memory(self, wdw, wave_id):
-        self.WaveMemoryDict[str(wave_id)] = wdw
+        self.wave_memory_dict[str(wave_id)] = wdw
         return 0
     def replace_wave_in_wave_memory(self, wdw, wave_id, new_id):
-        self.WaveMemoryDict[str(new_id)] = wdw
+        self.wave_memory_dict[str(new_id)] = wdw
         return 0
     def reset_wave_memory_dict(self):
-        self.WaveMemoryDict.clear()
+        self.wave_memory_dict.clear()
         return 0
     def reset_envelope_dict(self):
-        self.EnvelopeMemoryDict.clear()
+        self.envelope_memory_dict.clear()
         return 0
     def set_drive_order_source(self, src): return 0
     def add_wave_to_drive_wave_sequence(self, idx, wave_id): return 0
@@ -105,9 +105,9 @@ class MockAcquisitionDriver:
 class MockTriggerDriver:
     """Simulates the Trigger Generator driver."""
     def __init__(self):
-        self.MaxHWRepetitions = 65535
-        self.ChannelFifoDepth = 1024
-        self.DriveDelayMax = 65535
+        self.max_hw_repetitions = 65535
+        self.channel_fifo_depth = 1024
+        self.drive_delay_max = 65535
 
     def set_number_of_shots(self, shots): return 0
     def set_experiment_duration(self, dur): return 0

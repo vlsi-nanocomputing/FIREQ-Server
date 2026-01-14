@@ -65,14 +65,18 @@ from .message_handler import MessageHandler, SweepPointResult, SweepStatus
 import struct
 
 # =============================================================================
-# SWEEP BATCHING CONFIGURATION
+# CONFIGURATION CONSTANTS
 # =============================================================================
-# Number of points to accumulate before sending a response. 
-# Batches are meant to reduce network overhead during sweep experiments : they 
+# Number of points to accumulate before sending a response.
+# Batches are meant to reduce network overhead during sweep experiments : they
 # group results and send them in fewer messages (each batch up to batch_size points).
-# Note that the last batch is expected to be "partially filled". 
-# It can be reconfigured for optimization 
-SWEEP_BATCH_SIZE = 10 
+# Note that the last batch is expected to be "partially filled".
+# It can be reconfigured for optimization
+SWEEP_BATCH_SIZE = 10
+
+# Maximum allowed payload size in bytes (10 MB)
+# Protects against unexpectedly large frames from buggy clients or DoS attempts.
+MAX_PAYLOAD_BYTES = 10 * 1024 * 1024 
 
 
 class FIREQServer:
@@ -221,13 +225,13 @@ class FIREQServer:
         if self._server_socket:
             try:
                 self._server_socket.close()
-            except:
+            except (OSError, Exception):
                 pass
-        
+
         if self._client_socket:
             try:
                 self._client_socket.close()
-            except:
+            except (OSError, Exception):
                 pass
     
     # =========================================================================
@@ -570,7 +574,8 @@ class FIREQServer:
         # Final cleanup: esplicit closure request
         try:
             self._server_socket.close()
-        except: pass
+        except (OSError, Exception):
+            pass
         
         self.logger.info("Network thread exited")
 
@@ -593,7 +598,7 @@ class FIREQServer:
         # 1. Immediate Discard: Any unsent data in the kernel's transmit buffer is discarded.
         # 2. Resource Reclamation: Skips the TIME_WAIT state, freeing the port immediately.
         l_onoff = 1
-        l_linger = 0 # 0 second waiting time
+        l_linger = 0  # 0 second waiting time
         client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, 
                                  struct.pack('ii', l_onoff, l_linger))
         
@@ -730,7 +735,8 @@ class FIREQServer:
                 # Socket writer thread:
                 # this is the only place that writes to the client socket.
                 # To write in a single thread avoids interleaving frames and simplifies error handling.
-                self._send_message(self._client_socket, msg)
+                include_timing = msg.get("type") in ("sweep_batch", "sweep_status")
+                self._send_message(self._client_socket, msg, include_timing=include_timing)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 self.logger.error("Client disconnected during send. Aborting experiment.")
                 # If sending fails, assume the client is gone.
@@ -923,7 +929,7 @@ class FIREQServer:
             # protects against unexpectedly large frames (buggy client/DoS attempt).
             # Current protocol does not require large messages; heavy payloads should be sent
             # via dedicated mechanisms, not inside a single JSON frame.
-            if length > 10 * 1024 * 1024: # Tentative hardcoded boundary.
+            if length > MAX_PAYLOAD_BYTES:
                 self.logger.error(f"Payload too large: {length} bytes")
                 return None
             
@@ -943,9 +949,21 @@ class FIREQServer:
             self.logger.error(f"Receive error: {e}")
             return None
         
-    def _send_message(self, sock: socket.socket, msg: dict):
+    def _send_message(self, sock: socket.socket, msg: dict, include_timing: bool = False):
         """Send one length-prefixed JSON message."""
         payload = json.dumps(msg).encode('utf-8')
+        if include_timing and isinstance(msg, dict):
+            debug_timing = msg.get("debug_timing")
+            if debug_timing is None:
+                debug_timing = {}
+                msg["debug_timing"] = debug_timing
+
+            t0 = time.perf_counter()
+            payload = json.dumps(msg).encode('utf-8')
+            t1 = time.perf_counter()
+            debug_timing["server_encode_ms"] = (t1 - t0) * 1000.0
+            debug_timing["payload_bytes"] = len(payload)
+
         length = len(payload).to_bytes(4, 'big')
 
         # sendall() function: ensures the full frame is transmitted (prefix + payload).

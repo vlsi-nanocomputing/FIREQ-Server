@@ -2,7 +2,7 @@
 import pytest
 import numpy as np
 from unittest.mock import MagicMock
-from server.ol_adapter import OL_adapter
+from server.ol_adapter import OverlayAdapter
 from server.exceptions import ConfigurationError, HardwareStateError
 
 try:
@@ -27,7 +27,7 @@ class AdapterContext:
 @pytest.fixture
 def ctx():
     """
-    Pytest fixture that initializes a MockOverlay and an OL_adapter.
+    Pytest fixture that initializes a MockOverlay and an OverlayAdapter.
     
     It configures specific MagicMocks for critical driver methods to ensure
     isolation during unit testing.
@@ -57,7 +57,7 @@ def ctx():
     mock_acq = mock_ol.acquisitions[0]
     mock_acq.set_acquisition_dds_parameters = MagicMock(return_value=0)
 
-    adapter = OL_adapter(mock_ol)
+    adapter = OverlayAdapter(mock_ol)
     # Mock DMA engine for chunking tests
     adapter.dma_engine = MagicMock()
     
@@ -86,7 +86,7 @@ def test_upload_envelopes_padding(ctx):
 
 def test_compile_waves_success(ctx):
     """Verify the compilation of a standard wave using an existing envelope."""
-    ctx.gen.EnvelopeMemoryDict["rect"] = {} 
+    ctx.gen.envelope_memory_dict["rect"] = {} 
     waves = [{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}]
     res = ctx.adapter.compile_waves(gen_index=0, waves=waves, replace=False)
     assert len(res["waves"]) == 1
@@ -101,7 +101,7 @@ def test_compile_virtual_z_wave(ctx):
 
 def test_upload_readout_wave(ctx):
     """Verify the dedicated upload path for readout waveforms."""
-    ctx.gen.EnvelopeMemoryDict["readout_env"] = {}
+    ctx.gen.envelope_memory_dict["readout_env"] = {}
     wave_spec = {"envelope": "readout_env", "duration": 200, "gain": 0.5}
     res = ctx.adapter.upload_readout_wave(gen_index=0, wave=wave_spec, replace=True)
     assert res["status"] in ["replaced", "compiled"]
@@ -133,9 +133,15 @@ def test_iq_quantization_logic(ctx):
 def test_tg_program_delays_logic(ctx):
     """Verify the programming of trigger delays into the FIFO."""
     drive_spec = { 0: {"delay": [[10, 0], [20, 1]]} }
-    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1, safe_pad=1)
-    # 2 entries + 1 pad = 3 calls
-    assert ctx.trig.insert_drive_delay.call_count == 3
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    print(ctx.trig.insert_drive_delay.call_count)
+    # always fill the entire fifo for safe tails 
+    assert ctx.trig.insert_drive_delay.call_count == 1024
+    drive_spec = { 0: {"delay": [[10, 0]]} }
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    print(ctx.trig.insert_drive_delay.call_count)
+    # always fill the entire fifo for safe tails 
+    assert ctx.trig.insert_drive_delay.call_count == 2*1024 #second run
 
 def test_modulation_setup(ctx):
     """Verify the generator modulation setup calls."""
@@ -164,7 +170,7 @@ def test_compile_waves_cache_hit(ctx):
     # 1. Correct Setup:
     # Perform a real compilation. This populates:
     # - The HL cache (ctx.adapter._wave_store)
-    # - The LL memory (ctx.gen.WaveMemoryDict) via internal calls
+    # - The LL memory (ctx.gen.wave_memory_dict) via internal calls
     ctx.adapter.compile_waves(gen_index=0, waves=[wave_spec], replace=True)
     
     # Sanity check: called once
@@ -175,7 +181,7 @@ def test_compile_waves_cache_hit(ctx):
     
     # 3. Cache Hit Test
     # Manually update the mock dictionary to simulate hardware state (since MagicMock doesn't have side effects)
-    ctx.gen.WaveMemoryDict["w1"] = 123456
+    ctx.gen.wave_memory_dict["w1"] = 123456
     
     # Request the same wave again
     ctx.adapter.compile_waves(gen_index=0, waves=[wave_spec], replace=False)
@@ -229,7 +235,7 @@ def test_fifo_patching_consistency(ctx):
         "D": MagicMock(wdw=4)
     }
     # Mock LL check
-    ctx.gen.WaveMemoryDict = {"A": 1, "B": 2, "C": 3, "D": 4}
+    ctx.gen.wave_memory_dict = {"A": 1, "B": 2, "C": 3, "D": 4}
     
     # Program base sequence
     ctx.adapter.program_drive_sequence(gen_index=0, wave_id_list=["A", "B", "C"], start_index=1)
@@ -248,7 +254,7 @@ def test_fifo_patching_consistency(ctx):
 def test_fifo_patching_out_of_bounds(ctx):
     """Verify that patching beyond the known sequence length raises a ConfigurationError."""
     ctx.adapter._wave_store[0] = {"A": MagicMock(wdw=1)}
-    ctx.gen.WaveMemoryDict = {"A": 1}
+    ctx.gen.wave_memory_dict = {"A": 1}
     
     # Attempt to patch index 5 when list is empty/short
     with pytest.raises(ConfigurationError) as excinfo:

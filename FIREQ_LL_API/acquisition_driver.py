@@ -16,43 +16,43 @@ class AcquisitionDriver(_FIREQDriver):
     def __init__(self, description):
         super().__init__(description=description)
         # maximum acquistion duration in clock cycles
-        self.DurationWidth = int(description["parameters"]["DurationWidth"])
-        self.MaximumDuration = pow(2,self.DurationWidth)
+        self.duration_width = int(description["parameters"]["DurationWidth"])
+        self.maximum_duration = pow(2, self.duration_width)
         # size of the samples in bits
-        self.SampleSize = int(description["parameters"]["SampleSize"])
+        self.sample_size = int(description["parameters"]["SampleSize"])
         # parallelism of the acquistion in number of samples
-        self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
-        self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
+        self.log_number_of_channels = int(description["parameters"]["LogNsamplesClock"])
+        self.number_of_channels = pow(2, self.log_number_of_channels)
         # depth of the phase increment and offset in bits
-        self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
+        self.phase_depth = int(description["parameters"]["PhaseDepth"])
         # number of triggers on the input trigger channel
-        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
+        self.trigger_channels = int(description['parameters']['TriggerWordWidth'])
         # maximum time of flight delay in clock cycles
-        self.TimeOfFlightWidth = int(description["parameters"]["TimeOfFlightCounterWidth"])
-        self.TimeOfFlightMax = pow(2,self.TimeOfFlightWidth)
+        self.time_of_flight_width = int(description["parameters"]["TimeOfFlightCounterWidth"])
+        self.time_of_flight_max = pow(2, self.time_of_flight_width)
         # not decimated output width in bits
-        self.NDCMT_OutputWidth = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
+        self.non_decimated_output_width = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
         # decimated output width in bits
-        self.DCMT_OutputWidth = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
+        self.decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
 
-        # Reg definition
+        # Register offset definitions
         self.ctrl = 0
         self.readout_inc_l = 3
         self.readout_inc_h = 4
         self.readout_off_l = 1
         self.readout_off_h = 2
 
-        # Bit position definition
-        self.ManTrigPos = 31
-        self.AccumulateSelPos = 27
+        # Bit position definitions
+        self.manual_trigger_pos = 31
+        self.accumulate_select_pos = 27
 
     def print_description(self):
-        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of acquistion in clock cycles")
-        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
-        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the acquistion (samples/clock cycle)")
-        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
-        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
-        print("TimeOfFlightWidth: " + str(self.TimeOfFlightWidth) + ", width of the time of flight timer (bits)")
+        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of acquistion in clock cycles")
+        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
+        print("number_of_channels: " + str(self.number_of_channels) + ", parallelism of the acquistion (samples/clock cycle)")
+        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
+        print("trigger_channels: " + str(self.trigger_channels) + ", number of trigger channels for readout and drive (bits)")
+        print("time_of_flight_width: " + str(self.time_of_flight_width) + ", width of the time of flight timer (bits)")
 
     def init_axi_lite_interface(self, base_address : int, axi_depth : int):
         super().init_axi_lite_interface(base_address, axi_depth)
@@ -67,8 +67,8 @@ class AcquisitionDriver(_FIREQDriver):
         :type frequency: float
         :param phase: Phase offset of the demodulation signal in RADs
         :type phase: float
-        :param ADC_SAMPLERATE: Sampling frequency of the ADC in MHz
-        :type ADC_SAMPLERATE: float
+        :param adc_samplerate: Sampling frequency of the ADC in MHz
+        :type adc_samplerate: float
         :return: Error code
         :rtype: int
         """
@@ -79,12 +79,12 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _compute_pinc_poff(frequency*1000000, phase, adc_samplerate, self.PhaseDepth)
+        phase_parameters = _compute_pinc_poff(frequency*1000000, phase, adc_samplerate, self.phase_depth)
 
         # this masking is due to the fact that the frequency of the dac is double. this prevents the ADC from
         # going out of phase wrt the generator which means that the readout channels will always be at a constant phase
-        pinc = value_tuple[0]&(2**self.PhaseDepth - 2)
-        poff = value_tuple[1]&(2**self.PhaseDepth - 2)
+        pinc = phase_parameters[0]&(2**self.phase_depth - 2)
+        poff = phase_parameters[1]&(2**self.phase_depth - 2)
 
         # write registers
         self._set_readout_pinc_poff(pinc,poff)
@@ -120,28 +120,28 @@ class AcquisitionDriver(_FIREQDriver):
         trigger the acquisition manually
         """
 
-        ormask = 0x80000000
-        cntr = self.AxiLiteInterfaceMMIO.read(0) | ormask
-        self.AxiLiteInterfaceMMIO.write(0,cntr)
+        manual_trigger_mask = 0x80000000
+        control_register = self.AxiLiteInterfaceMMIO.read(0) | manual_trigger_mask
+        self.AxiLiteInterfaceMMIO.write(0, control_register)
         return
     
     def set_acquisition_duration(self, duration):
         """
         Set the acquistion duration
-        
+
         :param duration: Duration in clock cycles
         :type duration: uint
         :return: Error Code
         :rtype: int
         """
-        
-        if (duration < 1 or duration > self.MaximumDuration):
+
+        if (duration < 1 or duration > self.maximum_duration):
             print("acquistion duration is out of range")
             return -3
 
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _set_bits(cntr, self.TriggerChannels, self.DurationWidth, duration-1)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4,cntr)
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration-1)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
     
     def set_trigger_channel(self, channel):
         """
@@ -153,53 +153,53 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
 
-        if channel < 0 or channel > self.TriggerChannels:
+        if channel < 0 or channel > self.trigger_channels:
             print("source choice is out of range")
             return -3
 
-        mask = (1 << channel) >> 1
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _set_bits(cntr, 0, self.TriggerChannels, mask)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
+        channel_mask = (1 << channel) >> 1
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
         return 0
     
     def set_time_of_flight(self, time_of_flight):
         """
         Set time of flight
-        
+
         :param time_of_flight: Time of flight in clock cycles
         :type time_of_flight: uint
         :return: Error code
         :rtype: int
         """
 
-        if (time_of_flight < 1 or time_of_flight > self.TimeOfFlightMax):
+        if (time_of_flight < 1 or time_of_flight > self.time_of_flight_max):
             print("time of flight is out of range")
             return -3
 
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _set_bits(cntr, self.TriggerChannels + self.DurationWidth, self.TimeOfFlightWidth, time_of_flight-1)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = _set_bits(control_register, self.trigger_channels + self.duration_width, self.time_of_flight_width, time_of_flight-1)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
 
     def set_decimated_output_type(self, type):
         """
         Sets the type of output data of the decimated stream.\n
         Can be set to output the decimated samples or the accumulated values.
-        
+
         :param type: Selection, allowed values are 'decimated' and 'accumulated'
-        :type type: 
+        :type type: str
         """
 
-        bitvalue = None
+        output_mode_bit = None
 
         if type == 'decimated':
-            bitvalue = 0
+            output_mode_bit = 0
         elif type == 'accumulated':
-            bitvalue = 1
+            output_mode_bit = 1
         else:
             print("error, input value for type is not recognized, allowed values are 'decimated' and 'accumulated'")
             return -3
-        
-        control = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl), self.AccumulateSelPos, bitvalue)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
+
+        updated_control = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl), self.accumulate_select_pos, output_mode_bit)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, updated_control)
         return 0

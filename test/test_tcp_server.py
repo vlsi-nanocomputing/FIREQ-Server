@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from server.tcp_server import FIREQServer
 from server.message_handler import MessageHandler
-from server.ol_adapter import OL_adapter
+from server.ol_adapter import OverlayAdapter
 
 try:
     from test.mock_hardware import MockOverlay
@@ -91,7 +91,7 @@ def server_ctx():
     if "num_generators" not in mock_hw.hw_specs["summary"]:
         mock_hw.hw_specs["summary"]["num_generators"] = 1
         
-    adapter = OL_adapter(mock_hw)
+    adapter = OverlayAdapter(mock_hw)
     handler = MessageHandler(adapter)
     
     # 2. Start Server
@@ -205,7 +205,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
     """
     # 1. Preload dummy data
     gen_idx = 0
-    server_ctx.adapter.ol.generators[gen_idx].EnvelopeMemoryDict["rect"] = {"type": "std"}
+    server_ctx.adapter.ol.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
     server_ctx.adapter.compile_waves(
         gen_index=gen_idx,
         waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}],

@@ -16,19 +16,19 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
         super().__init__(description= description)
         # parse the number of channels of the trigger generator
-        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
+        self.trigger_channels = int(description['parameters']['TriggerWordWidth'])
         # parse the fifo interface depth and create mmio handle
-        self.FifoInterfaceMemoryDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
+        self.fifo_interface_memory_depth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
         # fifo depth in number of words 
-        self.ChannelFifoDepth = pow(2,int(description['parameters']['FifoAddressWidth']))
+        self.channel_fifo_depth = pow(2,int(description['parameters']['FifoAddressWidth']))
         # fifo output width
-        self.FifoOutputWidth = int(description['parameters']['FifoOutputWidth'])
+        self.fifo_output_width = int(description['parameters']['FifoOutputWidth'])
         # maximum drive delay
-        self.DriveDelayMax = pow(2,self.FifoOutputWidth-1)
+        self.drive_delay_max = pow(2,self.fifo_output_width-1)
         # experiment max
-        self.ExperimentTimerMax = pow(2,int(description['parameters']['ExperimentTimerWidth']))
+        self.experiment_timer_max = pow(2,int(description['parameters']['ExperimentTimerWidth']))
         # parse the size of the repitition counter
-        self.MaxHWRepetitions = pow(2,int(description['parameters']['RepetitionWidth']))
+        self.max_hw_repetitions = pow(2,int(description['parameters']['RepetitionWidth']))
 
         self.ctrl = 0
         self.experiment_dur_l = 2
@@ -38,13 +38,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self.shots_num_l = 1
 
         # Bit position definition
-        self.ManTrigPos = 31
+        self.manual_trigger_pos = 31
 
     def print_description(self):
-        print("trigger channels: " + str(self.TriggerChannels))
-        print("fifo interface axi depth: " + str(self.FifoInterfaceMemoryDepth))
-        print("fifo channel depth: " + str(self.ChannelFifoDepth))
-        print("maximum number of hardware repetitions: " + str(self.MaxHWRepetitions))
+        print("trigger_channels: " + str(self.trigger_channels))
+        print("fifo_interface_axi_depth: " + str(self.fifo_interface_memory_depth))
+        print("fifo_channel_depth: " + str(self.channel_fifo_depth))
+        print("maximum_number_of_hardware_repetitions: " + str(self.max_hw_repetitions))
     
     def init_axi_full_interface(self, base_address : int, axi_depth : int):
         super().init_axi_full_interface(base_address, axi_depth)
@@ -74,8 +74,8 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :param value: number of shots
         :type value: uint
         """
-        if(value < 1 or value > self.MaxHWRepetitions):
-            print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.MaxHWRepetitions))
+        if(value < 1 or value > self.max_hw_repetitions):
+            print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.max_hw_repetitions))
             return
 
         self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value - 1))
@@ -84,17 +84,17 @@ class TriggerGeneratorDriver(_FIREQDriver):
         """
         Start the generation of triggers
         """
-        self.AxiLiteInterfaceMMIO.write(0,1 << self.ManTrigPos)
+        self.AxiLiteInterfaceMMIO.write(0,1 << self.manual_trigger_pos)
 
     def is_done(self):
         """
         Check if the experiment is finished
-        
+
         :return: 1 if the experiment is finished, 0 if still running
         :rtype: Literal[1, 0]
         """
-        cntr = self.AxiLiteInterfaceMMIO.read(0)
-        if ((cntr & 0x40000000) == 0x40000000):
+        control_register = self.AxiLiteInterfaceMMIO.read(0)
+        if ((control_register & 0x40000000) == 0x40000000):
             return 1
         else:
             return 0
@@ -113,20 +113,20 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :param generate_trigger: Generates a trigger if set to 1
         :type generate_trigger: Literal[1, 0]
         """
-        if (channel< 1 or channel > self.TriggerChannels):
-            print("error, channel " + str(channel) + " is outside of range 1 to " + str(self.TriggerChannels))
+        if (channel< 1 or channel > self.trigger_channels):
+            print("error, channel " + str(channel) + " is outside of range 1 to " + str(self.trigger_channels))
             return -3
 
-        if (index < 1 or index > self.ChannelFifoDepth):
+        if (index < 1 or index > self.channel_fifo_depth):
             print("error, the index is outside of range")
             return -3
 
-        if (delay < 1 or delay > self.DriveDelayMax):
+        if (delay < 1 or delay > self.drive_delay_max):
             print("error, the delay is outside of range")
             return -3
         
         real_delay = (delay - 1) | (generate_trigger << 31)
-        real_address = (channel - 1)*self.ChannelFifoDepth + index - 1
+        real_address = (channel - 1)*self.channel_fifo_depth + index - 1
         self.AxiFullInterfaceMMIO.write(real_address*4, int(real_delay))
         return 0
     
@@ -137,7 +137,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :param duration: Duration in clock cycles
         :type duration: uint
         """
-        if channel < 1 or channel > self.TriggerChannels:
+        if channel < 1 or channel > self.trigger_channels:
             print("error, channel selection out of range")
             return -3
         # write inc LOW

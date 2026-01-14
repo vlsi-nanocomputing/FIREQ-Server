@@ -13,9 +13,6 @@ from .trigger_generator_driver import TriggerGeneratorDriver
 __all__ = ["FIREQ_SoC"]
 
 
-
-
-
 class FIREQ_SoC(Overlay):
     """
     Low-level representation of the FIREQ SoC.
@@ -108,7 +105,7 @@ class FIREQ_SoC(Overlay):
         - Bind AXI interfaces on FIREQ IPs.
         - Populate IP lists: _generation_ips, _readout_ips, _trigger_ip.
         """
-        mmap = self._FIREQ_parser.GetAddressMapping()
+        mmap = self._FIREQ_parser.get_address_mapping()
 
         for ip_name, maps in mmap.items():
             if not hasattr(self, ip_name):
@@ -156,11 +153,9 @@ class FIREQ_SoC(Overlay):
                 continue
 
             gen_instance_name = gen_fullpath.split('/')[0]
-            gen_xml = self._FIREQ_parser._GetModule(gen_instance_name)
-            if not gen_xml:
-                continue
+            gen_xml = self._FIREQ_parser.get_module(gen_instance_name)
 
-            conn = self._FIREQ_parser.GetConnectivity(gen_xml, all_modules)
+            conn = self._FIREQ_parser.get_connectivity(gen_xml, all_modules)
 
             def find_rfdc_sink(node_dict):
                 if node_dict['NODE'] == rfdc_name:
@@ -191,9 +186,9 @@ class FIREQ_SoC(Overlay):
         # ---------------------------------------------------------------------
         # 2. Map Acquisitions (ADC Path)
         # ---------------------------------------------------------------------
-        rfdc_xml = self._FIREQ_parser._GetModule(rfdc_name)
+        rfdc_xml = self._FIREQ_parser.get_module(rfdc_name)
         if rfdc_xml:
-            conn_rfdc = self._FIREQ_parser.GetConnectivity(rfdc_xml, all_modules)
+            conn_rfdc = self._FIREQ_parser.get_connectivity(rfdc_xml, all_modules)
 
             def trace_rfdc_source(node_dict, source_port_name, at_root=True):
                 if at_root and node_dict['NODE'] == rfdc_name:
@@ -214,7 +209,7 @@ class FIREQ_SoC(Overlay):
                         return res
                 return None
 
-            rfdc_interfaces = self._FIREQ_parser._GetBusInterfaces(rfdc_xml)
+            rfdc_interfaces = self._FIREQ_parser.get_bus_interfaces(rfdc_xml)
 
             for bus_name, attribs in rfdc_interfaces.items():
                 if attribs['TYPE'] in ['MASTER', 'INITIATOR']:
@@ -258,11 +253,11 @@ class FIREQ_SoC(Overlay):
         port_name = mode_to_port[mode]
 
         # 2) Get Acq module XML and its BUSNAME for that port
-        acq_mod = self._FIREQ_parser._GetModule(acq_inst)
+        acq_mod = self._FIREQ_parser.get_module(acq_inst)
         if acq_mod is None:
             return -1
 
-        acq_busifs = self._FIREQ_parser._GetBusInterfaces(acq_mod)  # dict: busname -> attribs
+        acq_busifs = self._FIREQ_parser.get_bus_interfaces(acq_mod)  # dict: busname -> attribs
         start_busname = None
         for busname, a in acq_busifs.items():
             if a.get("NAME") == port_name:
@@ -280,7 +275,7 @@ class FIREQ_SoC(Overlay):
             if "axis_register_slice" not in vlnv:
                 continue
 
-            busifs = self._FIREQ_parser._GetBusInterfaces(m)
+            busifs = self._FIREQ_parser.get_bus_interfaces(m)
             # we want the S_AXIS endpoint bound to the same BUSNAME
             for busname, a in busifs.items():
                 if busname == start_busname and a.get("NAME") == "S_AXIS":
@@ -294,7 +289,7 @@ class FIREQ_SoC(Overlay):
             return -1
 
         # 4) From that register slice, take its M_AXIS BUSNAME
-        regslice_busifs = self._FIREQ_parser._GetBusInterfaces(regslice_mod)
+        regslice_busifs = self._FIREQ_parser.get_bus_interfaces(regslice_mod)
         next_busname = None
         for busname, a in regslice_busifs.items():
             if a.get("NAME") == "M_AXIS":
@@ -311,7 +306,7 @@ class FIREQ_SoC(Overlay):
             if "axis_data_fifo" not in vlnv:
                 continue
 
-            busifs = self._FIREQ_parser._GetBusInterfaces(m)
+            busifs = self._FIREQ_parser.get_bus_interfaces(m)
             for busname, a in busifs.items():
                 if busname == next_busname and a.get("NAME") == "S_AXIS":
                     fifo_inst = inst
@@ -324,8 +319,8 @@ class FIREQ_SoC(Overlay):
 
         # 6) Read FIFO depth parameter (Vivado sometimes uses FIFO_DEPTH or C_FIFO_DEPTH)
         depth = (
-            self._FIREQ_parser._GetParameter(fifo_inst, "FIFO_DEPTH")
-            or self._FIREQ_parser._GetParameter(fifo_inst, "C_FIFO_DEPTH")
+            self._FIREQ_parser.get_parameter(fifo_inst, "FIFO_DEPTH")
+            or self._FIREQ_parser.get_parameter(fifo_inst, "C_FIFO_DEPTH")
         )
         try:
             return int(depth)
@@ -453,22 +448,20 @@ class FIREQ_SoC(Overlay):
             
             acq_specs = {
                 "index": idx,
-                "name": desc.get("name"),
-                "_fullpath": desc.get("_fullpath"),
 
-                "sample_bits": getattr(acq, "SampleSize", None),
-                "parallelism": getattr(acq, "NumberOfChannels", None),
-                "phase_bits": getattr(acq, "PhaseDepth", None),
-                "trigger_word_width": getattr(acq, "TriggerChannels", None),
+                "sample_bits": getattr(acq, "sample_size", None),
+                "parallelism": getattr(acq, "number_of_channels", None),
+                "phase_bits": getattr(acq, "phase_depth", None),
+                "trigger_word_width": getattr(acq, "trigger_channels", None),
 
-                "duration_bits": getattr(acq, "DurationWidth", None),
-                "max_duration_cycles": getattr(acq, "MaximumDuration", None),
+                "duration_bits": getattr(acq, "duration_width", None),
+                "max_duration_cycles": getattr(acq, "maximum_duration", None),
 
-                "time_of_flight_bits": getattr(acq, "TimeOfFlightWidth", None),
-                "time_of_flight_max": getattr(acq, "TimeOfFlightMax", None),
+                "time_of_flight_bits": getattr(acq, "time_of_flight_width", None),
+                "time_of_flight_max": getattr(acq, "time_of_flight_max", None),
 
-                "raw_output_width_bits": getattr(acq, "NDCMT_OutputWidth", None),
-                "dec_output_width_bits": getattr(acq, "DCMT_OutputWidth", None),
+                "raw_output_width_bits": getattr(acq, "non_decimated_output_width", None),
+                "dec_output_width_bits": getattr(acq, "decimated_output_width", None),
 
                 "raw_fifo_depth_words": d_raw,
                 "decimated_fifo_depth_words": d_dec,
@@ -483,37 +476,35 @@ class FIREQ_SoC(Overlay):
             desc = getattr(gen, "description", {}) or {}
             gen_specs = {
                 "index": idx,
-                "name": desc.get("name"),
-                "_fullpath": desc.get("_fullpath"),
 
-                "sample_bits": getattr(gen, "SampleSize", None),
-                "parallelism": getattr(gen, "NumberOfChannels", None),
-                "phase_bits": getattr(gen, "PhaseDepth", None),
-                "trigger_word_width": getattr(gen, "TriggerChannels", None),
+                "sample_bits": getattr(gen, "sample_size", None),
+                "parallelism": getattr(gen, "number_of_channels", None),
+                "phase_bits": getattr(gen, "phase_depth", None),
+                "trigger_word_width": getattr(gen, "trigger_channels", None),
 
-                "duration_bits": getattr(gen, "DurationWidth", None),
-                "max_duration_cycles": getattr(gen, "MaximumDuration", None),
+                "duration_bits": getattr(gen, "duration_width", None),
+                "max_duration_cycles": getattr(gen, "maximum_duration", None),
 
-                "sample_mem_addr_bits": getattr(gen, "SampleMemoryAddressWidth", None),
+                "sample_mem_addr_bits": getattr(gen, "sample_memory_address_width", None),
                 "sample_mem_depth_words_per_channel": getattr(
-                    gen, "ChannelSampleMemoryDepth", None
+                    gen, "channel_sample_memory_depth", None
                 ),
                 "fractional_precision_bits": getattr(
-                    gen, "FractionalPrecision", None
+                    gen, "fractional_precision", None
                 ),
 
-                "wave_memory_depth": getattr(gen, "WaveMemorySegmentDepth", None),
+                "wave_memory_depth": getattr(gen, "wave_memory_segment_depth", None),
                 "mm_fifo_depth": getattr(
-                    gen, "MemoryMappedFifoSegmentDepth", None
+                    gen, "memory_mapped_fifo_segment_depth", None
                 ),
                 "axi_full_depth_bytes": getattr(
-                    gen, "AxiFullInterfaceDepth", None
+                    gen, "axi_full_interface_depth", None
                 ),
                 "total_sample_mem_segment_depth": getattr(
-                    gen, "TotalSampleMemorySegmentDepth", None
+                    gen, "total_sample_memory_segment_depth", None
                 ),
 
-                "lfsr_seed_bits": getattr(gen, "SeedLfsrWidth", None),
+                "lfsr_seed_bits": getattr(gen, "seed_lfsr_width", None),
             }
             generators_specs.append(gen_specs)
 
@@ -525,24 +516,22 @@ class FIREQ_SoC(Overlay):
             desc = getattr(trig, "description", {}) or {}
             trig_specs = {
                 "index": idx,
-                "name": desc.get("name"),
-                "_fullpath": desc.get("_fullpath"),
 
-                "trigger_channels": getattr(trig, "TriggerChannels", None),
+                "trigger_channels": getattr(trig, "trigger_channels", None),
 
                 "fifo_interface_mem_depth_bytes": getattr(
-                    trig, "FifoInterfaceMemoryDepth", None
+                    trig, "fifo_interface_memory_depth", None
                 ),
                 "channel_fifo_depth_words": getattr(
-                    trig, "ChannelFifoDepth", None
+                    trig, "channel_fifo_depth", None
                 ),
                 "fifo_output_width_bits": getattr(
-                    trig, "FifoOutputWidth", None
+                    trig, "fifo_output_width", None
                 ),
 
-                "drive_delay_max": getattr(trig, "DriveDelayMax", None),
-                "experiment_timer_max": getattr(trig, "ExperimentTimerMax", None),
-                "max_hw_repetitions": getattr(trig, "MaxHWRepetitions", None),
+                "drive_delay_max": getattr(trig, "drive_delay_max", None),
+                "experiment_timer_max": getattr(trig, "experiment_timer_max", None),
+                "max_hw_repetitions": getattr(trig, "max_hw_repetitions", None),
             }
             triggers_specs.append(trig_specs)
 
@@ -620,17 +609,17 @@ class FIREQ_SoC(Overlay):
     def envelope_cache(self, gen_index: int = 0) -> dict:
         """Snapshot of GeneratorDriver envelope cache (name -> meta)."""
         gen = self._get_gen(gen_index)
-        return dict(gen.EnvelopeMemoryDict)
+        return dict(gen.envelope_memory_dict)
 
     def wave_cache(self, gen_index: int = 0) -> dict:
         """Snapshot of GeneratorDriver wave cache (name/slot -> byte address)."""
         gen = self._get_gen(gen_index)
-        return dict(gen.WaveMemoryDict)
+        return dict(gen.wave_memory_dict)
 
     def wave_mem_stats(self, gen_index: int = 0) -> dict:
         """Wave memory usage in bytes/slots, derived from driver counters."""
         gen = self._get_gen(gen_index)
-        used_bytes = int(gen.WaveMemoryDict.get("_NEXT", 0))
+        used_bytes = int(gen.wave_memory_dict.get("_NEXT", 0))
         total_bytes = int(getattr(gen, "WaveMemorySegmentDepth", 0))
         total_slots = (total_bytes // self._WDW_BYTES) if total_bytes else 0
         used_slots = used_bytes // self._WDW_BYTES

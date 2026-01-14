@@ -31,16 +31,15 @@ Limitations
 # ======================================================================
 
 import logging
-from typing import Any, Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal, TypedDict, Tuple
 import numpy as np
 from dataclasses import dataclass
 from FIREQ_LL_API import FIREQ_SoC
 from .dma_engine import AcquisitionEngine
-from .exceptions import *
-from typing import Any, Callable, Optional, Dict, TypedDict
+from .exceptions import ConfigurationError, DriverError, HardwareStateError
 import time
 
-class modulation(TypedDict):
+class Modulation(TypedDict):
     """
     Specification for Local Oscillator (LO) modulation parameters.
 
@@ -49,10 +48,10 @@ class modulation(TypedDict):
     :param phase: The phase offset in degrees (optional, primarily for readout).
     :type phase: Optional[float]
     """
-    frequency_mhz : float
-    phase : Optional[float]
+    frequency_mhz: float
+    phase: Optional[float]
 
-class trigger_command(TypedDict):
+class TriggerCommand(TypedDict):
     """
     Specification for a trigger configuration command.
 
@@ -88,7 +87,7 @@ class EnvelopeSpec(TypedDict):
     q_even: bool
     samples_iq: List[List[float]]
 
-# WAVE TYPES : regular waves VS virtual Z gates
+# WAVE TYPES: regular waves vs virtual Z gates
 
 WaveKind = Literal["env", "vz"]  # env = X/Y/readout, vz = Virtual-Z
 
@@ -118,7 +117,7 @@ class WaveEntry:
     :param wdw: The compiled 128-bit Wave Definition Word. If None, the entry requires compilation.
     :type wdw: Optional[int]
     """
-    kind : WaveKind = "env"
+    kind: WaveKind = "env"
     # --- env waves(X/Y/readout)
     envelope: str = ""
     duration: int = 1
@@ -127,7 +126,7 @@ class WaveEntry:
     keep_last: bool = False
     
     # --- vz waves ---
-    vz_phase_rad : float = 0.0 
+    vz_phase_rad: float = 0.0
 
     # --- compiled outcome ---
     wdw: Optional[int] = None
@@ -161,7 +160,7 @@ def _same_spec(a: WaveEntry, b: WaveEntry) -> bool:
     # VZ: envelope/duration/gain : "phase-centric"
     return float(a.vz_phase_rad) == float(b.vz_phase_rad)
         
-def handle_error_result( result: Any,
+def handle_error_result(result: Any,
     *, # next methods MUST be specified when the function is used
     operation: str,
     driver_name: str,
@@ -246,7 +245,7 @@ def handle_error_result( result: Any,
         return_code=code,
     )
 
-class OL_adapter:
+class OverlayAdapter:
     """
     High-level adapter for FIREQ hardware control.
 
@@ -296,7 +295,7 @@ class OL_adapter:
             "Check: wave_definition must be non-negative 128-bit integer.",
         ("GeneratorDriver", "create_vz_gate_definition_word", -3):
             "Check: phase offset in radians is finite; driver expects a 48-bit signed value in WDW[47:0] and sets IS_VZ_GATE (bit 119).",
-        ("AcquisitionDriver", "set_acquistion_dds_parameters", -3):
+        ("AcquisitionDriver", "set_acquisition_dds_parameters", -3):
             "Check: frequency>=0, duration in [1..MaximumDuration], adc_samplerate correct.",
         ("TriggerGeneratorDriver", "insert_drive_delay", -3):
             "Check: channel range, index range, delay range, generate_trigger is 0/1.",
@@ -319,18 +318,9 @@ class OL_adapter:
 
         self.ol = ol
         self.logger = logger or logging.getLogger(__name__)
-        self._summary = ol.summary()  
-        self.last_acq_mode = None
         # DMA engine (needed for run_experiment)
         if self.ol.dma is None or self.ol.axis_switch is None:
             raise HardwareStateError("DMA or AXI-Stream switch missing in overlay")
-
-        par = self.ol.hw_specs["summary"].get("adc_parallelism")
-        if par is None:
-            # fallback if not uniform across IPs (future developements)
-            par_set = self.ol.hw_specs["summary"].get("adc_parallelism_set") or []
-            par = (par_set[0] if isinstance(par_set, (list, tuple)) and len(par_set) else 8)
-
         # The DMA engine is constructed once as a long-lived resource.
         self.dma_engine = AcquisitionEngine(
             self.ol.dma,
@@ -344,15 +334,16 @@ class OL_adapter:
         # Create a memory of the compiled WDW. Each wdw is accessible via the wave_id as key
         self._wave_store: Dict[int, Dict[str, WaveEntry]] = {}   # gen_index -> waves = { wave_id:str , WaveEntry]}
         # Create a memory of the last used experiment
-        self._last_fifo: Dict[int, List[str]] = {}             # gen_index -> last programmed FIFO  : [wdw0, wdw1, ...] 
+        self._last_fifo: Dict[int, List[str]] = {}  # gen_index -> last programmed FIFO: [wdw0, wdw1, ...]
         # Create a memory for readout waves (one per generator)
         self._readout_wave_store: Dict[int, WaveEntry] = {}    # gen_index -> current readout WaveEntry 
         
-        # Timing for statistics
+        # Timing for statistics (fpga_active_ms is DMA wait time proxy).
         self.last_timing_stats = {
             "sw_overhead_ms": 0.0,
             "fpga_active_ms": 0.0
         }
+        self._sweep_prepared = False
     # ------------------------------------------------------------
     # Pass-through: everything not defined here goes to self.ol
     # ------------------------------------------------------------
@@ -510,7 +501,7 @@ class OL_adapter:
         matches: List[str] = [
             wave_id
             for wave_id, entry in cache.items()
-            if (entry.wdw is not None) and (int(entry.wdw) == int(wdw_int))
+            if entry.wdw is not None and (int(entry.wdw) == int(wdw_int))
         ]
 
         if len(matches) == 0:
@@ -527,7 +518,7 @@ class OL_adapter:
 
         # LL consistency check
         gen = self._get_gen(gen_index)
-        if wave_id not in gen.WaveMemoryDict:
+        if wave_id not in gen.wave_memory_dict:
             raise ConfigurationError(
                 f"Inconsistent state: wave_id='{wave_id}' has matching WDW in WaveEntry but not in driver WaveMemoryDict"
             )
@@ -620,7 +611,7 @@ class OL_adapter:
         :rtype: List[str]
         """
         gen = self._get_gen(gen_index)
-        return list(getattr(gen, "EnvelopeMemoryDict", {}).keys())
+        return list(getattr(gen, "envelope_memory_dict", {}).keys())
     
     # ------------------------------------------------------------
     # Macro command G1: upload_envelopes
@@ -668,7 +659,7 @@ class OL_adapter:
        
         gen = self._get_gen(gen_index)
         loaded: List[str] = []
-        skipped: list[str] = []
+        skipped: List[str] = []
         failed: List[dict] = []
 
         env_cache = getattr(gen, "EnvelopeMemoryDict", {})
@@ -693,11 +684,11 @@ class OL_adapter:
                 q_even = bool(e["q_even"])
                 samples_iq = e["samples_iq"]
 
-                env = self._iq_float_to_cint16(samples_iq, int(gen.SampleSize))
-                # Non-interp: automatic zero-padding on demand to allow non-interpolated 
+                env = self._iq_float_to_cint16(samples_iq, int(gen.sample_size))
+                # Non-interp: automatic zero-padding on demand to allow non-interpolated
                 # envelopes upload.
                 if auto_pad_noninterp and (not for_interp):
-                    par = int(gen.NumberOfChannels)
+                    par = int(gen.number_of_channels)
                     r = int(env.size) % par
                     if r != 0:
                         old = int(env.size)
@@ -727,14 +718,12 @@ class OL_adapter:
 
         self.logger.info("upload_envelopes: done gen=%d loaded=%d skipped=%d failed=%d",
                  gen_index, len(loaded), len(skipped), len(failed))
-        return {"gen_index": int(gen_index), "loaded": loaded, "skipped" : skipped, "failed": failed}
+        return {"gen_index": int(gen_index), "loaded": loaded, "skipped": skipped, "failed": failed}
 
     # ------------------------------------------------------------
     # Macro command G2: compile_waves
     # ------------------------------------------------------------
-    def compile_waves(self, *, gen_index: int, waves: List[dict], replace : bool) -> dict:
-        self.logger.info("compile_waves: gen=%d n=%d", gen_index, len(waves))
-        self.logger.debug("compile_waves: waves=%s", waves)
+    def compile_waves(self, *, gen_index: int, waves: List[dict], replace: bool) -> dict:
         """
         Compile high-level wave definitions into hardware Wave Definition Words (WDW).
 
@@ -750,6 +739,8 @@ class OL_adapter:
         :return: A summary dictionary detailing compiled, replaced, skipped, and failed waves.
         :rtype: dict
         """
+        self.logger.info("compile_waves: gen=%d n=%d", gen_index, len(waves))
+        self.logger.debug("compile_waves: waves=%s", waves)
         
         # each wave_id is handled independently, but HL–LL consistency is
         # enforced strictly to avoid latent corruption.
@@ -782,7 +773,7 @@ class OL_adapter:
                         keep_last=bool(w.get("keep_last", False)),
                         wdw=None,
                     )
-                else :
+                else:
                     # VZ: envelope/duration/gain are meaningless -> don't require them
                     # VZ is only a "phase-preparation"
                     if "vz_phase_rad" not in w:
@@ -809,7 +800,7 @@ class OL_adapter:
                 # b. discarded + error raise, if new and old have the same spec but replace = False [unauthorized replacement]
                 # c. substituted, if new and old have not the same spec AND replace = True     
                 old_entry = cache.get(wave_id)
-                in_hw = (wave_id in gen.WaveMemoryDict)
+                in_hw = (wave_id in gen.wave_memory_dict)
 
                 # Skip path:
                 # allowed ONLY when:
@@ -823,10 +814,10 @@ class OL_adapter:
                 # ---  SKIP EARLY (no WDW computation)
                 if old_entry is not None and _same_spec(old_entry, new_entry) and in_hw and (old_entry.wdw is not None):
                     
-                    # 1. old_entry is not None : ensure this is not the first run/ run after a hard reset (reset_envelopes / reset_wave_memory with preserve_specs = False)
-                    # 2. _same_spec(old_entry, new_entry) : waves are the same functionally
-                    # 3. in_hw : old_entry == new_entry was actually compiled
-                    # 4. old_entry.wdw is not None : ensure the wdw is not deprecated. For example, after a reset_wave_memory with preserve_specs = True. 
+                    # 1. old_entry is not None: ensure this is not the first run/ run after a hard reset (reset_envelopes / reset_wave_memory with preserve_specs = False)
+                    # 2. _same_spec(old_entry, new_entry): waves are the same functionally
+                    # 3. in_hw: old_entry == new_entry was actually compiled
+                    # 4. old_entry.wdw is not None: ensure the wdw is not deprecated. For example, after a reset_wave_memory with preserve_specs = True. 
                     #    In that case, you preserve waves characteristics but you need to recompile the whole cache
                     
                     skipped.append(wave_id)
@@ -838,7 +829,7 @@ class OL_adapter:
 
                 # --- Replacement
                 if old_entry is not None and not _same_spec(old_entry, new_entry) and not replace:                  
-                    #stop the execution : replacement not allowed by the user
+                    # stop the execution: replacement not allowed by the user
                     raise ConfigurationError(
                         f"wave_id '{wave_id}' already exists but spec differs. "
                         f"OLD={old_entry} NEW={new_entry}. "
@@ -848,7 +839,7 @@ class OL_adapter:
                 # HL–LL desynchronization guard:
                 # a wave existing in hardware but not in HL cache indicates
                 # an unsafe state unless explicitly acknowledged by replace=True.
-                if old_entry is None and in_hw and not replace :
+                if old_entry is None and in_hw and not replace:
                     raise ConfigurationError(
                         f"wave_id '{wave_id}' exists in HW but not in HL cache. "
                         f"Hint: set replace=True to re-sync or rebuild HL cache."
@@ -886,14 +877,14 @@ class OL_adapter:
                     #replace: either spec changed or synch HL-LL cache
                     self._call(
                         gen.replace_wave_in_wave_memory(wdw, wave_id, wave_id),
-                        operation = "replace_wave_in_wave_memory",
-                        driver_name = "GeneratorDriver",
-                        config_error = True,
+                        operation="replace_wave_in_wave_memory",
+                        driver_name="GeneratorDriver",
+                        config_error=True,
                     )
                     replaced.append(wave_id)
                 
                 
-                else :
+                else:
                     # completely new entry
                     self._call(
                         gen.add_wave_in_wave_memory(wdw, wave_id),
@@ -1092,17 +1083,17 @@ class OL_adapter:
             raise ConfigurationError(f"program_drive_sequence: start_index must be >= 1, got {start_index}")
 
         # capacity check (avoid cryptic -3 later)
-        max_entries = int(gen.MemoryMappedFifoSegmentDepth // 4)
+        max_entries = int(gen.memory_mapped_fifo_segment_depth // 4)
         end_index = start_index + len(wave_id_list) - 1
         if end_index > max_entries:
             raise ConfigurationError(
                 f"program_drive_sequence: overflow: end_index={end_index} > max_entries={max_entries}"
             )
-        # Pre-check : avoid wrong FIFO listing 
-        # Check 1 : High Level Cache [wave_id <--> stored & compiled wdw]
-        missing_wave_id_HL = [ wid for wid in wave_id_list if (wid not in cache) or (cache[wid].wdw) is None]
-        # Check 2 : Low Level Cache [wave_id <--> Low Level]
-        missing_wave_id_LL = [ wid for wid in wave_id_list if wid not in gen.WaveMemoryDict]
+        # Pre-check: avoid wrong FIFO listing 
+        # Check 1: High Level Cache [wave_id <--> stored & compiled wdw]
+        missing_wave_id_HL = [wid for wid in wave_id_list if (wid not in cache) or (cache[wid].wdw) is None]
+        # Check 2: Low Level Cache [wave_id <--> Low Level]
+        missing_wave_id_LL = [wid for wid in wave_id_list if wid not in gen.wave_memory_dict]
         
         if missing_wave_id_HL:
             raise ConfigurationError(f"program_drive_sequence: wave_id not in HL cache: {missing_wave_id_HL}")
@@ -1110,12 +1101,8 @@ class OL_adapter:
             raise ConfigurationError(f"program_drive_sequence: wave_id was never compiled (LL): {missing_wave_id_LL}")
         
         # set the driver source as FIFO
-        self._call(
-            gen.set_drive_order_source(0),  # FIFO
-            operation="set_drive_order_source",
-            driver_name="GeneratorDriver",
-            config_error=True,
-        )
+        self.set_drive_source(gen_index= gen_index, source = "fifo")
+
         # Program FIFO (index starts at 1 in the LL driver)
         for i, wave_id in enumerate(wave_id_list, start=start_index):
             self._call(
@@ -1164,7 +1151,7 @@ class OL_adapter:
         preserve_specs:
             - True  -> keep WaveEntry specs but invalidate compiled WDW (set entry.wdw=None)
             - False -> clear HL wave cache entirely for this generator
-            - Design motivation : speedup reconfigurations after reset operations.
+            - Design motivation: speedup reconfigurations after reset operations.
 
         clear_last_fifo:
             - True  -> forget last programmed FIFO sequence in HL cache (recommended)
@@ -1308,8 +1295,8 @@ class OL_adapter:
     
     # ------------------------------------------------------------
     # Macro command G6: Generator Modulation setup
-    # ------------------------------------------------------------   
-    def generator_modulation(self, gen_index: int, label: str , gen_mod : modulation ):
+    # ------------------------------------------------------------
+    def generator_modulation(self, gen_index: int, label: str, gen_mod: Modulation):
         """
         Configure the Direct Digital Synthesis (DDS) modulation parameters for a specific generator.
 
@@ -1321,7 +1308,7 @@ class OL_adapter:
         :param label: The modulation context, must be either 'drive' (control) or 'readout' (measurement).
         :type label: str
         :param gen_mod: A dictionary containing the modulation parameters (frequency in MHz, phase in degrees).
-        :type gen_mod: modulation
+        :type gen_mod: Modulation
         :return: A summary of the applied modulation configuration.
         :rtype: dict
         :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
@@ -1350,20 +1337,20 @@ class OL_adapter:
             if label == "drive":
                 self._call(
                     gen.set_drive_dds_parameters(frequency=gen_mod["frequency_mhz"], dac_samplerate= self._dac_sr_mhz()),
-                    operation= "set_drive_dds_parameters",
-                    driver_name= "GeneratorDriver",
-                    config_error= True
+                    operation="set_drive_dds_parameters",
+                    driver_name="GeneratorDriver",
+                    config_error=True
                 )
 
             else:
                 self._call(
                     gen.set_readout_dds_parameters(frequency=gen_mod["frequency_mhz"], phase= gen_mod["phase"], dac_samplerate= self._dac_sr_mhz()),
-                    operation= "set_readout_dds_parameters",
-                    driver_name= "GeneratorDriver",
-                    config_error= True
+                    operation="set_readout_dds_parameters",
+                    driver_name="GeneratorDriver",
+                    config_error=True
                 )
         else:
-            raise ConfigurationError("Invalid mode selection!\nHint : select label =  'drive' or 'readout' ")
+            raise ConfigurationError("Invalid mode selection!\nHint: select label =  'drive' or 'readout' ")
         self.logger.info("Modulation set-up!")
         return {
                 "gen_index": gen_index,
@@ -1375,14 +1362,14 @@ class OL_adapter:
     # ------------------------------------------------------------
     # Macro command G7: Generator Channel "listening" to trigger
     # ------------------------------------------------------------  
-    def gen_trigger2listen(self, gen_index, trig: trigger_command):
+    def gen_trigger2listen(self, gen_index, trig: TriggerCommand):
         """
         Configure which trigger channel the generator should listen to.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
         :param trig: Dictionary defining the trigger type and source channel.
-        :type trig: trigger_command
+        :type trig: TriggerCommand
         :return: The applied trigger configuration.
         :rtype: dict
         """
@@ -1399,7 +1386,7 @@ class OL_adapter:
             config_error= True
         )
     
-        if(trig["channel"] == 0):
+        if trig["channel"] == 0:
             self.logger.info("Generator %d is deaf to any trigger!", gen_index)
         else:
             self.logger.info("Generator %d listens to %s_trigger_word channel %d", gen_index,trig["ttype"], trig["channel"] )
@@ -1413,112 +1400,69 @@ class OL_adapter:
     # ------------------------------------------------------------
     # Macro command G9: LFSR Configuration
     # ------------------------------------------------------------
-    def configure_lfsr(
-        self,
-        *,
-        gen_index: int,
-        seed: int,
-        enable: bool = True,
-    ) -> dict:
-        """
-        Configure the Linear Feedback Shift Register (LFSR) for pseudo-random wave generation.
-
-        When enabled, the wave sequence is determined by the LFSR output instead of the FIFO.
-
-        :param gen_index: Index of the generator.
-        :type gen_index: int
-        :param seed: LFSR seed value (range [0, 2^SeedLfsrWidth - 1]).
-        :type seed: int
-        :param enable: If True, uses LFSR as sequence source. If False, uses FIFO.
-        :type enable: bool
-        :return: Applied LFSR configuration.
-        :rtype: dict
-        """
-        self.logger.info(
-            "configure_lfsr: gen=%d seed=%d enable=%s",
-            gen_index, seed, enable
-        )
-        
-        gen = self._get_gen(gen_index)
-        
-        
-        # seed set-up
-        self._call(
-            gen.set_lfsr_seed(seed),
-            operation="set_lfsr_seed",
-            driver_name="GeneratorDriver",
-            config_error=True,
-        )
-        
-        # Select source (0=FIFO for deterministic sequence, 1=LFSR for random sequence)
-        source = 1 if enable else 0
-        self._call(
-            gen.set_drive_order_source(source),
-            operation="set_drive_order_source",
-            driver_name="GeneratorDriver",
-            config_error=True,
-        )
-        
-        self.logger.info(
-            "configure_lfsr: done gen=%d seed=%d source=%s",
-            gen_index, seed, "LFSR" if enable else "FIFO"
-        )
-        
-        return {
-            "gen_index": gen_index,
-            "seed": seed,
-            "enabled": enable,
-            "source": "LFSR" if enable else "FIFO",
-            "max_seed": max_seed,
-        }
 
     def set_drive_source(
         self,
         *,
         gen_index: int,
         source: Literal["fifo", "lfsr"],
+        seed: Optional[int] = None,
     ) -> dict:
         """
         Select the source for the drive wave sequence.
+
+        If source="lfsr" and seed is provided, the LFSR seed is programmed before enabling LFSR.
+        If source="fifo", the seed parameter is ignored.
 
         :param gen_index: Index of the generator.
         :type gen_index: int
         :param source: Selection between "fifo" (programmed sequence) or "lfsr" (pseudo-random).
         :type source: Literal["fifo", "lfsr"]
-        :return: Selected source status.
+        :param seed: Optional LFSR seed value. Used only when source="lfsr".
+        :type seed: Optional[int]
+        :return: Selected source status (and seed, if applied).
         :rtype: dict
         """
-        self.logger.info("set_drive_source: gen=%d source=%s", gen_index, source)
-        
+        self.logger.info("set_drive_source: gen=%d source=%s seed=%s", gen_index, source, seed)
+
         gen = self._get_gen(gen_index)
-        
+
         source_lower = str(source).lower()
         if source_lower == "fifo":
             source_val = 0
+
         elif source_lower == "lfsr":
             source_val = 1
+
+            if seed is not None:
+                self._call(
+                    gen.set_lfsr_seed(int(seed)),
+                    operation="set_lfsr_seed",
+                    driver_name="GeneratorDriver",
+                    config_error=True,
+                )
         else:
             raise ConfigurationError(
                 f"set_drive_source: invalid source='{source}'. Use 'fifo' or 'lfsr'."
             )
-        
+
         self._call(
             gen.set_drive_order_source(source_val),
             operation="set_drive_order_source",
             driver_name="GeneratorDriver",
             config_error=True,
         )
-        
+
         self.logger.info("set_drive_source: done gen=%d source=%s", gen_index, source_lower)
-        
-        return {
-            "gen_index": gen_index,
-            "source": source_lower,
-        }
-    
+
+        out = {"gen_index": int(gen_index), "source": source_lower}
+        if source_lower == "lfsr" and seed is not None:
+            out["seed"] = int(seed)
+        return out
+
     # -------------- Trigger GENERATOR IP MACROS -----------------
     # ------------------------------------------------------------
-    # Macro command TG1 : Program delay channels
+    # Macro command TG1: Program delay channels
     # ------------------------------------------------------------
     
     def tg_set_shots(self, shots: int) -> dict:
@@ -1534,9 +1478,9 @@ class OL_adapter:
         t = self._get_trig()
         shots_i = int(shots)
 
-        if shots_i < 1 or shots_i > int(t.MaxHWRepetitions):
+        if shots_i < 1 or shots_i > int(t.max_hw_repetitions):
             raise ConfigurationError(
-                f"shots={shots_i} out of range [1..{int(t.MaxHWRepetitions)}]"
+                f"shots={shots_i} out of range [1..{int(t.max_hw_repetitions)}]"
             )
 
         self.logger.info("Success!")
@@ -1569,33 +1513,35 @@ class OL_adapter:
     def tg_program_delays(
             self,
             *,
-            drive: dict | None = None,
-            readout: dict | None = None,
+            drive: Optional[dict] = None,
+            readout: Optional[dict] = None,
             drive_start_index: int = 1,
-            safe_pad: int = 0,
         ) -> dict:
         """
         Program the timing delays for drive and readout triggers.
+        For each programmed drive channel, entries from ``drive_start_index + len(entries)`` to the FIFO end are cleared.
+        This means partial patching does not preserve any existing tail.
 
         :param drive: Dictionary mapping channel indices to lists of (delay, value) pairs.
         :type drive: Optional[dict]
         :param readout: Dictionary mapping channel indices to readout delay specifications.
         :type readout: Optional[dict]
-        :param drive_start_index: FIFO index to start writing drive delays (default 1).
+        :param drive_start_index: FIFO index to start writing drive delays (default 1). Higher indices imply patching.
         :type drive_start_index: int
-        :param safe_pad: Number of safety padding entries to append to the drive sequence.
-        :type safe_pad: int
         :return: Report of programmed readout channels and drive sequences.
         :rtype: dict
         """
         self.logger.info("Setting experiment delays in the Trigger Generator")
-        self.logger.debug("---Experiment delay details--- \n1. drive_start_index = %d \n2.drive_delays = %s \n3.readout_delays= %s \n4. safe_pad = %d", drive_start_index, drive, readout, safe_pad)
+        self.logger.debug(
+            "---Experiment delay details--- \n1. drive_start_index = %d \n2.drive_delays = %s \n3.readout_delays= %s",
+            drive_start_index, drive, readout
+        )
         t = self._get_trig()
         drive = drive or {}
         readout = readout or {}
 
         start_idx = int(drive_start_index)
-        if start_idx < 1 or start_idx > int(t.ChannelFifoDepth):
+        if start_idx < 1 or start_idx > int(t.channel_fifo_depth):
             raise ConfigurationError(f"drive_start_index={start_idx} out of range")
 
         # --- readout delays (1 scalar per channel)
@@ -1624,14 +1570,14 @@ class OL_adapter:
             entries_list = list(spec["delay"])  # list of pairs
 
             # check capacity relative to start index
-            max_writable = int(t.ChannelFifoDepth) - (start_idx - 1)
+            max_writable = int(t.channel_fifo_depth) - (start_idx - 1)
             if len(entries_list) > max_writable:
                 raise ConfigurationError(
                     f"drive[{ch}] too long for start_index={start_idx}: "
                     f"{len(entries_list)} > {max_writable}"
                 )
 
-            # program
+            # program the requested block (patching supported via start_idx)
             for k, pair in enumerate(entries_list):
                 if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
                     raise ConfigurationError(f"drive[{ch}] entry #{k} must be (delay, gen_bit), got: {pair}")
@@ -1648,21 +1594,20 @@ class OL_adapter:
                     config_error=True,
                 )
 
-            # optional padding after the written block
-            if safe_pad:
-                pad_to = min(int(t.ChannelFifoDepth), (start_idx - 1) + len(entries_list) + int(safe_pad))
-                for fifo_index in range((start_idx + len(entries_list)), pad_to + 1):
-                    self._call(
-                        t.insert_drive_delay(ch, fifo_index, int(t.DriveDelayMax), 0),
-                        operation="insert_drive_delay",
-                        driver_name="TriggerGeneratorDriver",
-                        config_error=True,
-                    )
+            # Clear the tail after the written block (relative to start_idx) to avoid stale entries.
+            first_tail = start_idx + len(entries_list)
+            for fifo_index in range(first_tail, int(t.channel_fifo_depth) + 1):
+                self._call(
+                    t.insert_drive_delay(ch, fifo_index, int(t.drive_delay_max), 0),
+                    operation="insert_drive_delay",
+                    driver_name="TriggerGeneratorDriver",
+                    config_error=True,
+                )
 
             drive_report[ch] = {
                 "start_index": start_idx,
                 "n_entries": len(entries_list),
-                "padded": int(safe_pad),
+                "padded": 0,
             }
 
         return {
@@ -1670,28 +1615,29 @@ class OL_adapter:
             "drive_programmed": drive_report,
         }
 
+
     def trigger_experiment(self) -> None:
-            """
-            Trigger the experiment.
+        """
+        Trigger the experiment.
 
-            """
-
-            self.logger.debug("Triggering experiment...")
-            self.ol.trigger.start_experiment()
+        """
+        trigger = self._get_trig()
+        self.logger.debug("Triggering experiment...")
+        trigger.start_experiment()
 
     # -------------- Acquisition IP MACROS -----------------
     # ------------------------------------------------------------
-    # Macro command A1 :Acquisition IP setup 
+    # Macro command A1: Acquisition IP setup
     # ------------------------------------------------------------
     
-    def acquisition_modulation(self, acq_index: int , acq_mod : modulation ):
+    def acquisition_modulation(self, acq_index: int, acq_mod: Modulation):
         """
         Configure the DDS modulation parameters for an acquisition unit.
 
         :param acq_index: Index of the acquisition unit.
         :type acq_index: int
         :param acq_mod: Dictionary containing frequency and phase parameters.
-        :type acq_mod: modulation
+        :type acq_mod: Modulation
         :return: The applied configuration.
         :rtype: dict
         """
@@ -1703,7 +1649,7 @@ class OL_adapter:
 
         # Configure Mix-Mode via overlay (low-level handles tile/block mapping)
         try:
-            mix_info = self.ol.configure_adc_mix_mode(acq_index= acq_index, freq_mhz= acq_mod["frequency_mhz"])
+            mix_info = self.ol.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=acq_mod["frequency_mhz"])
             if mix_info.get("changed"):
                 self.logger.debug(
                     "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
@@ -1712,12 +1658,15 @@ class OL_adapter:
                 )
         except ValueError as e:
             self.logger.warning(f"ADC Mix-mode config skipped: {e}")
-
+        
+        # Note:
+        # The higher-level handlers default missing ``phase`` to ``0.0``.
+        # Direct callers should provide a numeric phase value.
         self._call(
                 acq.set_acquisition_dds_parameters(frequency= acq_mod["frequency_mhz"] , phase= acq_mod["phase"], adc_samplerate= self._adc_sr_mhz()),
-                operation= "set_acquisition_dds_parameters",
-                driver_name= "AcquisitionDriver",
-                config_error= True
+                operation="set_acquisition_dds_parameters",
+                driver_name="AcquisitionDriver",
+                config_error=True
             )
         self.logger.info("acquisition_parameters: done acq=%d", acq_index)
         return {
@@ -1726,7 +1675,7 @@ class OL_adapter:
             "phase": acq_mod["phase"],
         }
 
-    def acquisition_timing (self, acq_index, tof: int, duration: int): 
+    def acquisition_timing(self, acq_index, tof: int, duration: int):
         """
         Configure the timing parameters (Time of Flight and Duration) for an acquisition unit.
 
@@ -1747,9 +1696,9 @@ class OL_adapter:
         
         self._call(
                 acq.set_acquisition_duration(duration), # Clock Cycles
-                operation= "set_acquisition_duration",
-                driver_name= "AcquisitionDriver",
-                config_error= True
+                operation="set_acquisition_duration",
+                driver_name="AcquisitionDriver",
+                config_error=True
             )
         
         self._call(
@@ -1765,7 +1714,7 @@ class OL_adapter:
                 "duration": duration,
             }
 
-    def acq_trigger2listen(self, acq_index, trig: trigger_command):
+    def acq_trigger2listen(self, acq_index, trig: TriggerCommand):
         self.logger.info(
             "acq_trigger2listen: acq=%d channel=%s",
             acq_index, trig["channel"]
@@ -1774,12 +1723,12 @@ class OL_adapter:
         
         self._call(
             acq.set_trigger_channel(channel= trig["channel"]),
-            operation= "set_trigger_channel",
-            driver_name= "AcquisitionDriver",
-            config_error= True
+            operation="set_trigger_channel",
+            driver_name="AcquisitionDriver",
+            config_error=True
         )
     
-        if(trig["channel"] == 0):
+        if trig["channel"] == 0:
             self.logger.info("Acquisition %d is deaf to any trigger!", acq_index)
         else:
             self.logger.info("Generator %d listens to %s_trigger_word channel %d", acq_index, trig["ttype"], trig["channel"] )
@@ -1813,8 +1762,8 @@ class OL_adapter:
         Performance instrumentation
         ----------------------------
         This method explicitly measures:
-        - FPGA active time,
-        - software overhead.
+        - FPGA active time (proxied by DMA wait time),
+        - software overhead (everything else in the host process).
 
         This separation is intentional to support performance analysis
         and experimental reproducibility studies.
@@ -1849,20 +1798,14 @@ class OL_adapter:
         # The requested shots fit into a single hardware buffer execution.
         if shots <= max_hw_shots:
             
-            # Start HW timer
-            t_h0 = time.perf_counter()
-
-            final_result = self._run_single_hw_acquisition(
+            final_result, hw_wait_s = self._run_single_hw_acquisition(
                 adc_indices=adc_indices,
                 mode=mode,
                 shots=shots,
                 samp_per_shot=samp_per_shot,
                 timeout=timeout
             )
-            
-            # Stop HW timer and accumulate
-            t_h1 = time.perf_counter()
-            hw_time_accumulator += (t_h1 - t_h0)
+            hw_time_accumulator += hw_wait_s
 
         # --- Case 2: Multiple Hardware Acquisitions (Chunking) ---
         # The requested shots exceed the hardware buffer; split into chunks.
@@ -1873,21 +1816,15 @@ class OL_adapter:
             
             while remaining > 0:
                 hw_shots = min(max_hw_shots, remaining)
-                
-                # Start HW timer for this specific chunk
-                t_h0 = time.perf_counter()
-                
-                data = self._run_single_hw_acquisition(
+
+                data, hw_wait_s = self._run_single_hw_acquisition(
                     adc_indices=adc_indices,
                     mode=mode,
                     shots=hw_shots,
                     samp_per_shot=samp_per_shot,
                     timeout=timeout
                 )
-                
-                # Stop HW timer for this chunk
-                t_h1 = time.perf_counter()
-                hw_time_accumulator += (t_h1 - t_h0)
+                hw_time_accumulator += hw_wait_s
                 
                 for adc in adc_indices:
                     results[adc].append(data[adc])
@@ -1919,7 +1856,7 @@ class OL_adapter:
         shots: int,
         samp_per_shot: int,
         timeout: Optional[float] = 1.0
-    ) -> Dict[int, np.ndarray]:
+    ) -> Tuple[Dict[int, np.ndarray], float]:
         """
         Execute a single hardware acquisition cycle.
 
@@ -1941,18 +1878,20 @@ class OL_adapter:
         :type samp_per_shot: int
         :param timeout: Timeout in seconds.
         :type timeout: Optional[float]
-        :return: Dictionary of acquired data for this chunk.
-        :rtype: Dict[int, np.ndarray]
+        :return: (acquired data for this chunk, DMA wait time in seconds).
+        :rtype: Tuple[Dict[int, np.ndarray], float]
         """
 
         results = {}
+        hw_wait_s = 0.0
         self.tg_set_shots(shots)
 
         # Pre-config ADCs
         for adc_i in adc_indices:
             acq = self._get_acq(adc_i)
             if mode in ("decimated", "accumulated"):
-                acq.set_decimated_output_type(mode)
+                if not self._sweep_prepared:
+                    acq.set_decimated_output_type(mode)
             elif mode == "raw":
                 ctrl = acq.AxiLiteInterfaceMMIO.read(acq.ctrl * 4)
                 acq.AxiLiteInterfaceMMIO.write(acq.ctrl * 4, ctrl)
@@ -1978,6 +1917,7 @@ class OL_adapter:
             adc_index=first_adc,
             timeout=timeout
         )
+        hw_wait_s += self.dma_engine.last_dma_wait_s
         
         # Remaining ADCs
         for adc_i in adc_indices[1:]:
@@ -1995,8 +1935,9 @@ class OL_adapter:
                 adc_index=adc_i,
                 timeout=timeout
             )
+            hw_wait_s += self.dma_engine.last_dma_wait_s
         
-        return results
+        return results, hw_wait_s
 
     def prepare_sweep(self, mode: str, adc_indices: List[int]) -> None:
         """
@@ -2019,6 +1960,7 @@ class OL_adapter:
         
         # Prepare DMA engine
         self.dma_engine.prepare_sweep(mode)
+        self._sweep_prepared = True
 
     def end_sweep(self) -> None:
         """
@@ -2029,3 +1971,4 @@ class OL_adapter:
         """
 
         self.dma_engine.end_sweep()
+        self._sweep_prepared = False

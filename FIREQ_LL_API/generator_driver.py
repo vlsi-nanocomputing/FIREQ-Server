@@ -17,48 +17,48 @@ class GeneratorDriver(_FIREQDriver):
 
         super().__init__(description= description)
 
-        # a dictionary that stores useful data about the envelopes that have been written to 
+        # a dictionary that stores useful data about the envelopes that have been written to
         # the envelope memory
-        self.EnvelopeMemoryDict = {}
-        self.EnvelopeMemoryDictReservedNames = []
+        self.envelope_memory_dict = {}
+        self.envelope_memory_dict_reserved_names = []
         # a dictionary that stores useful data about the wave definition words that have
         # been written to the sequencer's wave memory
-        self.WaveMemoryDict = {}
-        self.WaveMemoryDictReservedNames = []
-        # the axi interface 
-        self.AxiFullInterfaceMMIO = None
+        self.wave_memory_dict = {}
+        self.wave_memory_dict_reserved_names = []
+        # the axi interface
+        self.axi_full_interface_mmio = None
 
         # address width of the envelope memory, word aligned
-        self.SampleMemoryAddressWidth = int(description["parameters"]["SampleMemoryAddressWidth"])
+        self.sample_memory_address_width = int(description["parameters"]["SampleMemoryAddressWidth"])
         # size of the envelope memory for every channel, in words
-        self.ChannelSampleMemoryDepth = pow(2,self.SampleMemoryAddressWidth)
-        # width of the duration 
-        self.DurationWidth = int(description["parameters"]["DurationWidth"])
-        self.MaximumDuration = pow(2,self.DurationWidth)
+        self.channel_sample_memory_depth = pow(2,self.sample_memory_address_width)
+        # width of the duration
+        self.duration_width = int(description["parameters"]["DurationWidth"])
+        self.maximum_duration = pow(2,self.duration_width)
         # fractional precision of the interpolator
-        self.FractionalPrecision = int(description["parameters"]["IncrementFractionalPrecision"])
+        self.fractional_precision = int(description["parameters"]["IncrementFractionalPrecision"])
         # width of samples
-        self.SampleSize = int(description["parameters"]["SampleSize"])
+        self.sample_size = int(description["parameters"]["SampleSize"])
         # number of channels (parallelism of the generator)
-        self.LogNumberOfChannels = int(description["parameters"]["LogNsamplesClock"])
-        self.NumberOfChannels = pow(2,self.LogNumberOfChannels)
+        self.log_number_of_channels = int(description["parameters"]["LogNsamplesClock"])
+        self.number_of_channels = pow(2,self.log_number_of_channels)
         # width of the phase increment and offset
-        self.PhaseDepth = int(description["parameters"]["PhaseDepth"])
+        self.phase_depth = int(description["parameters"]["PhaseDepth"])
         # number of trigger channels
-        self.TriggerChannels = int(description['parameters']['TriggerWordWidth'])
+        self.trigger_channels = int(description['parameters']['TriggerWordWidth'])
         # axi full interface depth in bytes
-        self.AxiFullInterfaceDepth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
-        #self.AxiFullInterfaceMMIO = MMIO(description["phys_addr"]-self.AxiFullInterfaceDepth, self.AxiFullInterfaceDepth)
+        self.axi_full_interface_depth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
+        #self.axi_full_interface_mmio = MMIO(description["phys_addr"]-self.axi_full_interface_depth, self.axi_full_interface_depth)
         # size of axi full segments in bytes
-        self.TotalSampleMemorySegmentDepth = int(description['parameters']['TotalSampleMemorySegmentDepth'])
-        self.WaveMemorySegmentDepth = int(description['parameters']['WaveMemoryDepth'])
-        self.MemoryMappedFifoSegmentDepth = int(description['parameters']['MemoryMappedFifoDepth'])
+        self.total_sample_memory_segment_depth = int(description['parameters']['TotalSampleMemorySegmentDepth'])
+        self.wave_memory_segment_depth = int(description['parameters']['WaveMemoryDepth'])
+        self.memory_mapped_fifo_segment_depth = int(description['parameters']['MemoryMappedFifoDepth'])
         # width of the lfsr seed
-        self.SeedLfsrWidth = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
+        self.seed_lfsr_width = int(description['parameters']['MmFifoAndLfsrOutputWidth'])
         # set debug level
-        self.DebugLevel = 0
+        self.debug_level = 0
 
-        # Reg definition
+        # Offset definition
         self.ctrl = 0
         self.readout_wave_l = 1
         self.readout_inc_l = 5
@@ -69,9 +69,9 @@ class GeneratorDriver(_FIREQDriver):
         self.drive_inc_h = 8
 
         # Bit position definition
-        self.SourcePos = 27
-        self.ManTrigSel = 28
-        self.ManTrigPos = 31
+        self.source_pos = 27
+        self.man_trig_sel = 28
+        self.manual_trigger_pos = 31
     
     def init_axi_full_interface(self, base_address : int, axi_depth : int):
         super().init_axi_full_interface(base_address, axi_depth)
@@ -85,36 +85,36 @@ class GeneratorDriver(_FIREQDriver):
             
 
     def print_description(self):
-        print("SampleMemoryAddressWidth: " + str(self.SampleMemoryAddressWidth) + ", address width of the envelope memory (word/IQSample aligned)")
-        print("ChannelSampleMemoryDepth: " + str(self.ChannelSampleMemoryDepth) + ", depth of the envelope memory (words/IQSamples aligned)")
-        print("MaximumDuration: " + str(self.MaximumDuration) + ", maximum duration of a wave (samples)")
-        print("FractionalPrecision: " + str(self.FractionalPrecision) + ", fractional precision of the interpolator (bits)")
-        print("SampleSize: " + str(self.SampleSize) + ", width of samples (bits)")
-        print("NumberOfChannels: " + str(self.NumberOfChannels) + ", parallelism of the generator (samples/clock cycle)")
-        print("PhaseDepth: " + str(self.PhaseDepth) + ", width of phases (bits)")
-        print("TriggerChannels: " + str(self.TriggerChannels) + ", number of trigger channels for readout and drive (bits)")
-        print("AxiFullInterfaceDepth: " + str(self.AxiFullInterfaceDepth) + ", axi full interface depth (bytes)")
-        print("TotalSampleMemorySegmentDepth: " + str(self.TotalSampleMemorySegmentDepth) + ", envelope memory segment depth (bytes)")
-        print("WaveMemorySegmentDepth: " + str(self.WaveMemorySegmentDepth) + ", wave memory segment depth (bytes)")
-        print("MemoryMappedFifoSegmentDepth: " + str(self.MemoryMappedFifoSegmentDepth) + ", memory mapped FIFO segment depth (bytes)")
-        print("SeedLfsrWidth: " + str(self.SeedLfsrWidth) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
+        print("sample_memory_address_width: " + str(self.sample_memory_address_width) + ", address width of the envelope memory (word/IQSample aligned)")
+        print("channel_sample_memory_depth: " + str(self.channel_sample_memory_depth) + ", depth of the envelope memory (words/IQSamples aligned)")
+        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of a wave (samples)")
+        print("fractional_precision: " + str(self.fractional_precision) + ", fractional precision of the interpolator (bits)")
+        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
+        print("number_of_channels: " + str(self.number_of_channels) + ", parallelism of the generator (samples/clock cycle)")
+        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
+        print("trigger_channels: " + str(self.trigger_channels) + ", number of trigger channels for readout and drive (bits)")
+        print("axi_full_interface_depth: " + str(self.axi_full_interface_depth) + ", axi full interface depth (bytes)")
+        print("total_sample_memory_segment_depth: " + str(self.total_sample_memory_segment_depth) + ", envelope memory segment depth (bytes)")
+        print("wave_memory_segment_depth: " + str(self.wave_memory_segment_depth) + ", wave memory segment depth (bytes)")
+        print("memory_mapped_fifo_segment_depth: " + str(self.memory_mapped_fifo_segment_depth) + ", memory mapped FIFO segment depth (bytes)")
+        print("seed_lfsr_width: " + str(self.seed_lfsr_width) + ", width of lsfr seed and memory mapped FIFO entries (bits)")
 
     def reset_envelope_dict(self):
         """
         Resets the cached information about the envelope memory. The actual memory is not modified by this function. \n
-        Since resetting this memory invalidates the wave definition words, the wave memory cache is also cleared 
-         
+        Since resetting this memory invalidates the wave definition words, the wave memory cache is also cleared
+
         """
-        self.EnvelopeMemoryDict = {}
-        self.EnvelopeMemoryDictReservedNames = []
-        
+        self.envelope_memory_dict = {}
+        self.envelope_memory_dict_reserved_names = []
+
         # set the memory free space in the envelope memory dictionary
-        self.EnvelopeMemoryDict["_FREESPACE"] = {"start" : 0, "depth" : self.ChannelSampleMemoryDepth}
-        self.EnvelopeMemoryDictReservedNames.append("_FREESPACE")
+        self.envelope_memory_dict["_FREESPACE"] = {"start" : 0, "depth" : self.channel_sample_memory_depth}
+        self.envelope_memory_dict_reserved_names.append("_FREESPACE")
         # set an entry for rectangular waves
-        self.EnvelopeMemoryDict["_RECTANGULAR"] = {"is_interp" : 0, "size" : any, "is_sym" : 0,
+        self.envelope_memory_dict["_RECTANGULAR"] = {"is_interp" : 0, "size" : any, "is_sym" : 0,
                                                    "i_even" : 0, "q_even" : 0, "start" : 0}
-        self.EnvelopeMemoryDictReservedNames.append("_RECTANGULAR")
+        self.envelope_memory_dict_reserved_names.append("_RECTANGULAR")
         self.reset_wave_memory_dict()
 
     def reset_wave_memory_dict(self):
@@ -122,13 +122,13 @@ class GeneratorDriver(_FIREQDriver):
         Resets the cached information about the wave memory and also clears the generator wave memory.
 
         """
-        self.WaveMemoryDict = {}
-        self.WaveMemoryDictReservedNames = []
-        
+        self.wave_memory_dict = {}
+        self.wave_memory_dict_reserved_names = []
+
         # address of next wave in wave memory
-        self.WaveMemoryDict["_NEXT"] = 0
-        self.WaveMemoryDictReservedNames.append("_NEXT")
-        for address in range(self.TotalSampleMemorySegmentDepth,self.TotalSampleMemorySegmentDepth+self.WaveMemorySegmentDepth,4):
+        self.wave_memory_dict["_NEXT"] = 0
+        self.wave_memory_dict_reserved_names.append("_NEXT")
+        for address in range(self.total_sample_memory_segment_depth,self.total_sample_memory_segment_depth+self.wave_memory_segment_depth,4):
             self.AxiFullInterfaceMMIO.write(address, 0)
 
     def trigger_manually(self):
@@ -138,8 +138,8 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, _set_bit(register, self.ManTrigPos, 1))
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, _set_bit(control_register, self.manual_trigger_pos, 1))
         return 0
 
     def set_trigger_channel(self, channel, ttype):
@@ -147,17 +147,17 @@ class GeneratorDriver(_FIREQDriver):
         Set the channel where the generator is listening for a trigger for the readout and drive trigger types.\n
         Set the channel to 0 if you want to disable external triggers
 
-        :param channel: Channel number, 1 to TriggerChannels
+        :param channel: Channel number, 1 to trigger_channels
         :type channel: int
         :param ttype: trigger type: 'drive' or 'readout'
-        :type ttype: int
+        :type ttype: str
         :return: Error code
         :rtype: int
         """
-        if channel < 0 or channel > self.TriggerChannels:
+        if channel < 0 or channel > self.trigger_channels:
             print("channel choice is out of range")
             return -3
-            
+
         if ttype == 'drive':
             selector = 0
         elif ttype == 'readout':
@@ -167,8 +167,8 @@ class GeneratorDriver(_FIREQDriver):
             return -3
         # write to the control register
         trigger_mask = (1 << channel) >> 1
-        control = _set_bits(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), selector*self.TriggerChannels, self.TriggerChannels, trigger_mask)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control)
+        control_register = _set_bits(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), selector*self.trigger_channels, self.trigger_channels, trigger_mask)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
 
         return 0
 
@@ -176,11 +176,11 @@ class GeneratorDriver(_FIREQDriver):
         """
         get the trigger channel for the generator where triggers are received
 
-        :param ttype: trigger type: 0 for drive, 1 for readout
-        :type ttype: int
+        :param ttype: trigger type: 'drive' or 'readout'
+        :type ttype: str
         :return: Error code
         :rtype: int
-        """ 
+        """
 
         if ttype == 'drive':
             selector = 0
@@ -190,11 +190,11 @@ class GeneratorDriver(_FIREQDriver):
             print("type choice is out of range")
             return -3
 
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl)
 
-        channel = _get_bits(cntr, selector*self.TriggerChannels, self.TriggerChannels)
+        channel = _get_bits(control_register, selector*self.trigger_channels, self.trigger_channels)
 
-        print("Trigger " + ttype + " mask: " + format(channel, f"0{self.TriggerChannels}b"))
+        print("Trigger " + ttype + " mask: " + format(channel, f"0{self.trigger_channels}b"))
 
         return 0
 
@@ -211,8 +211,8 @@ class GeneratorDriver(_FIREQDriver):
             print("source choice is out of range")
             return -3
 
-        register = _set_bit(value= self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.SourcePos, setvalue= source)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
+        control_register = _set_bit(value= self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.source_pos, setvalue= source)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
         return 0
 
     def get_drive_order_source(self):
@@ -222,8 +222,8 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        if _get_bit(cntr, self.SourcePos) == 0:
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        if _get_bit(control_register, self.source_pos) == 0:
             print("Source: FIFO")
         else:
             print("Source: LFSR")
@@ -239,12 +239,12 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        if seed < 0 or seed > (2**self.SeedLfsrWidth - 1):
+        if seed < 0 or seed > (2**self.seed_lfsr_width - 1):
             print("source choice is out of range")
             return -3
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
-        cntr = _set_bits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth, seed)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, cntr)
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = _set_bits(control_register, 2*self.trigger_channels, self.seed_lfsr_width, seed)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
         return 0
 
     def get_lfsr_seed(self):
@@ -254,9 +254,9 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        cntr = self.AxiLiteInterfaceMMIO.read(self.ctrl)
-        cntr = _get_bits(cntr, 2*self.TriggerChannels, self.SeedLfsrWidth)
-        print(f"LFSR seed: {cntr}")
+        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl)
+        seed_value = _get_bits(control_register, 2*self.trigger_channels, self.seed_lfsr_width)
+        print(f"LFSR seed: {seed_value}")
 
         return 0
 
@@ -341,11 +341,11 @@ class GeneratorDriver(_FIREQDriver):
     def set_manual_wave_destination_output_channel(self, destination):
         """
         Set the destination of a manually generated wave.
-        The wave to be generated is the one set for readout but you can select 
+        The wave to be generated is the one set for readout but you can select
         if the manually generated wave should output on the readout or drive line.
 
         :param destination: 'readout' or 'drive'
-        :type destination: int
+        :type destination: str
         :return: Error code
         :rtype: int
         """
@@ -357,26 +357,26 @@ class GeneratorDriver(_FIREQDriver):
             print("type choice is out of range")
             return -3
 
-        register = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.ManTrigSel, setvalue= selector)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, register)
+        control_register = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), pos= self.man_trig_sel, setvalue= selector)
+        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
         return 0
-    
+
     def get_manual_wave_destination_output_channel(self):
         """
         Get the destination output line for the generator when triggered from the manual trigger
-        
+
         """
-        dest = _get_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), self.ManTrigSel)
+        dest = _get_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl*4), self.man_trig_sel)
         if dest:
             print("Manual trigger destination is readout line")
-        else: 
+        else:
             print("Manual trigger destination is drive line")
         return 0
     
     def set_readout_dds_parameters(self, frequency : float, phase : float, dac_samplerate : int):
         """
         Set frequency and phase for the readout carrier signal
-        
+
         :param frequency: Frequency of the carrier in MHz
         :type frequency: float
         :param phase: Phase in radiants
@@ -392,16 +392,16 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _compute_pinc_poff(frequency*1000000, phase, dac_samplerate, self.PhaseDepth)
+        phase_parameters = _compute_pinc_poff(frequency*1000000, phase, dac_samplerate, self.phase_depth)
 
         # write registers
-        self._set_readout_pinc_poff(value_tuple[0],value_tuple[1])
+        self._set_readout_pinc_poff(phase_parameters[0],phase_parameters[1])
         return 0
 
     def set_drive_dds_parameters(self, frequency, dac_samplerate):
         """
         Set modulation frequency for the drive output channel
-        
+
         :param frequency: Frequency in MHz
         :type frequency: float
         :param dac_samplerate: Sampling frequency of the dac in samples per second
@@ -415,10 +415,10 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        value_tuple = _compute_pinc_poff(frequency*1000000, 0, dac_samplerate, self.PhaseDepth)
+        phase_parameters = _compute_pinc_poff(frequency*1000000, 0, dac_samplerate, self.phase_depth)
 
         # write registers
-        self._set_drive_pinc(value_tuple[0])
+        self._set_drive_pinc(phase_parameters[0])
         return 0
     
     def add_envelope_to_envelope_memory(self, envelope_samples : np.ndarray, for_interpolation : bool, is_symmetric : bool, i_even : bool, q_even : bool, envelope_name : str):
@@ -447,26 +447,26 @@ class GeneratorDriver(_FIREQDriver):
                          "i_even" : 0, "q_even" : 0}
 
         # check inputs
-        if envelope_name in self.EnvelopeMemoryDict.keys():
+        if envelope_name in self.envelope_memory_dict.keys():
             print("error, name '" + envelope_name + "' is already in use")
             return -3
         if not np.iscomplexobj(envelope_samples):
             #NOTE: better than if (envelope_samples.dtype != complex) -> recover in case of any problem
             print("error, the provided samples for the envelope are not complex")
             return -3
-        
+
         envelope_size = envelope_samples.size
         if (envelope_size < 2):
             print("error, envelope samples must be greater or eaqual than 2")
-            return -3 
+            return -3
 
         # check requirement for non interpolation envelope size
-        if (envelope_size%self.NumberOfChannels != 0 and not(for_interpolation)):
+        if (envelope_size%self.number_of_channels != 0 and not(for_interpolation)):
             print("error, envelopes not marked for interpolation must have a number of sample divisible by the generator parlallism")
-            print("the number of samples: " + str(envelope_size) + " is not divisible by " + str(self.NumberOfChannels))
+            print("the number of samples: " + str(envelope_size) + " is not divisible by " + str(self.number_of_channels))
             print("HINT: pad the envelope with zeros")
             return -3
-        
+
         if (for_interpolation):
             new_dict_item["is_interp"] = 1
             new_dict_item["size"] = envelope_size
@@ -474,39 +474,39 @@ class GeneratorDriver(_FIREQDriver):
             new_dict_item["i_even"] = i_even
             new_dict_item["q_even"] = q_even
         else:
-            envelope_size = envelope_size // self.NumberOfChannels
+            envelope_size = envelope_size // self.number_of_channels
             new_dict_item["is_interp"] = 0
             new_dict_item["size"] = envelope_size
             new_dict_item["is_sym"] = 0
             new_dict_item["i_even"] = 0
             new_dict_item["q_even"] = 0
-        
+
         # check that we have enough space in the sample memory
-        free_space = self.EnvelopeMemoryDict["_FREESPACE"]["depth"]
+        free_space = self.envelope_memory_dict["_FREESPACE"]["depth"]
         if (free_space < envelope_size):
-            print("error, not enough space in the envelope memory. Required space: " 
+            print("error, not enough space in the envelope memory. Required space: "
                   + str(envelope_size) + ", available space: " + str(free_space) )
             return -4
-        
+
         # finish setup of the dictionary entry
-        start_address = self.EnvelopeMemoryDict["_FREESPACE"]["start"]
+        start_address = self.envelope_memory_dict["_FREESPACE"]["start"]
         new_dict_item["start"] = start_address
 
         # commit to envelope dictionary
-        self.EnvelopeMemoryDict[envelope_name] = new_dict_item
-        self.EnvelopeMemoryDict["_FREESPACE"]["start"] = start_address + envelope_size
-        self.EnvelopeMemoryDict["_FREESPACE"]["depth"] = free_space - envelope_size
+        self.envelope_memory_dict[envelope_name] = new_dict_item
+        self.envelope_memory_dict["_FREESPACE"]["start"] = start_address + envelope_size
+        self.envelope_memory_dict["_FREESPACE"]["depth"] = free_space - envelope_size
 
         # commit to generator sample memory
         to_write_array = (envelope_samples.real.astype(np.int32) << 16) + envelope_samples.imag.astype(np.int16)
         if(is_symmetric and for_interpolation):
             # write the samples to all channels, there is a specific space in the generator memory to do just that
-            write_address_start = start_address + self.ChannelSampleMemoryDepth*self.NumberOfChannels
+            write_address_start = start_address + self.channel_sample_memory_depth*self.number_of_channels
             self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_array.tobytes())
         else:
-            for channel in range(self.NumberOfChannels):
-                write_address_start = start_address + self.ChannelSampleMemoryDepth*channel
-                to_write_to_channel = to_write_array[channel::self.NumberOfChannels]
+            for channel in range(self.number_of_channels):
+                write_address_start = start_address + self.channel_sample_memory_depth*channel
+                to_write_to_channel = to_write_array[channel::self.number_of_channels]
                 self.AxiFullInterfaceMMIO.write(write_address_start*4, to_write_to_channel.tobytes())
         return 0
     
@@ -531,33 +531,33 @@ class GeneratorDriver(_FIREQDriver):
         """
         wavedef = 0
         # check input parameters
-        if (envelope_name not in self.EnvelopeMemoryDict.keys()):
+        if (envelope_name not in self.envelope_memory_dict.keys()):
             print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
             print("HINT: use the 'add_envelope_to_envelope_memory' function to add the envelope to memory")
             return -3
-        
-        
+
+
         if (gain < -1 or gain > 1):
             print("error, gain out of range")
             return -3
-        
+
         # handle duration argument, if set to zero the duration will be the
         # natural duration of the envelope
-        if ((duration < 2 or duration > self.MaximumDuration) and duration != 0):
+        if ((duration < 2 or duration > self.maximum_duration) and duration != 0):
             print("error, duration out of range")
             return -3
-        
-        envelope_def = self.EnvelopeMemoryDict[envelope_name]
+
+        envelope_def = self.envelope_memory_dict[envelope_name]
         
         # handle gain
         invert = False
         real_gain = 0
         if (gain < 0):
             invert = True
-            real_gain = round(-gain*(2**self.SampleSize - 1))
-        else: 
+            real_gain = round(-gain*(2**self.sample_size - 1))
+        else:
             invert = False
-            real_gain = round(gain*(2**self.SampleSize - 1))
+            real_gain = round(gain*(2**self.sample_size - 1))
 
         real_duration = 0
         natural_envelope_duration = 0
@@ -587,7 +587,7 @@ class GeneratorDriver(_FIREQDriver):
                 natural_envelope_duration = envelope_def["size"]*(1 + envelope_def["is_sym"]) - 1
                 real_duration = natural_envelope_duration if (duration == 0) else duration
             else:
-                natural_envelope_duration = envelope_def["size"]*self.NumberOfChannels
+                natural_envelope_duration = envelope_def["size"]*self.number_of_channels
                 if (duration == 0):
                     real_duration = natural_envelope_duration
                 else:
@@ -624,9 +624,9 @@ class GeneratorDriver(_FIREQDriver):
         if (invert): 
             wavedef = wavedef | (1 << 124)
         # set the gain
-        wavedef = wavedef | (real_gain << (2*(self.SampleMemoryAddressWidth + self.FractionalPrecision) + self.DurationWidth))
+        wavedef = wavedef | (real_gain << (2*(self.sample_memory_address_width + self.fractional_precision) + self.duration_width))
         # set the duration bits
-        wavedef = wavedef | ((real_duration - 1) << 2*(self.SampleMemoryAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | ((real_duration - 1) << 2*(self.sample_memory_address_width + self.fractional_precision))
         # set sample generator offsets
         start_offset = 0
         increment = 0
@@ -638,8 +638,8 @@ class GeneratorDriver(_FIREQDriver):
             # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
             # half of it to start_offset we "center" the quantization error, reducing the peak
             # error at the end without changing the hardware behavior.
-            start_offset = envelope_def["start"] << self.FractionalPrecision
-            num = ((natural_envelope_duration - 1) << self.FractionalPrecision)
+            start_offset = envelope_def["start"] << self.fractional_precision
+            num = ((natural_envelope_duration - 1) << self.fractional_precision)
             den = (real_duration - 1)
 
             increment = num // den
@@ -648,11 +648,11 @@ class GeneratorDriver(_FIREQDriver):
             # shift di mezzo resto per “centrare” l’errore (riduce il picco finale)
             start_offset = start_offset + (reminder // 2)
         else:
-            start_offset = envelope_def["start"] << self.FractionalPrecision
+            start_offset = envelope_def["start"] << self.fractional_precision
             # set the increment to 1/(number_of_channels), usually 1/16
-            increment = 1 << (self.FractionalPrecision - self.LogNumberOfChannels)
+            increment = 1 << (self.fractional_precision - self.log_number_of_channels)
         # set the start offset and increment bits
-        wavedef = wavedef | (start_offset << (self.SampleMemoryAddressWidth + self.FractionalPrecision))
+        wavedef = wavedef | (start_offset << (self.sample_memory_address_width + self.fractional_precision))
         wavedef = wavedef | increment
         # return wave definition
         return wavedef
@@ -706,24 +706,24 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: Literal[-3, 0]
         """
-        if wave_name in self.WaveMemoryDict.keys():
+        if wave_name in self.wave_memory_dict.keys():
             print("error, a wave was found in the cached wave memory with the same name")
             return -3
         
         # get the address where the wave definition will end up
-        address = self.WaveMemoryDict["_NEXT"]
-        if address == self.WaveMemorySegmentDepth:
+        address = self.wave_memory_dict["_NEXT"]
+        if address == self.wave_memory_segment_depth:
             print("error, the wave memory is full")
             return -3
         
         # write to wave memory
         for i in range(4):
-            self.AxiFullInterfaceMMIO.write((self.TotalSampleMemorySegmentDepth + i*4 + address), (wave_definition >> (i*32)) & 0xFFFFFFFF)
+            self.AxiFullInterfaceMMIO.write((self.total_sample_memory_segment_depth + i*4 + address), (wave_definition >> (i*32)) & 0xFFFFFFFF)
         
         # write to wave memory cache
-        self.WaveMemoryDict[wave_name] = address
+        self.wave_memory_dict[wave_name] = address
         # add 16 bytes (128/8) to address
-        self.WaveMemoryDict["_NEXT"] = address + (128//8)
+        self.wave_memory_dict["_NEXT"] = address + (128//8)
         
         return 0
     
@@ -738,23 +738,23 @@ class GeneratorDriver(_FIREQDriver):
         :type wave_name: str
         """
 
-        if (index < 1 or index > self.MemoryMappedFifoSegmentDepth//4):
+        if (index < 1 or index > self.memory_mapped_fifo_segment_depth//4):
             print("error, the index is out of range")
             return -3
-        if wave_name not in self.WaveMemoryDict.keys():
+        if wave_name not in self.wave_memory_dict.keys():
             print("error, a wave was not found in the cached wave memory with the same name")
             print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
             return -3
-        if wave_name in self.WaveMemoryDictReservedNames:
+        if wave_name in self.wave_memory_dict_reserved_names:
             print("wave name is a reserved keyword")
             return -3
         
         # get wave
-        wave_addr = self.WaveMemoryDict[wave_name]
+        wave_addr = self.wave_memory_dict[wave_name]
         # this address is byte aligned but we need it 128-bit aligned
         wave_addr = wave_addr//(128//8)
         # write to memory mapped fifo
-        fifo_start_address = self.TotalSampleMemorySegmentDepth + self.WaveMemorySegmentDepth
+        fifo_start_address = self.total_sample_memory_segment_depth + self.wave_memory_segment_depth
         actual_address = fifo_start_address + (index-1)*4
         self.AxiFullInterfaceMMIO.write(actual_address, wave_addr)
         return 0
@@ -788,12 +788,12 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: Literal[-3, 0]
         """
-        if old_wave_name not in self.WaveMemoryDict:
+        if old_wave_name not in self.wave_memory_dict:
             print("error, a wave was not found in the cached wave memory with the same name")
             print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
             return -3
 
-        if old_wave_name in self.WaveMemoryDictReservedNames:
+        if old_wave_name in self.wave_memory_dict_reserved_names:
             print("old wave name is a reserved keyword")
             return -3
 
@@ -803,26 +803,26 @@ class GeneratorDriver(_FIREQDriver):
 
         # validate rename
         if new_wave_name != old_wave_name:
-            if new_wave_name in self.WaveMemoryDictReservedNames:
+            if new_wave_name in self.wave_memory_dict_reserved_names:
                 print("new wave name is a reserved keyword")
                 return -3
-            if new_wave_name in self.WaveMemoryDict:
+            if new_wave_name in self.wave_memory_dict:
                 print("new wave name already exists in cached wave memory")
                 return -3
 
         # get the address where the wave definition will end up
-        address = self.WaveMemoryDict[old_wave_name]
+        address = self.wave_memory_dict[old_wave_name]
 
         # write to wave memory (same address)
         for i in range(4):
             self.AxiFullInterfaceMMIO.write(
-                (self.TotalSampleMemorySegmentDepth + i*4 + address),
+                (self.total_sample_memory_segment_depth + i*4 + address),
                 (wave_definition >> (i*32)) & 0xFFFFFFFF
             )
 
         # update dictionary key if rename requested
         if new_wave_name != old_wave_name:
-            self.WaveMemoryDict[new_wave_name] = address
-            del self.WaveMemoryDict[old_wave_name]
+            self.wave_memory_dict[new_wave_name] = address
+            del self.wave_memory_dict[old_wave_name]
 
         return 0

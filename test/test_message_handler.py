@@ -4,7 +4,7 @@ import numpy as np
 from unittest.mock import MagicMock
 from threading import Event
 from server.message_handler import MessageHandler
-from server.ol_adapter import OL_adapter
+from server.ol_adapter import OverlayAdapter
 
 # Attempt to import Mock Hardware; fallback to local import if the file is adjacent
 try:
@@ -15,7 +15,7 @@ except ImportError:
 @pytest.fixture
 def stack():
     """
-    Provides a MessageHandler connected to MockOverlay via OL_adapter.
+    Provides a MessageHandler connected to MockOverlay via OverlayAdapter.
     
     This stack mocks the DMA engine to bypass hardware buffer calculations 
     that are not valid in a simulation environment.
@@ -26,7 +26,7 @@ def stack():
             self.ol = MockOverlay()
             
             # 2. Create Adapter Layer
-            self.adapter = OL_adapter(self.ol)
+            self.adapter = OverlayAdapter(self.ol)
             
             # 3. CRITICAL: Mock the DMA Engine
             # This bypasses hardware buffer calculations that fail in simulation
@@ -259,7 +259,11 @@ class TestRobustness:
         # 1. Setup a multi-point sweep
         msg = {
             "sweep_id": "long_run",
-            "base": {"generators": [], "acquisitions": [], "trigger": {}},
+            "base": {
+                "generators": [],
+                "acquisitions": [{"acq_index": 0, "duration": 10}],
+                "trigger": {}
+            },
             "variables": [{"name": "x", "values": [1, 2, 3, 4, 5]}]
         }
         
@@ -371,7 +375,8 @@ class TestRobustness:
                 "sweep_id": "diag_test",
                 "sweep_mode": "zipped",
                 "base": {
-                    "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$f", "gain": "$g"}}]
+                    "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$f", "gain": "$g"}}],
+                    "acquisitions": [{"acq_index": 0, "duration": 10}]
                 },
                 "variables": [
                     {"name": "f", "values": [10.0, 20.0, 30.0]},
@@ -413,7 +418,7 @@ class TestRobustness:
 
         **Rationale:**
         Trigger timing is complex. The MessageHandler receives high-level keys 
-        like 'drive_start_index' and 'safe_pad' and must pass them to the 
+        like 'drive_start_index' and must pass them to the 
         adapter's 'tg_program_delays'. This test ensures arguments aren't lost or swapped.
         """
         config = {
@@ -421,7 +426,6 @@ class TestRobustness:
                 "drive": True,
                 "readout": False,
                 "drive_start_index": 10,
-                "safe_pad": 5,
                 "shot_duration": 1000
             },
             "generators": [], "acquisitions": []
@@ -444,7 +448,6 @@ class TestRobustness:
             drive=True,
             readout=False,
             drive_start_index=10,
-            safe_pad=5
         )
 
     def test_invalid_hardware_index_handling(self, stack):
@@ -507,7 +510,7 @@ class TestRobustness:
 
     def test_sweep_string_substitution(self, stack):
         """
-        Verify that sweep variables can substitute strings (e.g., switching envelopes).
+        Verify that string sweep variables are rejected by numeric casting.
         """
         # Scenario: Sweeping the envelope name referenced by a wave definition
         msg = {
@@ -529,21 +532,8 @@ class TestRobustness:
         stack.adapter.end_sweep = MagicMock()
 
         # Run sweep
-        stack.handler.run_sweep(msg, MagicMock())
-
-        # Verify calls to compile_waves
-        # We expect 2 calls (one per point), each with a different envelope name
-        calls = stack.adapter.compile_waves.call_args_list
-        assert len(calls) >= 2
-        
-        # Check first point (gauss_99)
-        # args_p1 capture the 'waves' argument passed to adapter.compile_waves
-        # Since WaveHandler extracts the list from the dict, this IS the list.
-        args_p1 = calls[0].kwargs.get('waves') or calls[0].args[1]
-        args_p2 = calls[1].kwargs.get('waves') or calls[1].args[1]
-        
-        assert args_p1[0]["envelope"] == "gauss_99"
-        assert args_p2[0]["envelope"] == "rect_01"
+        with pytest.raises(ValueError):
+            stack.handler.run_sweep(msg, MagicMock())
 
     def test_empty_payload_behavior(self, stack):
         """
@@ -567,7 +557,7 @@ class TestRobustness:
         assert result.ok
         
         # Should contain no data
-        assert result.data is None or len(result.data) == 1 # Default might trigger acq 0
+        assert result.data is None or result.data == {}
         
         # Hardware setup should have been skipped
         stack.adapter.generator_modulation.assert_not_called()

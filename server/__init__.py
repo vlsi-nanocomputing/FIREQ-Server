@@ -17,12 +17,12 @@ from .exceptions import (
     TimingError
 )
 
-# Import OL_adapter class and related data structures
+# Import OverlayAdapter class and related data structures
 from .ol_adapter import (
-    OL_adapter, 
-    WaveEntry, 
-    modulation,      
-    trigger_command,
+    OverlayAdapter,
+    WaveEntry,
+    Modulation,
+    TriggerCommand,
     EnvelopeSpec
 )
 
@@ -49,14 +49,14 @@ __all__ = [
     'FIREQServer',
 
     # Adapters and Engines
-    'OL_adapter',
+    'OverlayAdapter',
     'AcquisitionEngine',
     'MessageHandler',
 
     # Data Structures & Enums
     'WaveEntry',
-    'modulation',
-    'trigger_command',
+    'Modulation',
+    'TriggerCommand',
     'EnvelopeSpec',
 
     # Results & Status
