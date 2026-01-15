@@ -39,7 +39,6 @@ env/
 # --- Any data from run ---
 
 *.log
-*.txt
 *.npy
 *.csv
 *.bin
