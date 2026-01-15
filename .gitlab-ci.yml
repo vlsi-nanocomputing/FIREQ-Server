@@ -1,9 +1,11 @@
 stages:
-  - style
+  - code-style
 
-test:
-  stage: style
+style:
+  stage: code-style
   tags: ["python3.10"]
   script:
+    - python3.10 -m venv venv
+    - source venv/bin/activate
     - pip3.10 install -r requirements.txt
     - python -m black --check .
