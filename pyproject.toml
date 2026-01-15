@@ -1,3 +1,20 @@
 [tool.black]
 line-length = 79
 target-version = ["py310"]
+
+# Ruff should only report issues, not modify code
+fix = false
+
+# Recommended rule set (PEP 8 compliance + basic code quality checks)
+select = [
+  "E",  # pycodestyle errors (PEP 8)
+  "W",  # pycodestyle warnings
+  "F",  # pyflakes (errori reali)
+]
+
+# Ignore rules that are handled by Black or made irrelevant by Black's formatting
+ignore = [
+  "E203",  # whitespace before ':'
+  "E266",  # too many leading '#' (commenti)
+  "E501",  # line too long (gestito da Black)
+]
