@@ -1,0 +1,9 @@
+stages:
+  - style
+
+test:
+  stage: style
+  tags: ["python3.10"]
+  script:
+    - pip3.10 install -r requirements.txt
+    - python -m black --check .
