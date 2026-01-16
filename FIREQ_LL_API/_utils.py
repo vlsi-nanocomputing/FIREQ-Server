@@ -86,12 +86,8 @@ class _FIREQDriver(DefaultIP):
             self.AxiLiteInterfaceMMIO = lite_mmio
             self.AxiFullInterfaceMMIO = full_mmio
         elif level == 1:
-            self.AxiLiteInterfaceMMIO = _DebugMMIO(
-                self.AxiLiteInterfaceMMIO, 1, axi_lite_file_handler
-            )
-            self.AxiLiteInterfaceMMIO = _DebugMMIO(
-                self.AxiFullInterfaceMMIO, 1, axi_full_file_handler
-            )
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, axi_lite_file_handler)
+            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, axi_full_file_handler)
         else:
             return 0
 
@@ -147,31 +143,17 @@ class _DebugMMIO:
         with self._file_handler:
             if type(data) is int:
                 self._file_handler.write(
-                    "write address "
-                    + hex(address)
-                    + " write data "
-                    + hex(data)
-                    + " "
-                    + str(data)
-                    + "\n"
+                    "write address " + hex(address) + " write data " + hex(data) + " " + str(data) + "\n"
                 )
             elif type(data) is bytes:
                 length = len(data)
                 num_words = length >> 2
                 if length % 4:
-                    raise MemoryError(
-                        "Unaligned write: data length must be multiple of 4."
-                    )
+                    raise MemoryError("Unaligned write: data length must be multiple of 4.")
                 buf = np.frombuffer(data, np.uint32, num_words, 0)
                 for i in range(len(buf)):
                     self._file_handler.write(
-                        "write address "
-                        + hex(address)
-                        + " write data "
-                        + hex(buf[i])
-                        + " "
-                        + str(buf[i])
-                        + "\n"
+                        "write address " + hex(address) + " write data " + hex(buf[i]) + " " + str(buf[i]) + "\n"
                     )
             else:
                 raise ValueError("Data type must be int or bytes.")
@@ -245,9 +227,7 @@ def _get_bits(value: int, start: int, length: int):
     return (value & mask) >> start
 
 
-def _compute_pinc_poff(
-    frequency: int, phase: int, samplerate: int, phase_depth: int
-):
+def _compute_pinc_poff(frequency: int, phase: int, samplerate: int, phase_depth: int):
     """
     Compute the phase increment and phase offset depending on the input frequency and phase
 

@@ -13,9 +13,6 @@ from .trigger_generator_driver import TriggerGeneratorDriver
 __all__ = ["FIREQ_SoC"]
 
 
-
-
-
 class FIREQ_SoC(Overlay):
     """
     Low-level representation of the FIREQ SoC.
@@ -42,7 +39,7 @@ class FIREQ_SoC(Overlay):
         except Exception as e:
             # better to raise an exception: server aware of the problem
             raise RuntimeError(f"FIREQ: error during overlay creation: {e}") from e
-        
+
         # 2) HWH + parser
         self._FIREQ_hwh_file = os.path.splitext(self.bitfile_name)[0] + ".hwh"
         self._FIREQ_parser = FIREQ_parser(self._FIREQ_hwh_file)
@@ -53,17 +50,17 @@ class FIREQ_SoC(Overlay):
 
         # 4) FIREQ IPs lists
         self._generation_ips = []  # type: list[GeneratorDriver]
-        self._acquistion_ips = []     # type: list[AcquisitionDriver]
-        self._trigger_ip = []     # type: list[TriggerGeneratorDriver]
-        self._GEN_RF_MAP: Dict[int, Dict[str, Tuple[int, int]]] = {} 
+        self._acquistion_ips = []  # type: list[AcquisitionDriver]
+        self._trigger_ip = []  # type: list[TriggerGeneratorDriver]
+        self._GEN_RF_MAP: Dict[int, Dict[str, Tuple[int, int]]] = {}
         self._ACQ_RF_MAP: Dict[int, Tuple[int, int]] = {}
-        self._cached_nyquist_zone: Dict[tuple, int] = {} 
+        self._cached_nyquist_zone: Dict[tuple, int] = {}
 
         # 5) Low-level discovery (bind AXI + classify IPs)
         self._rf = getattr(self, "usp_rf_data_converter_0", None)
         self._axis_switch = getattr(self, "axis_switch_0", None)
         self._dma = getattr(self, "axi_dma_0", None)
-        
+
         self._discover_fireq_ips()
 
         if self._rf:
@@ -74,13 +71,13 @@ class FIREQ_SoC(Overlay):
         if not self._acquistion_ips:
             raise RuntimeError("FIREQ_SoC: no Acquisition IPs found in overlay.")
         if not self._trigger_ip:
-            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")      
-    
+            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")
+
         # 6) Hardware specs (clock validation, sample rates etc.)
         self.num_generators = len(self._generation_ips)
         self.num_acquisitions = len(self._acquistion_ips)
         self.num_triggers = len(self._trigger_ip)
-        
+
         self.hw_specs = self._build_hw_specs()
 
         # 7) Health flag
@@ -97,7 +94,6 @@ class FIREQ_SoC(Overlay):
         to be initialised once per session.
         """
         xrfclk.set_ref_clks(lmk_freq=lmk_freq, lmx_freq=lmx_freq)
-        
 
     # ------------------------------------------------------------------
     # Discovery helpers
@@ -137,15 +133,14 @@ class FIREQ_SoC(Overlay):
                 self._acquistion_ips.append(ip_object)
             elif isinstance(ip_object, TriggerGeneratorDriver):
                 self._trigger_ip.append(ip_object)
-        
-    
+
     def _map_rf_topology(self) -> None:
         """
         Derive the physical RF connections (Tile/Block) for Generators and Acquisitions
         by traversing the AXI-Stream connectivity graph.
         """
-        all_modules = list(self._FIREQ_parser._Modules) 
-        rfdc_name = "usp_rf_data_converter_0" 
+        all_modules = list(self._FIREQ_parser._Modules)
+        rfdc_name = "usp_rf_data_converter_0"
 
         # ---------------------------------------------------------------------
         # 1. Map Generators (DAC Path)
@@ -155,7 +150,7 @@ class FIREQ_SoC(Overlay):
             if not gen_fullpath:
                 continue
 
-            gen_instance_name = gen_fullpath.split('/')[0]
+            gen_instance_name = gen_fullpath.split("/")[0]
             gen_xml = self._FIREQ_parser._GetModule(gen_instance_name)
             if not gen_xml:
                 continue
@@ -163,11 +158,12 @@ class FIREQ_SoC(Overlay):
             conn = self._FIREQ_parser.GetConnectivity(gen_xml, all_modules)
 
             def find_rfdc_sink(node_dict):
-                if node_dict['NODE'] == rfdc_name:
-                    return node_dict['BUS_M/S'][1], node_dict['BUS_M/S'][0]
-                for child in node_dict.get('CHILDREN', []):
+                if node_dict["NODE"] == rfdc_name:
+                    return node_dict["BUS_M/S"][1], node_dict["BUS_M/S"][0]
+                for child in node_dict.get("CHILDREN", []):
                     res = find_rfdc_sink(child)
-                    if res: return res
+                    if res:
+                        return res
                 return None
 
             res = find_rfdc_sink(conn)
@@ -184,7 +180,7 @@ class FIREQ_SoC(Overlay):
 
                     label = "drive" if "m0" in gen_port_alias or "drive" in gen_port_alias else "readout"
 
-                    if idx not in self._GEN_RF_MAP: 
+                    if idx not in self._GEN_RF_MAP:
                         self._GEN_RF_MAP[idx] = {}
                     self._GEN_RF_MAP[idx][label] = (tile, block)
 
@@ -196,19 +192,19 @@ class FIREQ_SoC(Overlay):
             conn_rfdc = self._FIREQ_parser.GetConnectivity(rfdc_xml, all_modules)
 
             def trace_rfdc_source(node_dict, source_port_name, at_root=True):
-                if at_root and node_dict['NODE'] == rfdc_name:
-                    for child in node_dict['CHILDREN']:
-                        if child['BUS_M/S'][0] == source_port_name:
+                if at_root and node_dict["NODE"] == rfdc_name:
+                    for child in node_dict["CHILDREN"]:
+                        if child["BUS_M/S"][0] == source_port_name:
                             return trace_rfdc_source(child, source_port_name, at_root=False)
                     return None
 
-                curr_name = node_dict['NODE']
+                curr_name = node_dict["NODE"]
                 for idx, acq in enumerate(self._acquistion_ips):
                     acq_fullpath = getattr(acq, "_fullpath", "")
-                    if acq_fullpath.split('/')[0] == curr_name:
+                    if acq_fullpath.split("/")[0] == curr_name:
                         return idx
 
-                for child in node_dict.get('CHILDREN', []):
+                for child in node_dict.get("CHILDREN", []):
                     res = trace_rfdc_source(child, source_port_name, at_root=False)
                     if res is not None:
                         return res
@@ -217,12 +213,11 @@ class FIREQ_SoC(Overlay):
             rfdc_interfaces = self._FIREQ_parser._GetBusInterfaces(rfdc_xml)
 
             for bus_name, attribs in rfdc_interfaces.items():
-                if attribs['TYPE'] in ['MASTER', 'INITIATOR']:
-                    port_name = attribs['NAME']
+                if attribs["TYPE"] in ["MASTER", "INITIATOR"]:
+                    port_name = attribs["NAME"]
                     # ADC uses mXY_axis (master ports)
                     m = re.match(r"m(\d)(\d)_axis", port_name)
                     if m:
-                        
                         # Dual ADC tile: 2 blocks per tile
                         tile = int(m.group(1))
                         port_indicator = int(m.group(2))
@@ -233,8 +228,6 @@ class FIREQ_SoC(Overlay):
                         if acq_idx is not None:
                             self._ACQ_RF_MAP[acq_idx] = (tile, block)
 
-
-    
     def _get_fifo_depth(self, *, acq_inst: str, mode: str) -> int:
         """
         FIFO depth extraction based on  HWH structure:
@@ -323,19 +316,16 @@ class FIREQ_SoC(Overlay):
             return -1
 
         # 6) Read FIFO depth parameter (Vivado sometimes uses FIFO_DEPTH or C_FIFO_DEPTH)
-        depth = (
-            self._FIREQ_parser._GetParameter(fifo_inst, "FIFO_DEPTH")
-            or self._FIREQ_parser._GetParameter(fifo_inst, "C_FIFO_DEPTH")
+        depth = self._FIREQ_parser._GetParameter(fifo_inst, "FIFO_DEPTH") or self._FIREQ_parser._GetParameter(
+            fifo_inst, "C_FIFO_DEPTH"
         )
         try:
             return int(depth)
         except (TypeError, ValueError):
             return -1
 
-
-
     # ------------------------------------------------------------------
-    # Hardware specs builder    
+    # Hardware specs builder
     # ------------------------------------------------------------------
     def _build_hw_specs(self) -> dict:
         """
@@ -358,12 +348,9 @@ class FIREQ_SoC(Overlay):
         """
         rf = self._rf
         if rf is None:
-            raise RuntimeError(
-                "FIREQ_SoC: no RF Data Converter hierarchy found "
-                "(usp_rf_data_converter_0 is missing)."
-            )
+            raise RuntimeError("FIREQ_SoC: no RF Data Converter hierarchy found (usp_rf_data_converter_0 is missing).")
 
-         # --- DAC Validation ---
+        # --- DAC Validation ---
         found_dac_sr = None
         dac_tile_specs = []
 
@@ -376,10 +363,7 @@ class FIREQ_SoC(Overlay):
                 if found_dac_sr is None:
                     found_dac_sr = sr
                 elif abs(sr - found_dac_sr) > 1e3:  # tolleranza 1 kHz
-                    raise RuntimeError(
-                        f"FIREQ_SoC: DAC Clock mismatch! "
-                        f"Tile {i} has {sr} Hz vs {found_dac_sr} Hz."
-                    )
+                    raise RuntimeError(f"FIREQ_SoC: DAC Clock mismatch! Tile {i} has {sr} Hz vs {found_dac_sr} Hz.")
 
                 dac_tile_specs.append(
                     {
@@ -411,10 +395,7 @@ class FIREQ_SoC(Overlay):
                 if found_adc_sr is None:
                     found_adc_sr = sr
                 elif abs(sr - found_adc_sr) > 1e3:
-                    raise RuntimeError(
-                        f"FIREQ_SoC: ADC Clock mismatch! "
-                        f"Tile {i} has {sr} Hz vs {found_adc_sr} Hz."
-                    )
+                    raise RuntimeError(f"FIREQ_SoC: ADC Clock mismatch! Tile {i} has {sr} Hz vs {found_adc_sr} Hz.")
 
                 adc_tile_specs.append(
                     {
@@ -450,26 +431,21 @@ class FIREQ_SoC(Overlay):
 
             d_dec = self._get_fifo_depth(acq_inst=acq_inst, mode="decimated")
             d_raw = self._get_fifo_depth(acq_inst=acq_inst, mode="raw")
-            
+
             acq_specs = {
                 "index": idx,
                 "name": desc.get("name"),
                 "_fullpath": desc.get("_fullpath"),
-
                 "sample_bits": getattr(acq, "SampleSize", None),
                 "parallelism": getattr(acq, "NumberOfChannels", None),
                 "phase_bits": getattr(acq, "PhaseDepth", None),
                 "trigger_word_width": getattr(acq, "TriggerChannels", None),
-
                 "duration_bits": getattr(acq, "DurationWidth", None),
                 "max_duration_cycles": getattr(acq, "MaximumDuration", None),
-
                 "time_of_flight_bits": getattr(acq, "TimeOfFlightWidth", None),
                 "time_of_flight_max": getattr(acq, "TimeOfFlightMax", None),
-
                 "raw_output_width_bits": getattr(acq, "NDCMT_OutputWidth", None),
                 "dec_output_width_bits": getattr(acq, "DCMT_OutputWidth", None),
-
                 "raw_fifo_depth_words": d_raw,
                 "decimated_fifo_depth_words": d_dec,
             }
@@ -485,34 +461,19 @@ class FIREQ_SoC(Overlay):
                 "index": idx,
                 "name": desc.get("name"),
                 "_fullpath": desc.get("_fullpath"),
-
                 "sample_bits": getattr(gen, "SampleSize", None),
                 "parallelism": getattr(gen, "NumberOfChannels", None),
                 "phase_bits": getattr(gen, "PhaseDepth", None),
                 "trigger_word_width": getattr(gen, "TriggerChannels", None),
-
                 "duration_bits": getattr(gen, "DurationWidth", None),
                 "max_duration_cycles": getattr(gen, "MaximumDuration", None),
-
                 "sample_mem_addr_bits": getattr(gen, "SampleMemoryAddressWidth", None),
-                "sample_mem_depth_words_per_channel": getattr(
-                    gen, "ChannelSampleMemoryDepth", None
-                ),
-                "fractional_precision_bits": getattr(
-                    gen, "FractionalPrecision", None
-                ),
-
+                "sample_mem_depth_words_per_channel": getattr(gen, "ChannelSampleMemoryDepth", None),
+                "fractional_precision_bits": getattr(gen, "FractionalPrecision", None),
                 "wave_memory_depth": getattr(gen, "WaveMemorySegmentDepth", None),
-                "mm_fifo_depth": getattr(
-                    gen, "MemoryMappedFifoSegmentDepth", None
-                ),
-                "axi_full_depth_bytes": getattr(
-                    gen, "AxiFullInterfaceDepth", None
-                ),
-                "total_sample_mem_segment_depth": getattr(
-                    gen, "TotalSampleMemorySegmentDepth", None
-                ),
-
+                "mm_fifo_depth": getattr(gen, "MemoryMappedFifoSegmentDepth", None),
+                "axi_full_depth_bytes": getattr(gen, "AxiFullInterfaceDepth", None),
+                "total_sample_mem_segment_depth": getattr(gen, "TotalSampleMemorySegmentDepth", None),
                 "lfsr_seed_bits": getattr(gen, "SeedLfsrWidth", None),
             }
             generators_specs.append(gen_specs)
@@ -527,19 +488,10 @@ class FIREQ_SoC(Overlay):
                 "index": idx,
                 "name": desc.get("name"),
                 "_fullpath": desc.get("_fullpath"),
-
                 "trigger_channels": getattr(trig, "TriggerChannels", None),
-
-                "fifo_interface_mem_depth_bytes": getattr(
-                    trig, "FifoInterfaceMemoryDepth", None
-                ),
-                "channel_fifo_depth_words": getattr(
-                    trig, "ChannelFifoDepth", None
-                ),
-                "fifo_output_width_bits": getattr(
-                    trig, "FifoOutputWidth", None
-                ),
-
+                "fifo_interface_mem_depth_bytes": getattr(trig, "FifoInterfaceMemoryDepth", None),
+                "channel_fifo_depth_words": getattr(trig, "ChannelFifoDepth", None),
+                "fifo_output_width_bits": getattr(trig, "FifoOutputWidth", None),
                 "drive_delay_max": getattr(trig, "DriveDelayMax", None),
                 "experiment_timer_max": getattr(trig, "ExperimentTimerMax", None),
                 "max_hw_repetitions": getattr(trig, "MaxHWRepetitions", None),
@@ -549,24 +501,16 @@ class FIREQ_SoC(Overlay):
         # ------------------------------------------------------------------
         # Summary
         # ------------------------------------------------------------------
-        
-        adc_parallelism_set = sorted(
-            {a["parallelism"] for a in acquisitions_specs if a["parallelism"] is not None}
-        )
-        dac_parallelism_set = sorted(
-            {g["parallelism"] for g in generators_specs if g["parallelism"] is not None}
-        )
+
+        adc_parallelism_set = sorted({a["parallelism"] for a in acquisitions_specs if a["parallelism"] is not None})
+        dac_parallelism_set = sorted({g["parallelism"] for g in generators_specs if g["parallelism"] is not None})
 
         trigger_channels_set = sorted(
             {t["trigger_channels"] for t in triggers_specs if t["trigger_channels"] is not None}
         )
-        max_hw_reps_list = [
-            t["max_hw_repetitions"] for t in triggers_specs
-            if t["max_hw_repetitions"] is not None
-        ]
+        max_hw_reps_list = [t["max_hw_repetitions"] for t in triggers_specs if t["max_hw_repetitions"] is not None]
         exp_timer_max_list = [
-            t["experiment_timer_max"] for t in triggers_specs
-            if t["experiment_timer_max"] is not None
+            t["experiment_timer_max"] for t in triggers_specs if t["experiment_timer_max"] is not None
         ]
 
         summary = {
@@ -577,23 +521,14 @@ class FIREQ_SoC(Overlay):
             "adc_parallelism_set": adc_parallelism_set,
             "dac_parallelism_set": dac_parallelism_set,
             # the following are set only if uniform across all IPs
-            "adc_parallelism": adc_parallelism_set[0]
-            if len(adc_parallelism_set) == 1
-            else None,
-            "dac_parallelism": dac_parallelism_set[0]
-            if len(dac_parallelism_set) == 1
-            else None,
-
-            # Trigger summary 
+            "adc_parallelism": adc_parallelism_set[0] if len(adc_parallelism_set) == 1 else None,
+            "dac_parallelism": dac_parallelism_set[0] if len(dac_parallelism_set) == 1 else None,
+            # Trigger summary
             # if more than one trigger generator IP, the list is aware and maximum timing is not forced to be uniform
             "trigger_channels_set": trigger_channels_set,
-            "trigger_channels": trigger_channels_set[0]
-                if len(trigger_channels_set) == 1 else None,
-            "max_hw_repetitions_min": min(max_hw_reps_list)
-                if max_hw_reps_list else None,
-            "experiment_timer_max_min": min(exp_timer_max_list)
-                if exp_timer_max_list else None,
-            
+            "trigger_channels": trigger_channels_set[0] if len(trigger_channels_set) == 1 else None,
+            "max_hw_repetitions_min": min(max_hw_reps_list) if max_hw_reps_list else None,
+            "experiment_timer_max_min": min(exp_timer_max_list) if exp_timer_max_list else None,
         }
 
         specs = {
@@ -607,7 +542,7 @@ class FIREQ_SoC(Overlay):
         return specs
 
     # ------------------------------------------------------------------
-    # GeneratorIP low-level helpers 
+    # GeneratorIP low-level helpers
     # ------------------------------------------------------------------
 
     _WDW_BYTES = 16  # 128-bit per WDW
@@ -641,23 +576,17 @@ class FIREQ_SoC(Overlay):
             "total_slots": total_slots,
             "free_slots": max(0, total_slots - used_slots),
         }
-    
 
     # ------------------------------------------------------------------
     # Public properties
     # ------------------------------------------------------------------
-    def configure_dac_mix_mode(
-        self, 
-        gen_index: int, 
-        label: str, 
-        freq_mhz: float
-    ) -> dict:
+    def configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict:
         """
         Configure RF-DC NyquistZone for a generator label based on frequency.
-        
+
         Automatically determines if mixing mode is needed (even Nyquist zones)
         and configures the appropriate DAC tile/block.
-        
+
         :param gen_index: Generator index
         :param label: 'drive' or 'readout'
         :param freq_mhz: Target frequency in MHz
@@ -666,34 +595,34 @@ class FIREQ_SoC(Overlay):
         """
         if self._rf is None:
             return {"status": "skipped", "reason": "no_rf_dc"}
-        
+
         # Lookup tile/block
         gen_map = self._GEN_RF_MAP.get(gen_index)
         if gen_map is None:
             raise ValueError(f"No RF mapping for gen_index={gen_index}")
-        
+
         tile_block = gen_map.get(label)
         if tile_block is None:
             raise ValueError(f"No RF mapping for label='{label}' on gen={gen_index}")
-        
+
         tile, block = tile_block
-        
+
         # Compute Nyquist zone
         dac_nyquist_hz = self.hw_specs["summary"]["dac_nyquist_hz"]
         freq_hz = freq_mhz * 1e6
         nyquist_zone = max(1, int(freq_hz / dac_nyquist_hz) + 1)
-        
+
         # AMD convention: Odd zones → 1, Even zones → 2
         amd_zone = 1 if nyquist_zone % 2 == 1 else 2
-        
+
         cache_key = (tile, block)
         changed = False
-        
+
         if self._cached_nyquist_zone.get(cache_key) != amd_zone:
             self._rf.dac_tiles[tile].blocks[block].NyquistZone = amd_zone
             self._cached_nyquist_zone[cache_key] = amd_zone
             changed = True
-        
+
         return {
             "gen_index": gen_index,
             "label": label,
@@ -704,19 +633,16 @@ class FIREQ_SoC(Overlay):
             "block": block,
             "changed": changed,
         }
+
     # FIREQ IPs
 
-    def configure_adc_mix_mode(
-    self, 
-    acq_index: int, 
-    freq_mhz: float
-    ) -> dict:
+    def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> dict:
         """
         Configure RF-DC NyquistZone for an ADC channel based on frequency.
-        
+
         Automatically determines if mixing mode is needed (even Nyquist zones)
         and configures the appropriate ADC tile/block.
-        
+
         :param acq_index: Acquisition IP index
         :param freq_mhz: Demodulation frequency in MHz
         :return: Dict with zone info
@@ -724,30 +650,30 @@ class FIREQ_SoC(Overlay):
         """
         if self._rf is None:
             return {"status": "skipped", "reason": "no_rf_dc"}
-        
+
         # Lookup tile/block
         tile_block = self._ACQ_RF_MAP.get(acq_index)
         if tile_block is None:
             raise ValueError(f"No RF mapping for acq_index={acq_index}")
-        
+
         tile, block = tile_block
-        
+
         # Compute Nyquist zone
         adc_nyquist_hz = self.hw_specs["summary"]["adc_nyquist_hz"]
         freq_hz = freq_mhz * 1e6
         nyquist_zone = max(1, int(freq_hz / adc_nyquist_hz) + 1)
-        
+
         # AMD convention: Odd zones → 1, Even zones → 2
         amd_zone = 1 if nyquist_zone % 2 == 1 else 2
-        
+
         cache_key = ("adc", tile, block)  # prefix to avoid collision with DAC cache
         changed = False
-        
+
         if self._cached_nyquist_zone.get(cache_key) != amd_zone:
             self._rf.adc_tiles[tile].blocks[block].NyquistZone = amd_zone
             self._cached_nyquist_zone[cache_key] = amd_zone
             changed = True
-        
+
         return {
             "acq_index": acq_index,
             "freq_mhz": freq_mhz,
@@ -807,7 +733,7 @@ class FIREQ_SoC(Overlay):
             "has_rf": self.rf is not None,
             "hw_specs": self.hw_specs,
         }
-    
+
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQ_SoC:
     """Helper per creare e inizializzare un FIREQ_SoC."""

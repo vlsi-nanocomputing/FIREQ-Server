@@ -8,9 +8,7 @@ name = "fireq-server"
 version = "0.1.0"
 requires-python = "==3.10.*"
 
-# Development-only dependencies (tools, not runtime requirements)
-# Install with:
-#   pip install -e .[dev]
+# Dependencies
 dependencies = [
   "black>=25.12.0",
   "ruff>=0.14.11",
@@ -38,9 +36,16 @@ exclude = [
   "*.pyi",
 ]
 
-[tool.ruff.format]
-docstring-code-format = true
-
+[tool.ruff.lint]
+# Enabled rule families:
+# E: pycodestyle errors (PEP 8)
+# F: pyflakes (real errors)
+# I: import sorting (isort-compatible)
+# UP: pyupgrade (modern Python syntax)
+# B: flake8-bugbear (likely bugs)
+# D: pydocstyle (docstrings)
+# ANN: type annotations
+# PL: pylint-derived rules
 select = ["E", "F", "I", "UP", "B", "D", "ANN", "PL"]
 
 ignore = [
@@ -51,6 +56,13 @@ ignore = [
 ]
 future-annotations = true
 
+[tool.ruff.lint.per-file-ignores]
+# Relax rules in specific contexts
+"test/**" = ["D", "ANN", "S101", "T20"]
+#"docs/**" = ["D"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
-

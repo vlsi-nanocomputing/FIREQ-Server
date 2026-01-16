@@ -1,4 +1,4 @@
-#file: fireq-utils/server/message_handler.py
+# file: fireq-utils/server/message_handler.py
 """
 Server-side message orchestration for FIREQ experiments.
 
@@ -14,7 +14,7 @@ Design intent
 -------------
 The code favors execution stages (upload -> compile -> configure -> run),
 and uses a sweep "fast path" to reduce repeated reconfiguration when only numeric parameters
-change between points. Instead of reconfigure each IP for every sweeping point, the idea is to 
+change between points. Instead of reconfigure each IP for every sweeping point, the idea is to
 reconfigure only that specific parameters actually changing, to speed up execution.
 """
 
@@ -26,8 +26,9 @@ from itertools import product
 from threading import Event
 
 # ====================================================
-#        DATA STRUCTURES 
+#        DATA STRUCTURES
 # ====================================================
+
 
 @dataclass
 class HardwareStatusResult:
@@ -35,7 +36,7 @@ class HardwareStatusResult:
     Structured status snapshot for a single generator.
 
     This is an object meant to return user-friendly status queries.
-    
+
     Invariants
     ----------
     - When ``ok`` is True, the fields ``envelopes`` and ``waves_count`` reflect the current
@@ -72,8 +73,9 @@ class HardwareStatusResult:
             "waves_count": self.waves_count,
             "readout_wave": self.readout_wave,
             "hw_summary": self.hw_summary,
-            "error": self.error
+            "error": self.error,
         }
+
 
 @dataclass
 class ResetResult:
@@ -106,8 +108,9 @@ class ResetResult:
             "gen_index": self.gen_index,
             "action": self.action,
             "details": self.details,
-            "error": self.error
+            "error": self.error,
         }
+
 
 @dataclass
 class EnvelopeResult:
@@ -129,11 +132,8 @@ class EnvelopeResult:
         :return: Dict representation of the upload result.
         :rtype: dict
         """
-        return {
-            "ok": self.ok,
-            "result": {str(k): v for k, v in self.result.items()},
-            "error": self.error
-        }
+        return {"ok": self.ok, "result": {str(k): v for k, v in self.result.items()}, "error": self.error}
+
 
 @dataclass
 class WaveResult:
@@ -156,11 +156,8 @@ class WaveResult:
         :return: Dict representation of the compilation result.
         :rtype: dict
         """
-        return {
-            "ok": self.ok,
-            "payload": {str(k): v for k, v in self.payload.items()},
-            "error": self.error
-        }
+        return {"ok": self.ok, "payload": {str(k): v for k, v in self.payload.items()}, "error": self.error}
+
 
 @dataclass
 class ExperimentResult:
@@ -180,7 +177,7 @@ class ExperimentResult:
     data: Optional[Dict[int, np.ndarray]] = None
     error: Optional[str] = None
     config_log: Optional[List[str]] = None
-    
+
     def to_dict(self) -> dict:
         """
         Convert result to dictionary, formatting NumPy arrays for JSON.
@@ -192,15 +189,13 @@ class ExperimentResult:
             d["data"] = {}
             for adc_idx, arr in self.data.items():
                 if arr is not None:
-                    d["data"][adc_idx] = {
-                        "I": np.real(arr).tolist(),
-                        "Q": np.imag(arr).tolist()
-                    }
+                    d["data"][adc_idx] = {"I": np.real(arr).tolist(), "Q": np.imag(arr).tolist()}
         if self.error:
             d["error"] = self.error
         if self.config_log:
             d["config_log"] = self.config_log
         return d
+
 
 @dataclass
 class SweepPointResult:
@@ -217,23 +212,16 @@ class SweepPointResult:
     n_total: int
     variables: Dict[str, Any]
     data: Dict[int, np.ndarray]
-    
+
     def to_dict(self) -> dict:
-        d = {
-            "point_index": self.point_index,
-            "n_total": self.n_total,
-            "variables": self.variables,
-            "data": {}
-        }
+        d = {"point_index": self.point_index, "n_total": self.n_total, "variables": self.variables, "data": {}}
         for adc_idx, arr in self.data.items():
             if arr is not None:
-                d["data"][adc_idx] = {
-                    "I": np.real(arr).tolist(),
-                    "Q": np.imag(arr).tolist()
-                }
+                d["data"][adc_idx] = {"I": np.real(arr).tolist(), "Q": np.imag(arr).tolist()}
         return d
 
-@dataclass 
+
+@dataclass
 class SweepStatus:
     """
     Final sweep summary.
@@ -248,19 +236,21 @@ class SweepStatus:
     n_points: int
     n_completed: int
     error: Optional[str] = None
-    
+
     def to_dict(self) -> dict:
         return {
             "ok": self.ok,
             "sweep_id": self.sweep_id,
             "n_points": self.n_points,
             "n_completed": self.n_completed,
-            "error": self.error
+            "error": self.error,
         }
+
 
 # ====================================================
 #                 SWEEP HELPERS
 # ====================================================
+
 
 def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[str, Set[str]]:
     """
@@ -304,7 +294,7 @@ def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[s
             sub = find_variable_paths(item, var_names, f"{path}.{i}")
             for v in var_names:
                 out[v].update(sub[v])
-    
+
     # DESIGN NOTE:
     # Variables are represented as JSON-serializable strings ("$NAME") so that:
     # - configs remain portable (no Python-only objects),
@@ -335,8 +325,9 @@ def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
         "generator": any(p.startswith("generators") for p in variable_paths),
         "acquisition": any(p.startswith("acquisitions") for p in variable_paths),
         "trigger": any(p.startswith("trigger") for p in variable_paths),
-        "waves": any(p.startswith("waves") for p in variable_paths),  
+        "waves": any(p.startswith("waves") for p in variable_paths),
     }
+
 
 def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
     """
@@ -369,13 +360,12 @@ def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
                 return point[clean_val]
             return obj
         return obj
-    
-    return substitute(config)  
+
+    return substitute(config)
+
 
 def generate_sweep_points(
-    variables: List[dict],
-    mode: str = "cartesian",
-    var_cast: Optional[Dict[str, str]] = None
+    variables: List[dict], mode: str = "cartesian", var_cast: Optional[Dict[str, str]] = None
 ) -> List[Dict[str, Any]]:
     """
     Generate the list of sweep points from variable specifications.
@@ -397,9 +387,9 @@ def generate_sweep_points(
     - ``cartesian``: full Cartesian product of all variable values.
     - ``zipped``: point-wise zip; all variables must produce the same number of values.
 
-    Example 
+    Example
     Given two variables to sweep, said x with points [1, 2, 3] and y with [a, b, c].
-    - "Cartesian": sweep all the 9 "xy" possible configurations : 
+    - "Cartesian": sweep all the 9 "xy" possible configurations :
         [(1,a) , (1, b), (1,c),
          (2,a) , (2, b), (2,c),
          (1,a) , (1, b), (1,c) ]
@@ -429,7 +419,6 @@ def generate_sweep_points(
         name = v["name"]
         kind = var_cast.get(name, "float")  # "int" or "float"
 
-        
         if "values" in v:
             vals = v["values"]
             if kind == "int":
@@ -453,7 +442,7 @@ def generate_sweep_points(
         axis = np.linspace(start, stop, num)
 
         if kind == "int":
-            axis = np.rint(axis).astype(int)   # round all'intero più vicino
+            axis = np.rint(axis).astype(int)  # round all'intero più vicino
             vals = axis.tolist()
         else:
             vals = axis.astype(float).tolist()
@@ -469,10 +458,12 @@ def generate_sweep_points(
         return [dict(zip(var_names, values)) for values in zip(*var_values)]
     else:
         raise ValueError(f"Unknown sweep mode: {mode}")
-   
+
+
 # ====================================================
 #              SPECIALIZED HANDLERS
 # ====================================================
+
 
 class StatusHandler:
     """
@@ -485,26 +476,25 @@ class StatusHandler:
     is frequently used for handshake/status responses (e.g. opening single-client connections many times).
     """
 
-
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
         # Cache hardware summary: expected immutable at runtime and frequently reused (handshake/status).
         self._hw_summary = adapter._summary
-    
+
     @property
     def hw_summary(self) -> dict:
         """Hardware summary for handshake."""
         return self._hw_summary
-    
+
     @property
     def num_generators(self) -> int:
-        return self._hw_summary.get("num_generators", 0)   
+        return self._hw_summary.get("num_generators", 0)
 
     @property
     def num_acquisitions(self) -> int:
-        return self._hw_summary.get("num_acquisitions", 0)   
-    
+        return self._hw_summary.get("num_acquisitions", 0)
+
     def get_all_generators_status(self) -> List[dict]:
         """
         Get status for ALL generators in one call.
@@ -515,7 +505,7 @@ class StatusHandler:
             status = self.get_gen_status(gen_idx)
             statuses.append(status.to_dict())
         return statuses
-    
+
     def get_gen_status(self, gen_index: int) -> HardwareStatusResult:
         """
         Retrieve the current state of a specific generator from hardware and cache.
@@ -529,7 +519,7 @@ class StatusHandler:
             # Expose only high-level cache metadata (counts/names), not samples.
             wave_cache = self.adapter.get_wave_cache(gen_index)
             readout_wave = self.adapter.get_readout_wave_cache(gen_index)
-            
+
             ro_dict = readout_wave.__dict__ if readout_wave else None
 
             return HardwareStatusResult(
@@ -538,7 +528,7 @@ class StatusHandler:
                 envelopes=envelopes,
                 waves_count=len(wave_cache),
                 readout_wave=ro_dict,
-                hw_summary=self.adapter._summary
+                hw_summary=self.adapter._summary,
             )
         except Exception as e:
             self.logger.error(f"Status check failed for gen {gen_index}: {e}")
@@ -548,6 +538,7 @@ class StatusHandler:
         """Return hardware summary for handshake/status."""
         return self.adapter._summary
 
+
 class ResetHandler:
     """
     Recovery-oriented reset operations for generator-owned memories.
@@ -556,7 +547,6 @@ class ResetHandler:
     of discarding cached state (waves/envelopes) and why. This is useful both for safety
     and for reviewability.
     """
-
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
         """
@@ -579,10 +569,10 @@ class ResetHandler:
         """
         try:
             res = self.adapter.reset_wave_memory(
-                gen_index=gen_index, 
+                gen_index=gen_index,
                 # "preserve_specs" keeps logical wave definitions while invalidating compiled artifacts (WDWs).
                 # This enables fast recompilation without forcing the client to rebuild the full registry.
-                preserve_specs=preserve_specs
+                preserve_specs=preserve_specs,
             )
             return ResetResult(ok=True, gen_index=gen_index, action="wave_reset", details=res)
         except Exception as e:
@@ -608,18 +598,15 @@ class ResetHandler:
         Returns list of results (one per generator).
         """
         results = []
-        num_gens = self.adapter._summary.get("num_generators", 0)  
+        num_gens = self.adapter._summary.get("num_generators", 0)
         for gen_idx in range(num_gens):
             wave_res = self.reset_waves(gen_idx, preserve_specs=preserve_wave_specs)
             env_res = self.reset_envelopes(gen_idx)
-            results.append({
-                "gen_index": gen_idx,
-                "waves": wave_res.to_dict(),
-                "envelopes": env_res.to_dict()
-            })
-        
+            results.append({"gen_index": gen_idx, "waves": wave_res.to_dict(), "envelopes": env_res.to_dict()})
+
         return results
-    
+
+
 class EnvelopeHandler:
     """
     Envelope upload handler.
@@ -628,7 +615,6 @@ class EnvelopeHandler:
     stage is thus isolated so experiments and sweep points can reuse already-uploaded envelopes
     by name, minimizing I/O and latency.
     """
-
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
         """
@@ -648,34 +634,26 @@ class EnvelopeHandler:
         :rtype: EnvelopeResult
         """
         result: Dict[int, Dict[str, List[str]]] = {}
-        
+
         try:
             envelopes_cfg = config.get("envelopes", {})
             for gen_idx, envelopes in envelopes_cfg.items():
                 gen_idx_int = int(gen_idx)
 
-                # Upload is separated from compilation so 
+                # Upload is separated from compilation so
                 # large envelope buffers are transferred at most once per session.
-                res = self.adapter.upload_envelopes(
-                    gen_index=gen_idx_int,
-                    envelopes=envelopes,
-                    auto_pad_noninterp=True
-                )
+                res = self.adapter.upload_envelopes(gen_index=gen_idx_int, envelopes=envelopes, auto_pad_noninterp=True)
 
                 # Build per-generator result
-                gen_result = {
-                    "loaded": res.get("loaded", []),
-                    "skipped": res.get("skipped", []),
-                    "failed": []
-                }
-                
+                gen_result = {"loaded": res.get("loaded", []), "skipped": res.get("skipped", []), "failed": []}
+
                 if res.get("failed"):
                     gen_result["failed"] = [f"{f['name']}: {f['error']}" for f in res["failed"]]
                     error_msg = f"Failed envelopes on gen {gen_idx}: {', '.join(gen_result['failed'])}"
                     self.logger.error(error_msg)
                     result[gen_idx_int] = gen_result
                     return EnvelopeResult(ok=False, result=result, error=error_msg)
-                
+
                 result[gen_idx_int] = gen_result
                 self.logger.info(f"Gen {gen_idx}: loaded={gen_result['loaded']}, skipped={gen_result['skipped']}")
 
@@ -683,6 +661,7 @@ class EnvelopeHandler:
         except Exception as e:
             self.logger.exception("Envelope upload failed")
             return EnvelopeResult(ok=False, result=result, error=str(e))
+
 
 class WaveHandler:
     """
@@ -692,7 +671,6 @@ class WaveHandler:
     descriptors. It is isolated because compilation failures should be reported with
     clear per-generator diagnostics.
     """
-
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
         """
@@ -712,23 +690,19 @@ class WaveHandler:
         :rtype: WaveResult
         """
         payload: Dict[int, Dict[str, List[str]]] = {}
-        
+
         try:
             waves_cfg = config.get("waves", {})
             for gen_idx, waves in waves_cfg.items():
                 gen_idx_int = int(gen_idx)
-                res = self.adapter.compile_waves(
-                    gen_index=gen_idx_int,
-                    waves=waves,
-                    replace=True
-                )
+                res = self.adapter.compile_waves(gen_index=gen_idx_int, waves=waves, replace=True)
 
                 # Build per-generator payload
                 gen_payload = {
                     "waves": [w.get("wave_id") for w in res.get("waves", [])],
                     "replaced": res.get("replaced", []),
                     "skipped": res.get("skipped", []),
-                    "failed": []
+                    "failed": [],
                 }
 
                 # Fail fast on missing dependencies (e.g., missing envelope) to avoid running partially-defined hardware state.
@@ -737,7 +711,7 @@ class WaveHandler:
                     error_msg = f"Compilation failed on gen {gen_idx}: {', '.join(gen_payload['failed'])}"
                     payload[gen_idx_int] = gen_payload
                     return WaveResult(ok=False, payload=payload, error=error_msg)
-                
+
                 payload[gen_idx_int] = gen_payload
                 self.logger.info(f"Gen {gen_idx}: compiled={gen_payload['waves']}, replaced={gen_payload['replaced']}")
 
@@ -746,9 +720,11 @@ class WaveHandler:
             self.logger.exception("Wave compilation failed")
             return WaveResult(ok=False, payload=payload, error=str(e))
 
+
 # ====================================================
 #              MAIN MESSAGE ORCHESTRATOR
 # ====================================================
+
 
 class MessageHandler:
     """
@@ -784,7 +760,7 @@ class MessageHandler:
 
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
-        
+
         # Composition: specialized custom handlers are initialized here
         self.status_h = StatusHandler(adapter, self.logger)
         self.reset_h = ResetHandler(adapter, self.logger)
@@ -815,7 +791,7 @@ class MessageHandler:
         ---------------
         The method supports partial configs to enable reuse of previously uploaded/compiled
         state. For example, omitting ``"envelopes"`` assumes they are already present on the
-        hardware session. 
+        hardware session.
 
         :param config: Full or partial experiment configuration dictionary.
         :type config: dict
@@ -827,7 +803,7 @@ class MessageHandler:
         # This supports reproducibility and debugging without logging large buffers or
         # device-specific internals that would make reviews "noisy" and non-portable.
         log = []
-        
+
         try:
             # Stage 1: preparation steps, kept modular to allow caching across runs.
             # Preparation stages are optional by design to enable caching across runs:
@@ -837,36 +813,35 @@ class MessageHandler:
 
             if "envelopes" in config:
                 res = self.env_h.upload(config)
-                if not res.ok: raise Exception(f"Envelope preparation failed: {res.error}")
-            
+                if not res.ok:
+                    raise Exception(f"Envelope preparation failed: {res.error}")
+
             if "waves" in config:
                 res = self.wave_h.compile(config)
-                if not res.ok: raise Exception(f"Wave compilation failed: {res.error}")
-            
+                if not res.ok:
+                    raise Exception(f"Wave compilation failed: {res.error}")
+
             # # Stage 2: IPs configuration
             for gen_cfg in config.get("generators", []):
                 self._setup_generator(gen_cfg, log)
-            
+
             for acq_cfg in config.get("acquisitions", []):
                 self._setup_acquisition(acq_cfg, log)
-            
+
             trigger_cfg = config.get("trigger", {})
             self._setup_trigger(trigger_cfg, log)
-            
+
             # 3. run the experiment and acquire data
             data = self._run_acquisition(config, log)
-            
+
             return ExperimentResult(ok=True, data=data, config_log=log)
-            
+
         except Exception as e:
             self.logger.exception("Experiment execution sequence aborted")
             return ExperimentResult(ok=False, error=str(e), config_log=log)
 
     def run_sweep(
-        self,
-        msg: dict,
-        on_point: Callable[[SweepPointResult], None],
-        stop_event: Optional[Event] = None
+        self, msg: dict, on_point: Callable[[SweepPointResult], None], stop_event: Optional[Event] = None
     ) -> SweepStatus:
         """
         Execute a multi-point sweep with an optimized "fast path".
@@ -900,7 +875,7 @@ class MessageHandler:
         base_config = msg.get("base", msg)
         variables = msg.get("variables", [])
         sweep_mode = msg.get("sweep_mode", "cartesian")
-        
+
         var_names = {v["name"] for v in variables}
 
         # 1) Path per variabile
@@ -913,14 +888,22 @@ class MessageHandler:
             variable_paths.update(ps)
         setup_needed = classify_variable_paths(variable_paths)
 
-        # 3) Field-based casting enforces HW semantics: 
-            #timing/index fields are discrete ints, analog parameters are floats.
+        # 3) Field-based casting enforces HW semantics:
+        # timing/index fields are discrete ints, analog parameters are floats.
         INT_FIELDS = {
-            "duration", "tof", "shots", "shot_duration",
-            "channel", "nyquist_zone", "safe_pad", "drive_start_index", "fifo_start_index", "delay",
+            "duration",
+            "tof",
+            "shots",
+            "shot_duration",
+            "channel",
+            "nyquist_zone",
+            "safe_pad",
+            "drive_start_index",
+            "fifo_start_index",
+            "delay",
         }
         FLOAT_FIELDS = {"frequency_mhz", "phase", "gain"}
-        
+
         gen_paths = {p for p in variable_paths if p.startswith("generators")}
         acq_paths = {p for p in variable_paths if p.startswith("acquisitions")}
         trig_paths = {p for p in variable_paths if p.startswith("trigger")}
@@ -932,7 +915,7 @@ class MessageHandler:
                 var_cast[name] = "float"
                 continue
 
-            #NOTE:
+            # NOTE:
             # A single variable must not simultaneously drive discrete-time fields (ints) and analog knobs (floats).
             # Enforcing this constraint avoids silent rounding/casting errors
 
@@ -944,12 +927,10 @@ class MessageHandler:
                     touches_int = True
                 if last in FLOAT_FIELDS:
                     touches_float = True
-            
+
             # A single variable must not drive both discrete and continuous fields: that would be ambiguous and error-prone.
             if touches_int and touches_float:
-                raise ValueError(
-                    f"Variable '{name}' touches both int and float fields: {sorted(paths)}"
-                )
+                raise ValueError(f"Variable '{name}' touches both int and float fields: {sorted(paths)}")
 
             if touches_int:
                 var_cast[name] = "int"
@@ -962,39 +943,40 @@ class MessageHandler:
         points = generate_sweep_points(variables, sweep_mode, var_cast)
         n_points = len(points)
 
-        
         self.logger.info(f"Sweep '{sweep_id}': {n_points} points, setup_needed={setup_needed}")
-        
+
         n_completed = 0
         # Avoid using logs for sweep experiments: there are too many points and it would result in huge payload
         log = None
-        
+
         try:
             # 1. # Materialize the first point config: this is the only point that gets full preparation + full configuration.
 
             first_config = substitute_variables(base_config, points[0])
-            
+
             if "envelopes" in first_config:
                 res = self.env_h.upload(first_config)
-                if not res.ok: raise Exception(res.error)
+                if not res.ok:
+                    raise Exception(res.error)
             if "waves" in first_config:
                 res = self.wave_h.compile(first_config)
-                if not res.ok: raise Exception(res.error)
-            
+                if not res.ok:
+                    raise Exception(res.error)
+
             for gen_cfg in first_config.get("generators", []):
                 self._setup_generator(gen_cfg, log)
             for acq_cfg in first_config.get("acquisitions", []):
                 self._setup_acquisition(acq_cfg, log)
             self._setup_trigger(first_config.get("trigger", {}), log)
-            
+
             # Run first experiment with full validation
             data = self._run_acquisition(first_config, log)
             on_point(SweepPointResult(0, n_points, points[0], data))
             n_completed = 1
-            
+
             if n_points == 1:
                 return SweepStatus(True, sweep_id, n_points, n_completed)
-            
+
             # 2. Prepare for optimized sweep
             # Enter sweep mode: subsequent points can reuse pre-validated acquisition setup and reduce control overhead.
             adc_indices = self._get_adc_indices(first_config)
@@ -1004,20 +986,20 @@ class MessageHandler:
             # Therefore it is require to execute "end_sweep()" on every exit path (success or exception) to avoid
             # leaving the system in an ambiguous execution mode for subsequent commands.
             self.adapter.prepare_sweep(mode, adc_indices)
-            
-           # 3. Optimized loop over remaining points
+
+            # 3. Optimized loop over remaining points
             for i, point in enumerate(points[1:], start=1):
                 if stop_event and stop_event.is_set():
                     self.logger.info(f"Sweep stopped at point {i}")
                     break
                 # For each point, only variables change; rely on selective setup to skip expensive full reconfiguration.
                 config = substitute_variables(base_config, point)
-                
+
                 # Recompile waves if needed (WDW update)
                 if setup_needed["waves"]:
                     if "waves" in config:
-                        self.wave_h.compile(config)  
-                
+                        self.wave_h.compile(config)
+
                 # Reconfigure only variable parameters
                 if setup_needed["generator"]:
                     for gen_cfg in config.get("generators", []):
@@ -1036,7 +1018,6 @@ class MessageHandler:
                 if setup_needed["trigger"] and trig_paths:
                     self._setup_trigger(config.get("trigger", {}), log)
 
-                
                 data = self._run_acquisition(config, log)
                 on_point(SweepPointResult(i, n_points, point, data))
                 n_completed += 1
@@ -1044,13 +1025,13 @@ class MessageHandler:
             # Always close sweep mode to return the adapter/hardware to a clean state for subsequent commands.
             self.adapter.end_sweep()
             return SweepStatus(True, sweep_id, n_points, n_completed)
-            
+
         except Exception as e:
             self.logger.exception(f"Sweep '{sweep_id}' failed")
             # Best-effort cleanup: even on failure try to exit sweep mode to avoid leaving hardware in a special state.
             self.adapter.end_sweep()
             return SweepStatus(False, sweep_id, n_points, n_completed, str(e))
-    
+
     # =========================================================================
     # INTERNAL SETUP METHODS
     # =========================================================================
@@ -1072,30 +1053,29 @@ class MessageHandler:
 
         gen_index = gen_cfg.get("gen_index", gen_cfg.get("generator", 0))
         self.logger.info(f"Setting up generator {gen_index}")
-        
+
         # Drive Path
         drive = gen_cfg.get("drive")
         if drive:
             if "frequency_mhz" in drive:
-                self.adapter.generator_modulation(gen_index, "drive", {
-                    "frequency_mhz": float(drive["frequency_mhz"]),
-                    "phase": float(drive.get("phase", 0.0))
-                })
+                self.adapter.generator_modulation(
+                    gen_index,
+                    "drive",
+                    {"frequency_mhz": float(drive["frequency_mhz"]), "phase": float(drive.get("phase", 0.0))},
+                )
                 if log is not None:
                     log.append(f"gen {gen_index} drive frequency: {drive['frequency_mhz']} MHz")
-            
+
             if "nyquist_zone" in drive:
                 self.adapter.set_nyquist_zone(gen_index, "drive", int(drive["nyquist_zone"]))
-            
+
             if "channel" in drive:
                 self.adapter.gen_trigger2listen(gen_index, {"ttype": "drive", "channel": int(drive["channel"])})
-            
+
             # FIFO programming is separated from modulation to keep waveform scheduling independent from RF parameter setup.
             if "fifo" in drive:
                 self.adapter.program_drive_sequence(
-                    gen_index=gen_index,
-                    wave_id_list=drive["fifo"],
-                    start_index=drive.get("fifo_start_index", 1)
+                    gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
                 )
                 if log is not None:
                     log.append(f"gen {gen_index} drive sequence programmed")
@@ -1104,17 +1084,18 @@ class MessageHandler:
         readout = gen_cfg.get("readout")
         if readout:
             if "frequency_mhz" in readout:
-                self.adapter.generator_modulation(gen_index, "readout", {
-                    "frequency_mhz": float(readout["frequency_mhz"]),
-                    "phase": float(readout.get("phase", 0.0))
-                })
+                self.adapter.generator_modulation(
+                    gen_index,
+                    "readout",
+                    {"frequency_mhz": float(readout["frequency_mhz"]), "phase": float(readout.get("phase", 0.0))},
+                )
 
             if "nyquist_zone" in readout:
                 self.adapter.set_nyquist_zone(gen_index, "readout", int(readout["nyquist_zone"]))
-            
+
             if "channel" in readout:
                 self.adapter.gen_trigger2listen(gen_index, {"ttype": "readout", "channel": int(readout["channel"])})
-            
+
             if "wave" in readout:
                 self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
                 if log is not None:
@@ -1135,28 +1116,24 @@ class MessageHandler:
         """
 
         acq_index = acq_cfg.get("acq_index", acq_cfg.get("acquisition", 0))
-        
+
         # 1. Setup modulation (DDS and automatic Nyquist zone)
         if "frequency_mhz" in acq_cfg:
-            self.adapter.acquisition_modulation(acq_index, {
-                "frequency_mhz": float(acq_cfg["frequency_mhz"]),
-                "phase": float(acq_cfg.get("phase", 0.0))
-            })
-        
+            self.adapter.acquisition_modulation(
+                acq_index, {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": float(acq_cfg.get("phase", 0.0))}
+            )
+
         # 2. Setup Trigger Channel (Fixed: now passing a dict instead of int)
         if "channel" in acq_cfg:
-            self.adapter.acq_trigger2listen(acq_index, {
-                "ttype": "acquisition", 
-                "channel": int(acq_cfg["channel"])
-            })
+            self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": int(acq_cfg["channel"])})
             if log is not None:
                 log.append(f"acq {acq_index} listening to trigger channel {acq_cfg['channel']}")
-        
+
         # 3. Setup Timing (ToF and integration duration)
         if "duration" in acq_cfg:
             tof = int(acq_cfg.get("tof", 0))
             self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
-            if log is not None:    
+            if log is not None:
                 log.append(f"acq {acq_index} timing set: tof={tof}")
 
     def _setup_generator_selective(self, gen_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
@@ -1179,33 +1156,32 @@ class MessageHandler:
         :param log: Optional list used to append human-readable configuration actions.
         :type log: list | None
         """
-        
 
         gen_index = gen_cfg.get("gen_index", 0)
-        
+
         drive = gen_cfg.get("drive")
 
         # Selective setup trades generality for speed: modify only subsystems proven variable-driven by path analysis.
         if drive:
             if any(p.endswith(".drive.frequency_mhz") or p.endswith(".drive.phase") for p in variable_paths):
-                self.adapter.generator_modulation(gen_index, "drive", {
-                    "frequency_mhz": float(drive["frequency_mhz"]),
-                    "phase": float(drive.get("phase", 0.0))
-                })
+                self.adapter.generator_modulation(
+                    gen_index,
+                    "drive",
+                    {"frequency_mhz": float(drive["frequency_mhz"]), "phase": float(drive.get("phase", 0.0))},
+                )
             if any(".drive.fifo" in p for p in variable_paths) and "fifo" in drive:
                 self.adapter.program_drive_sequence(
-                    gen_index=gen_index,
-                    wave_id_list=drive["fifo"],
-                    start_index=drive.get("fifo_start_index", 1)
+                    gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
                 )
 
         readout = gen_cfg.get("readout")
         if readout:
             if any(p.endswith(".readout.frequency_mhz") or p.endswith(".readout.phase") for p in variable_paths):
-                self.adapter.generator_modulation(gen_index, "readout", {
-                    "frequency_mhz": float(readout["frequency_mhz"]),
-                    "phase": float(readout.get("phase", 0.0))
-                })
+                self.adapter.generator_modulation(
+                    gen_index,
+                    "readout",
+                    {"frequency_mhz": float(readout["frequency_mhz"]), "phase": float(readout.get("phase", 0.0))},
+                )
             if any(".readout.wave" in p for p in variable_paths) and "wave" in readout:
                 self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
 
@@ -1229,14 +1205,13 @@ class MessageHandler:
         # otherwise the fast-path may not reflect intended parameter changes.
         # Assumption: acquisition routing is stable across points. Changing channel/routing mid-sweep can
         # invalidate the preconfigured pipeline; such changes should trigger a full reconfiguration.
-        
+
         acq_index = acq_cfg.get("acq_index", 0)
-        
+
         if any(p.endswith(".frequency_mhz") or p.endswith(".phase") for p in variable_paths):
-            self.adapter.acquisition_modulation(acq_index, {
-                "frequency_mhz": float(acq_cfg["frequency_mhz"]),
-                "phase": float(acq_cfg.get("phase", 0.0))
-            })
+            self.adapter.acquisition_modulation(
+                acq_index, {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": float(acq_cfg.get("phase", 0.0))}
+            )
         if any(p.endswith(".duration") or p.endswith(".tof") for p in variable_paths):
             tof = int(acq_cfg.get("tof", 0))
             self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
@@ -1254,20 +1229,20 @@ class MessageHandler:
         :type log: list | None
         """
         shots = trigger_cfg.get("shots", 1)
-        
+
         if "shot_duration" in trigger_cfg:
             self.adapter.tg_set_duration(int(trigger_cfg["shot_duration"]))
-        
+
         if "drive" in trigger_cfg or "readout" in trigger_cfg:
             self.adapter.tg_program_delays(
                 drive=trigger_cfg.get("drive"),
                 readout=trigger_cfg.get("readout"),
                 drive_start_index=trigger_cfg.get("drive_start_index", 1),
-                safe_pad=trigger_cfg.get("safe_pad", 0)
+                safe_pad=trigger_cfg.get("safe_pad", 0),
             )
             if log is not None:
                 log.append(f"trigger delays programmed for {shots} shots")
-            
+
     def _run_acquisition(self, config: dict, log: Optional[list] = None) -> Dict[int, np.ndarray]:
         """
         Run the acquisition sequence and return captured samples.
@@ -1288,20 +1263,21 @@ class MessageHandler:
 
         # Acquisition mode/ADC selection is derived from config.
         adc_indices = [acq.get("acq_index", acq.get("acquisition", i)) for i, acq in enumerate(acquisitions)]
-        if not adc_indices: adc_indices = [0]
-        
+        if not adc_indices:
+            adc_indices = [0]
+
         first_acq = acquisitions[0] if acquisitions else {}
         results = self.adapter.run_multi_acquisition(
             adc_indices=adc_indices,
             mode=first_acq.get("output_type", "decimated"),
             shots=trigger_cfg.get("shots", 1),
             samp_per_shot=int(first_acq.get("duration", 256)),
-            timeout=config.get("timeout", 10.0)
+            timeout=config.get("timeout", 10.0),
         )
         if log is not None:
             log.append(f"Acquisition complete on ADCs: {adc_indices}")
         return results
-    
+
     def _get_adc_indices(self, config: dict) -> List[int]:
         """
         Extract the ADC indices involved in the current experiment.

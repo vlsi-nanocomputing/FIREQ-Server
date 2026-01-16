@@ -21,7 +21,7 @@ def main():
     if not ol_filename:
         ol_filename = "overlay.bit"
 
-    ol_filepath = BASE_PATH + ol_folder + '/' + ol_filename
+    ol_filepath = BASE_PATH + ol_folder + "/" + ol_filename
 
     # check existence of overlay
     if not os.path.exists(ol_filepath):
@@ -33,5 +33,5 @@ def main():
     ol = FIREQ_SoC(ol_filepath)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

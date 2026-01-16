@@ -1,9 +1,4 @@
-from . import (
-    acquisition_driver,
-    generator_driver,
-    trigger_generator_driver,
-    fireq_soc
-)
+from . import acquisition_driver, generator_driver, trigger_generator_driver, fireq_soc
 
 from .fireq_soc import *
 from .generator_driver import *
