@@ -30,7 +30,9 @@ env/
 
 # --- IDE & Editors ---
 .idea/
-.vscode/
+.vscode/*.code-workspace
+.vscode/launch.json
+.vscode/tasks.json
 *.swp
 *.swo
 *~
