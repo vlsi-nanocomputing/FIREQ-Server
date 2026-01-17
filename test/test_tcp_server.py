@@ -12,7 +12,7 @@ import numpy as np
 from unittest.mock import MagicMock
 
 from server.tcp_server import FIREQServer
-from server.message_handler import MessageHandler
+from server.message_handler import MessageHandler, SweepPointResult
 from server.ol_adapter import OverlayAdapter
 
 try:
@@ -242,8 +242,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
         client.send(sweep_cmd)
         
         msg = client.receive()
-        # FIX: Accept either 'sweep_point' (legacy) or 'sweep_batch' (default)
-        assert msg.get("type") in ["sweep_point", "sweep_batch"]
+        assert msg.get("type") == "sweep_header"
         
         client.close()
         time.sleep(0.5)
@@ -265,7 +264,11 @@ def test_abort_command_execution(client, server_ctx):
     original_run_sweep = server_ctx.server.handler.run_sweep
     
     # Improved Mock: Checks stop_event immediately after waking up
-    def blocking_sweep(msg, on_point, stop_event):
+    def blocking_sweep(msg, on_point, stop_event, on_plan=None):
+        points = [{"dummy": v} for v in msg.get("variables", [{}])[0].get("values", [])]
+        if on_plan is not None:
+            on_plan(points)
+
         for i in range(50):
             if stop_event.is_set():
                 return server_ctx.server.handler.status_h.get_sweep_status("aborted")
@@ -277,7 +280,7 @@ def test_abort_command_execution(client, server_ctx):
             if stop_event.is_set():
                 return server_ctx.server.handler.status_h.get_sweep_status("aborted")
 
-            on_point({"data": i})
+            on_point(SweepPointResult(i, len(points), points[i % len(points)], {}))
             
         return server_ctx.server.handler.status_h.get_sweep_status("completed")
 

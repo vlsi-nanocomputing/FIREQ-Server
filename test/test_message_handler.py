@@ -161,7 +161,7 @@ class TestRobustness:
         Verify the 'Fail-Fast' mechanism during the preparation stage.
         """
         config = {
-            "waves": {"0": [{"id": "w1", "type": "csv"}]}, 
+            "waves": {"0": [{"wave_id": "w1"}]},
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}]
         }
 
@@ -375,8 +375,8 @@ class TestRobustness:
                 "sweep_id": "diag_test",
                 "sweep_mode": "zipped",
                 "base": {
-                    "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$f", "gain": "$g"}}],
-                    "acquisitions": [{"acq_index": 0, "duration": 10}]
+                    "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$f"}}],
+                    "acquisitions": [{"acq_index": 0, "frequency_mhz": "$g", "duration": 10}]
                 },
                 "variables": [
                     {"name": "f", "values": [10.0, 20.0, 30.0]},
@@ -423,8 +423,8 @@ class TestRobustness:
         """
         config = {
             "trigger": {
-                "drive": True,
-                "readout": False,
+                "drive": {"1": {"delay": [[10, 1]]}},
+                "readout": {"2": {"delay": 50}},
                 "drive_start_index": 10,
                 "shot_duration": 1000
             },
@@ -443,10 +443,10 @@ class TestRobustness:
         stack.adapter.tg_set_duration.assert_called_with(1000)
 
         # Check Delays
-        # Arguments: drive, readout, drive_start_index, safe_pad
+        # Arguments: drive, readout, drive_start_index
         stack.adapter.tg_program_delays.assert_called_with(
-            drive=True,
-            readout=False,
+            drive={"1": {"delay": [[10, 1]]}},
+            readout={"2": {"delay": 50}},
             drive_start_index=10,
         )
 
@@ -599,3 +599,233 @@ class TestRobustness:
             wave={"type": "const", "length": 100},
             replace=True
         )
+
+# =============================================================================
+# BINARY SERIALIZATION TESTS
+# =============================================================================
+
+def test_experiment_result_binary_metadata():
+    """Test ExperimentResult.to_metadata_dict() generates correct metadata."""
+    from server.message_handler import ExperimentResult
+
+    # Create test data with different dtypes and shapes
+    data = {
+        0: np.array([1+2j, 3+4j], dtype=np.complex64),
+        1: np.array([[5+6j, 7+8j]], dtype=np.complex128)
+    }
+    result = ExperimentResult(ok=True, data=data, config_log=["test"])
+
+    # Test metadata generation
+    meta = result.to_metadata_dict()
+
+    assert meta["ok"] is True
+    assert "adc_metadata" in meta
+    assert meta["adc_metadata"][0]["dtype"] == "complex64"
+    assert meta["adc_metadata"][0]["shape"] == [2]
+    assert meta["adc_metadata"][1]["dtype"] == "complex128"
+    assert meta["adc_metadata"][1]["shape"] == [1, 2]
+    assert meta["config_log"] == ["test"]
+
+    # Test binary data unchanged
+    binary = result.get_binary_data()
+    assert np.array_equal(binary[0], data[0])
+    assert np.array_equal(binary[1], data[1])
+
+def test_experiment_result_empty_data():
+    """Test ExperimentResult with empty data."""
+    from server.message_handler import ExperimentResult
+
+    result = ExperimentResult(ok=False, error="Test error")
+
+    meta = result.to_metadata_dict()
+
+    assert meta["ok"] is False
+    assert meta["adc_metadata"] == {}
+    assert meta["error"] == "Test error"
+    assert result.get_binary_data() == {}
+
+def test_sweep_point_result_binary_metadata():
+    """Test SweepPointResult.to_metadata_dict() for binary protocol."""
+    from server.message_handler import SweepPointResult
+
+    data = {0: np.array([1+2j, 3+4j], dtype=np.complex64)}
+    result = SweepPointResult(
+        point_index=5,
+        n_total=10,
+        variables={"freq": 5.5, "gain": 0.8},
+        data=data
+    )
+
+    meta = result.to_metadata_dict()
+
+    assert meta["point_index"] == 5
+    assert meta["n_total"] == 10
+    assert meta["variables"]["freq"] == 5.5
+    assert meta["variables"]["gain"] == 0.8
+    assert "adc_metadata" in meta
+    assert meta["adc_metadata"][0]["dtype"] == "complex64"
+    assert meta["adc_metadata"][0]["shape"] == [2]
+
+    # Test binary data
+    binary = result.get_binary_data()
+    assert np.array_equal(binary[0], data[0])
+
+def test_binary_metadata_preserves_array_properties():
+    """Test that metadata preserves all necessary array properties."""
+    from server.message_handler import ExperimentResult
+
+    # Test with large multi-dimensional array
+    data = {
+        0: np.random.rand(100, 512).astype(np.complex64) +
+           1j * np.random.rand(100, 512).astype(np.complex64)
+    }
+    result = ExperimentResult(ok=True, data=data)
+
+    meta = result.to_metadata_dict()
+    binary = result.get_binary_data()
+
+    # Verify metadata matches actual array
+    arr = binary[0]
+    assert meta["adc_metadata"][0]["dtype"] == str(arr.dtype)
+    assert meta["adc_metadata"][0]["shape"] == list(arr.shape)
+
+    # Verify client can reconstruct from metadata
+    expected_size = np.dtype(arr.dtype).itemsize * arr.size
+    actual_bytes = arr.tobytes()
+    assert len(actual_bytes) == expected_size
+
+
+# =============================================================================
+# BINARY ENVELOPE UPLOAD TESTS
+# =============================================================================
+
+def test_envelope_handler_binary_input(stack):
+    """Test EnvelopeHandler with binary numpy input (new protocol 2.1)."""
+    # Create binary envelope data (float32 I/Q pairs)
+    samples = np.array([[0.5, 0.3], [0.6, 0.4], [0.7, 0.5]], dtype=np.float32)
+    envelope_data = {(0, 0): samples}  # (gen_idx=0, env_idx=0)
+
+    config = {
+        "envelopes": {
+            "0": [{
+                "name": "test_binary_env",
+                "for_interpolation": False,
+                "is_symmetric": False,
+                "i_even": True,
+                "q_even": False,
+                "num_samples": 3
+            }]
+        }
+    }
+
+    # Call upload with binary data
+    result = stack.handler.env_h.upload(config, envelope_data)
+
+    # Verify success
+    assert result.ok, f"Expected ok=True, got {result}"
+    assert result.error is None
+
+
+def test_envelope_handler_binary_multiple_generators(stack):
+    """Test binary envelope upload with multiple generators."""
+    # Create binary data for multiple generators
+    samples_gen0 = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
+    samples_gen1 = np.array([[0.5, 0.6], [0.7, 0.8]], dtype=np.float32)
+
+    envelope_data = {
+        (0, 0): samples_gen0,  # gen 0, env 0
+        (1, 0): samples_gen1   # gen 1, env 0
+    }
+
+    config = {
+        "envelopes": {
+            "0": [{
+                "name": "env_gen0",
+                "for_interpolation": False,
+                "is_symmetric": False,
+                "i_even": True,
+                "q_even": False,
+                "num_samples": 2
+            }],
+            "1": [{
+                "name": "env_gen1",
+                "for_interpolation": False,
+                "is_symmetric": False,
+                "i_even": True,
+                "q_even": False,
+                "num_samples": 2
+            }]
+        }
+    }
+
+    result = stack.handler.env_h.upload(config, envelope_data)
+
+    assert result.ok
+    assert result.error is None
+
+
+def test_envelope_handler_binary_multiple_envelopes_per_generator(stack):
+    """Test binary upload with multiple envelopes for one generator."""
+    # Create binary data for multiple envelopes on same generator
+    samples_env0 = np.array([[0.1, 0.2]], dtype=np.float32)
+    samples_env1 = np.array([[0.3, 0.4], [0.5, 0.6]], dtype=np.float32)
+
+    envelope_data = {
+        (0, 0): samples_env0,  # gen 0, env 0
+        (0, 1): samples_env1   # gen 0, env 1
+    }
+
+    config = {
+        "envelopes": {
+            "0": [
+                {
+                    "name": "env0",
+                    "for_interpolation": False,
+                    "is_symmetric": False,
+                    "i_even": True,
+                    "q_even": False,
+                    "num_samples": 1
+                },
+                {
+                    "name": "env1",
+                    "for_interpolation": False,
+                    "is_symmetric": False,
+                    "i_even": True,
+                    "q_even": False,
+                    "num_samples": 2
+                }
+            ]
+        }
+    }
+
+    result = stack.handler.env_h.upload(config, envelope_data)
+
+    assert result.ok
+    assert result.error is None
+
+
+def test_envelope_handler_binary_large_samples(stack):
+    """Test binary envelope upload with large sample count."""
+    # Create 1000-sample envelope to simulate real-world usage
+    num_samples = 1000
+    samples = np.random.rand(num_samples, 2).astype(np.float32) * 2 - 1  # [-1, 1] range
+
+    envelope_data = {(0, 0): samples}
+
+    config = {
+        "envelopes": {
+            "0": [{
+                "name": "large_envelope",
+                "for_interpolation": True,
+                "is_symmetric": False,
+                "i_even": True,
+                "q_even": False,
+                "num_samples": num_samples
+            }]
+        }
+    }
+
+    result = stack.handler.env_h.upload(config, envelope_data)
+
+    assert result.ok
+    assert result.error is None

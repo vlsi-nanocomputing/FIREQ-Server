@@ -58,9 +58,10 @@ import json
 import time
 import socket
 import logging
+import numpy as np
 from queue import Queue, Empty
 from threading import Thread, Event
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from .message_handler import MessageHandler, SweepPointResult, SweepStatus
 import struct
 
@@ -155,6 +156,7 @@ class FIREQServer:
         # set by network threads on abort/disconnect, checked by handler.run_sweep().
         self._stop_event = Event()      
         self._authenticated = False
+        self._abort_in_progress = Event()
         
         # Socket references (owned by the network threads, shared with the sender thread)
         self._server_socket: Optional[socket.socket] = None
@@ -302,7 +304,26 @@ class FIREQServer:
         
         try:
             if cmd == "upload_envelopes":
-                result = self.handler.env_h.upload(msg)
+                total_envelopes = 0
+                invalid_metadata = False
+
+                for gen_index_str, envelopes in msg.get("envelopes", {}).items():
+                    for e in envelopes:
+                        total_envelopes += 1
+                        if "samples_iq" in e or "num_samples" not in e:
+                            invalid_metadata = True
+
+                if invalid_metadata:
+                    raise ValueError(
+                        "Envelope metadata must include num_samples."
+                    )
+
+                envelope_data = msg.get("envelope_data")
+                if total_envelopes > 0 and envelope_data is None:
+                    raise ValueError("Missing binary envelope frames.")
+
+                # Call handler with binary data
+                result = self.handler.env_h.upload(msg, envelope_data)
                 self.queue_out.put({
                     "cmd": cmd,
                     "session_id": session_id,
@@ -324,21 +345,30 @@ class FIREQServer:
 
                 t_end_server = time.perf_counter()
                 server_duration_ms = (t_end_server - t_start_server) * 1000
-                response_payload = ensure_dict(result)
-                if "debug_timing" not in response_payload:
-                    response_payload["debug_timing"] = {}
-                response_payload["debug_timing"]["total_server_time_ms"] = server_duration_ms
+
+                # Binary transmission mode: metadata + binary frames
+                metadata = result.to_metadata_dict()
+                metadata["cmd"] = cmd
+                metadata["session_id"] = session_id
+                metadata["type"] = "acquisition_metadata"
+
+                # Inject timing information
+                if "debug_timing" not in metadata:
+                    metadata["debug_timing"] = {}
+                metadata["debug_timing"]["total_server_time_ms"] = server_duration_ms
                 if hasattr(self.handler.adapter, "last_timing_stats"):
-                     response_payload["debug_timing"].update(self.handler.adapter.last_timing_stats)
+                    metadata["debug_timing"].update(self.handler.adapter.last_timing_stats)
+
+                # Enqueue both metadata and binary data
                 self.queue_out.put({
-                    "cmd": cmd,
-                    "session_id": session_id,
-                    **response_payload
+                    "type": "metadata_with_binary",
+                    "metadata": metadata,
+                    "binary_data": result.get_binary_data()
                 })
             
             elif cmd == "run_sweep":
                 sweep_id = msg.get("sweep_id", "unnamed")
-                
+
                 # ============================================================
                 # BATCHING CONFIGURATION
                 # Client can override batch_size per-request for benchmarking
@@ -347,47 +377,48 @@ class FIREQServer:
                 batch_size = msg.get("batch_size", SWEEP_BATCH_SIZE)
                 if batch_size < 1:
                     batch_size = 1
-                
-                self.logger.info(f"Sweep '{sweep_id}' with batch_size={batch_size}")
-                
-                t_start_sweep = time.perf_counter()
-                
-                # ============================================================
-                # BATCHING: Local buffer for accumulating points
-                # ============================================================
-                point_buffer: List[dict] = []
-                batch_index = [0]  # Use list to allow mutation in nested function
-                
-                def flush_batch():
-                    """Send accumulated sweep points as a batch response."""
-                    if not point_buffer:
-                        return
-                    
-                    self.queue_out.put({
-                        "type": "sweep_batch",
-                        "cmd": cmd,
-                        "session_id": session_id,
-                        "sweep_id": sweep_id,
-                        "batch_index": batch_index[0],
-                        "points": list(point_buffer)  # Copy to avoid reference issues
-                    })
-                    
-                    self.logger.debug(
-                        f"Sent batch {batch_index[0]} with {len(point_buffer)} points"
-                    )
-                    
-                    point_buffer.clear()
-                    batch_index[0] += 1
-                
-                def on_point(r: SweepPointResult):
-                    """
-                    Callback for each sweep point produced by the handler.
 
-                    The point is buffered and flushed in batches to reduce network
-                    overhead. If ``batch_size == 1`` this approximates legacy behavior.
-                    """
-                    # Prepare the data dictionary
-                    point_payload = ensure_dict(r)
+                self.logger.info(
+                    f"Sweep '{sweep_id}' with batch_size={batch_size}, stream_mode=header_binary"
+                )
+
+                t_start_sweep = time.perf_counter()
+
+                # ============================================================
+                # BATCHING: Local buffers for accumulating points
+                # ============================================================
+                binary_buffer: List[Dict[int, np.ndarray]] = []
+                timing_buffer: List[Tuple[float, float]] = []
+                batch_index = [0]  # Use list to allow mutation in nested function
+                header_sent = [False]
+                sweep_points_plan: List[Dict[str, Any]] = []
+
+                def on_plan(points: List[Dict[str, Any]]):
+                    sweep_points_plan.clear()
+                    sweep_points_plan.extend(points)
+
+                def flush_binary_batch():
+                    """Send accumulated sweep points as binary-only batch."""
+                    if not binary_buffer:
+                        return
+
+                    self.queue_out.put({
+                        "type": "sweep_binary_batch",
+                        "binary_data": list(binary_buffer),
+                        "timing": list(timing_buffer)
+                    })
+
+                    self.logger.debug(
+                        f"Sent binary-only batch {batch_index[0]} with {len(binary_buffer)} points"
+                    )
+
+                    binary_buffer.clear()
+                    timing_buffer.clear()
+                    batch_index[0] += 1
+
+                def on_point(r: SweepPointResult):
+                    """Callback for each sweep point."""
+                    point_payload = r.to_metadata_dict()
 
                     # --- [TIMING] Inject per-point timing stats ---
                     if hasattr(self.handler.adapter, "last_timing_stats"):
@@ -397,12 +428,39 @@ class FIREQServer:
                             self.handler.adapter.last_timing_stats
                         )
 
-                    # Add to buffer
-                    point_buffer.append(point_payload)
-                    
-                    # Flush if buffer is full
-                    if len(point_buffer) >= batch_size:
-                        flush_batch()
+                    if not header_sent[0]:
+                        points_metadata = [
+                            {"point_index": i, "variables": p}
+                            for i, p in enumerate(sweep_points_plan)
+                        ]
+                        header_payload = {
+                            "type": "sweep_header",
+                            "cmd": cmd,
+                            "session_id": session_id,
+                            "sweep_id": sweep_id,
+                            "stream_mode": "header_binary",
+                            "batch_size": batch_size,
+                            "n_points": r.n_total,
+                            "points": points_metadata,
+                            "adc_metadata": point_payload.get("adc_metadata", {})
+                        }
+                        self.queue_out.put({
+                            "type": "sweep_header",
+                            "metadata": header_payload
+                        })
+                        header_sent[0] = True
+
+                    bin_data = r.get_binary_data()
+                    if not bin_data:
+                        return
+                    binary_buffer.append(bin_data)
+                    timing_stats = point_payload.get("debug_timing", {})
+                    timing_buffer.append((
+                        float(timing_stats.get("fpga_active_ms", 0.0)),
+                        float(timing_stats.get("sw_overhead_ms", 0.0))
+                    ))
+                    if len(binary_buffer) >= batch_size:
+                        flush_binary_batch()
                 
                 # Clear stop event for new sweep
                 self._stop_event.clear()
@@ -411,13 +469,14 @@ class FIREQServer:
                 status = self.handler.run_sweep(
                     msg,
                     on_point=on_point,
-                    stop_event=self._stop_event
+                    stop_event=self._stop_event,
+                    on_plan=on_plan
                 )
                 
                 # ============================================================
                 # CRITICAL: Flush any remaining points in buffer
                 # ============================================================
-                flush_batch()
+                flush_binary_batch()
                 
                 # --- [TIMING] Stop Sweep Timer ---
                 t_end_sweep = time.perf_counter()
@@ -694,10 +753,13 @@ class FIREQServer:
                     # queue_in (main thread scheduling) is bypassed and stop_event is set here
                     # for cooperative cancellation of an ongoing sweep.
                     self._stop_event.set()
+                    self._abort_in_progress.set()
 
                     # Asynchronous acknowledgement:
                     # an abort" response is enqueued so the sender thread can notify the client
                     # even while the main thread may still be unwinding the sweep.
+                    with self.queue_out.mutex:
+                        self.queue_out.queue.clear()
                     self.queue_out.put({
                         "ok": True,
                         "cmd": "abort",
@@ -705,6 +767,21 @@ class FIREQServer:
                         "message": "Sweep aborted"
                     })
                 else:
+                    if cmd == "upload_envelopes":
+                        invalid_metadata = False
+                        total_envelopes = 0
+
+                        for gen_index_str, envelopes in msg.get("envelopes", {}).items():
+                            for e in envelopes:
+                                total_envelopes += 1
+                                if "samples_iq" in e or "num_samples" not in e:
+                                    invalid_metadata = True
+
+                        if (not invalid_metadata) and total_envelopes > 0:
+                            envelope_data = self._recv_envelope_frames(sock, total_envelopes)
+                            self.logger.info(f"Received {total_envelopes} binary envelope frames")
+                            msg["envelope_data"] = envelope_data
+
                     # All non-abort commands go through the main thread.
                     # This preserves the single-writer invariant for handler/hardware operations.
                     self.queue_in.put(msg)
@@ -718,6 +795,7 @@ class FIREQServer:
         """
         Send responses from ``queue_out`` to the connected client.
 
+        Uses binary transmission mode for all data acquisitions.
         Exits when it receives ``None`` or when the client disconnects.
         """
         while self._running:
@@ -725,29 +803,65 @@ class FIREQServer:
                 msg = self.queue_out.get(timeout=1.0)
             except Empty:
                 continue
-            
+
             if msg is None:
                 # None is the session "flag": it tells the sender loop to exit cleanly
                 # when the client session ends.
                 break
-            
+
             try:
                 # Socket writer thread:
                 # this is the only place that writes to the client socket.
                 # To write in a single thread avoids interleaving frames and simplifies error handling.
-                include_timing = msg.get("type") in ("sweep_batch", "sweep_status")
-                self._send_message(self._client_socket, msg, include_timing=include_timing)
+                msg_type = msg.get("type")
+
+                # Handle binary transmission types
+                if self._abort_in_progress.is_set() and msg.get("cmd") != "abort":
+                    # Drop any pending data frames while abort is active.
+                    continue
+
+                if msg_type == "metadata_with_binary":
+                    # Single experiment result: metadata + binary frames
+                    self._send_message(self._client_socket, msg["metadata"])
+
+                    # Send binary frames for each ADC
+                    for adc_idx, arr in msg["binary_data"].items():
+                        self._send_binary_frame(self._client_socket, adc_idx, arr)
+
+                elif msg_type == "sweep_header":
+                    # Single sweep header (metadata only)
+                    self._send_message(self._client_socket, msg["metadata"], include_timing=True)
+
+                elif msg_type == "sweep_binary_batch":
+                    # Sweep data-only batch: binary frames only
+                    for point_data in msg["binary_data"]:
+                        for adc_idx, arr in point_data.items():
+                            self._send_binary_frame(self._client_socket, adc_idx, arr)
+                        timing = msg.get("timing", [])
+                        if timing:
+                            hw_ms, sw_ms = timing.pop(0)
+                        else:
+                            hw_ms, sw_ms = 0.0, 0.0
+                        self._send_timing_trailer(self._client_socket, hw_ms, sw_ms)
+
+                else:
+                    # Other messages: handshake, status, errors (pure JSON)
+                    include_timing = msg_type in ("sweep_status",)
+                    self._send_message(self._client_socket, msg, include_timing=include_timing)
+                    if msg.get("cmd") == "abort":
+                        self._abort_in_progress.clear()
+
             except (BrokenPipeError, ConnectionResetError, OSError):
                 self.logger.error("Client disconnected during send. Aborting experiment.")
                 # If sending fails, assume the client is gone.
-                # We set stop_event to abort any active sweep and exit; 
+                # We set stop_event to abort any active sweep and exit;
                 # "teardown" will close sockets.
                 self._stop_event.set()
                 break
             except Exception as e:
                 self.logger.error(f"Send error: {e}")
                 break
-        
+
         self.logger.debug("Sender loop exited")
         
     # =========================================================================
@@ -758,7 +872,7 @@ class FIREQServer:
         """Build the server -> client handshake message."""
         return {
                 "type": "handshake",
-                "protocol_version": "1.0", # to track possible future versions
+                "protocol_version": "2.3", # 2.0: binary acquisitions, 2.1: + binary envelopes, 2.2: sweep header stream, 2.3: timing trailer
                 "hw_summary": self.handler.status_h.hw_summary,
             }
 
@@ -969,7 +1083,79 @@ class FIREQServer:
         # sendall() function: ensures the full frame is transmitted (prefix + payload).
         # Writes are performed by the sender thread only: avoid interleaved frames.
         sock.sendall(length + payload)
-    
+
+    def _send_binary_frame(self, sock: socket.socket, adc_index: int, data: np.ndarray):
+        """
+        Send a single binary data frame for one ADC.
+
+        Frame format:
+        [4 bytes: ADC index (uint32 big-endian)]
+        [4 bytes: data length (uint32 big-endian)]
+        [N bytes: raw numpy data via .tobytes()]
+
+        :param sock: Connected socket
+        :param adc_index: ADC/acquisition index
+        :param data: Complex numpy array to transmit
+        """
+        # Serialize numpy array to bytes
+        data_bytes = data.tobytes()
+
+        # Construct frame header: ADC index + data length
+        header = struct.pack('>II', adc_index, len(data_bytes))
+
+        # Send atomically
+        sock.sendall(header + data_bytes)
+
+        self.logger.debug(
+            f"Sent binary frame: ADC {adc_index}, {len(data_bytes)} bytes, "
+            f"dtype={data.dtype}, shape={data.shape}"
+        )
+
+    def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float):
+        """Send a fixed-size timing trailer (2x float32, big-endian)."""
+        payload = struct.pack('>ff', float(hw_ms), float(sw_ms))
+        sock.sendall(payload)
+
+    def _recv_envelope_frames(self, sock: socket.socket, total_count: int) -> Dict[Tuple[int, int], np.ndarray]:
+        """
+        Receive binary envelope sample frames.
+
+        Frame format per envelope:
+        [4 bytes: generator index (uint32 big-endian)]
+        [4 bytes: envelope index in batch (uint32 big-endian)]
+        [4 bytes: sample count (uint32 big-endian)]
+        [N × 8 bytes: float32 I/Q pairs]
+
+        :param sock: Connected socket
+        :param total_count: Total number of envelopes to receive
+        :return: Dict mapping (gen_idx, env_idx) to float32 I/Q array (shape: N×2)
+        """
+        envelope_data = {}
+
+        for _ in range(total_count):
+            # Read 12-byte header
+            header = self._recv_exact(sock, 12)
+            if header is None:
+                raise ConnectionError("Incomplete envelope frame header")
+
+            gen_idx, env_idx, num_samples = struct.unpack('>III', header)
+
+            # Read sample data (num_samples × 8 bytes for float32 I/Q)
+            sample_bytes = self._recv_exact(sock, num_samples * 8)
+            if sample_bytes is None:
+                raise ConnectionError(f"Incomplete envelope samples for gen={gen_idx}, env={env_idx}")
+
+            # Convert to numpy array: shape (num_samples, 2) with dtype float32
+            samples = np.frombuffer(sample_bytes, dtype=np.float32).reshape(num_samples, 2)
+            envelope_data[(gen_idx, env_idx)] = samples
+
+            self.logger.debug(
+                f"Received envelope frame: gen={gen_idx}, env={env_idx}, "
+                f"{num_samples} samples, {len(sample_bytes)} bytes"
+            )
+
+        return envelope_data
+
     def _recv_exact(self, sock: socket.socket, n: int) -> Optional[bytes]:
         """
         Receive exactly *n* bytes from the socket.

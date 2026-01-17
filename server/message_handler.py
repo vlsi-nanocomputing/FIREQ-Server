@@ -21,7 +21,7 @@ parameters actually changing, to speed up execution.
 
 import logging
 import numpy as np
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 from itertools import product
 from threading import Event
@@ -203,6 +203,43 @@ class ExperimentResult:
             d["config_log"] = self.config_log
         return d
 
+    def to_metadata_dict(self) -> dict:
+        """
+        Generate metadata dictionary for binary transmission protocol.
+
+        Instead of converting arrays to lists, this method generates minimal
+        metadata describing the arrays (dtype and shape only), allowing the
+        client to reconstruct arrays from binary frames.
+
+        :return: Dict with metadata for binary reconstruction.
+        :rtype: dict
+        """
+        d = {"ok": self.ok}
+        if self.ok and self.data is not None:
+            d["adc_metadata"] = {}
+            for adc_idx, arr in self.data.items():
+                if arr is not None:
+                    d["adc_metadata"][adc_idx] = {
+                        "dtype": str(arr.dtype),
+                        "shape": list(arr.shape)
+                    }
+        else:
+            d["adc_metadata"] = {}
+        if self.error:
+            d["error"] = self.error
+        if self.config_log:
+            d["config_log"] = self.config_log
+        return d
+
+    def get_binary_data(self) -> Dict[int, np.ndarray]:
+        """
+        Return raw numpy arrays for binary transmission.
+
+        :return: Dictionary mapping ADC index to numpy array.
+        :rtype: Dict[int, np.ndarray]
+        """
+        return self.data if self.data else {}
+
 @dataclass
 class SweepPointResult:
     """
@@ -233,6 +270,36 @@ class SweepPointResult:
                     "Q": np.imag(arr).tolist()
                 }
         return d
+
+    def to_metadata_dict(self) -> dict:
+        """
+        Generate metadata dictionary for binary transmission protocol.
+
+        :return: Dict with sweep point info and array metadata.
+        :rtype: dict
+        """
+        d = {
+            "point_index": self.point_index,
+            "n_total": self.n_total,
+            "variables": self.variables,
+            "adc_metadata": {}
+        }
+        for adc_idx, arr in self.data.items():
+            if arr is not None:
+                d["adc_metadata"][adc_idx] = {
+                    "dtype": str(arr.dtype),
+                    "shape": list(arr.shape)
+                }
+        return d
+
+    def get_binary_data(self) -> Dict[int, np.ndarray]:
+        """
+        Return raw numpy arrays for binary transmission.
+
+        :return: Dictionary mapping ADC index to numpy array.
+        :rtype: Dict[int, np.ndarray]
+        """
+        return self.data
 
 @dataclass 
 class SweepStatus:
@@ -665,26 +732,57 @@ class EnvelopeHandler:
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
 
-    def upload(self, config: dict) -> EnvelopeResult:
+    def upload(self, config: dict, envelope_data: Optional[Dict[Tuple[int, int], np.ndarray]] = None) -> EnvelopeResult:
         """
         Process the 'envelopes' section of the configuration.
-        :param config: Dictionary containing envelope specifications.
+
+        :param config: Dictionary containing envelope specifications (metadata).
         :type config: dict
+        :param envelope_data: Binary envelope data mapping (gen_idx, env_idx) to float32 I/Q arrays
+                              (shape: N×2). Required for envelope upload.
+        :type envelope_data: Optional[Dict[Tuple[int, int], np.ndarray]]
         :return: Detailed result of the upload process.
         :rtype: EnvelopeResult
         """
         result: Dict[int, Dict[str, List[str]]] = {}
-        
+
         try:
             envelopes_cfg = config.get("envelopes", {})
+            if envelope_data is None:
+                raise ValueError(
+                    "Envelope upload requires binary frames with num_samples metadata."
+                )
             for gen_index_str, envelopes in envelopes_cfg.items():
                 gen_index = int(gen_index_str)
+
+                # Inject binary data into envelope config if provided
+                envelopes_with_samples = []
+                for env_idx, e in enumerate(envelopes):
+                    if "samples_iq" in e:
+                        raise ValueError(
+                            "Envelope metadata is invalid. Provide binary envelope frames."
+                        )
+                    envelope = dict(e)  # Make a copy
+
+                    # Get samples: binary data only.
+                    if (gen_index, env_idx) in envelope_data:
+                        envelope["samples_iq"] = envelope_data[(gen_index, env_idx)]
+                    else:
+                        error_msg = (
+                            f"Missing binary data for envelope '{envelope.get('name', 'unknown')}' "
+                            f"on gen {gen_index} (env_idx={env_idx})."
+                        )
+                        self.logger.error(error_msg)
+                        result[gen_index] = {"loaded": [], "skipped": [], "failed": [error_msg]}
+                        return EnvelopeResult(ok=False, result=result, error=error_msg)
+
+                    envelopes_with_samples.append(envelope)
 
                 # Upload is separated from compilation so
                 # large envelope buffers are transferred at most once per session.
                 res = self.adapter.upload_envelopes(
                     gen_index=gen_index,
-                    envelopes=envelopes,
+                    envelopes=envelopes_with_samples,
                     auto_pad_noninterp=True
                 )
 
@@ -736,21 +834,24 @@ class WaveHandler:
     def compile(self, config: dict) -> WaveResult:
         """
         Process the 'waves' section of the configuration.
-        :param config: Dictionary containing wave definitions.
+        :param config: Dictionary containing wave definitions and optional replace flag.
         :type config: dict
         :return: Detailed result of the compilation.
         :rtype: WaveResult
         """
         payload: Dict[int, Dict[str, List[str]]] = {}
-        
+
         try:
             waves_cfg = config.get("waves", {})
+            # Accept replace parameter from client config, default to True for backward compatibility
+            replace = bool(config.get("replace", True))
+
             for gen_index_str, waves in waves_cfg.items():
                 gen_index = int(gen_index_str)
                 res = self.adapter.compile_waves(
                     gen_index=gen_index,
                     waves=waves,
-                    replace=True
+                    replace=replace
                 )
 
                 # Build per-generator payload
@@ -815,6 +916,36 @@ class MessageHandler:
         "drive_start_index", "fifo_start_index", "delay",
     ])
     FLOAT_FIELDS = frozenset(["frequency_mhz", "phase", "gain"])
+    BOOL_FIELDS = frozenset(["keep_last"])
+    TOP_LEVEL_KEYS = frozenset([
+        "envelopes", "waves", "generators", "acquisitions", "trigger", "timeout"
+    ])
+    SWEEP_MSG_KEYS = frozenset(["sweep_id", "variables", "sweep_mode", "base"])
+    META_KEYS = frozenset(["cmd", "session_id"])
+    SWEEP_META_KEYS = frozenset(["cmd", "session_id", "batch_size"])
+    ENVELOPE_KEYS = frozenset([
+        "name", "for_interpolation", "is_symmetric", "i_even", "q_even",
+        "num_samples"
+    ])
+    WAVE_ENV_KEYS = frozenset([
+        "wave_id", "kind", "envelope", "duration", "gain", "switch_iq", "keep_last"
+    ])
+    WAVE_VZ_KEYS = frozenset(["wave_id", "kind", "vz_phase_rad"])
+    GENERATOR_KEYS = frozenset(["gen_index", "drive", "readout"])
+    DRIVE_KEYS = frozenset([
+        "frequency_mhz", "phase", "nyquist_zone", "channel", "fifo", "fifo_start_index"
+    ])
+    READOUT_KEYS = frozenset([
+        "frequency_mhz", "phase", "nyquist_zone", "channel", "wave"
+    ])
+    ACQUISITION_KEYS = frozenset([
+        "acq_index", "acquisition", "frequency_mhz", "phase", "channel",
+        "duration", "tof", "output_type"
+    ])
+    TRIGGER_KEYS = frozenset([
+        "shots", "shot_duration", "drive", "readout", "drive_start_index"
+    ])
+    TRIGGER_SPEC_KEYS = frozenset(["delay"])
 
     def __init__(self, adapter, *, logger: Optional[logging.Logger] = None):
         """
@@ -836,6 +967,101 @@ class MessageHandler:
         self.reset_h = ResetHandler(adapter, self.logger)
         self.env_h = EnvelopeHandler(adapter, self.logger)
         self.wave_h = WaveHandler(adapter, self.logger)
+
+    def _validate_keys(self, obj: dict, allowed: Set[str], ctx: str) -> None:
+        if not isinstance(obj, dict):
+            raise ValueError(f"{ctx} must be a dict")
+        unexpected = set(obj.keys()) - allowed
+        if unexpected:
+            raise ValueError(f"Unexpected keys in {ctx}: {sorted(unexpected)}")
+
+    def _validate_config(self, config: dict) -> None:
+        allowed = set(self.TOP_LEVEL_KEYS | self.META_KEYS)
+        self._validate_keys(config, allowed, "config")
+
+        envelopes_cfg = config.get("envelopes")
+        if envelopes_cfg is not None:
+            if not isinstance(envelopes_cfg, dict):
+                raise ValueError("config.envelopes must be a dict")
+            for gen_key, envelopes in envelopes_cfg.items():
+                if not isinstance(envelopes, list):
+                    raise ValueError(f"config.envelopes[{gen_key}] must be a list")
+                for i, envelope in enumerate(envelopes):
+                    self._validate_keys(
+                        envelope,
+                        set(self.ENVELOPE_KEYS),
+                        f"config.envelopes[{gen_key}][{i}]",
+                    )
+
+        waves_cfg = config.get("waves")
+        if waves_cfg is not None:
+            if not isinstance(waves_cfg, dict):
+                raise ValueError("config.waves must be a dict")
+            for gen_key, waves in waves_cfg.items():
+                if not isinstance(waves, list):
+                    raise ValueError(f"config.waves[{gen_key}] must be a list")
+                for i, wave in enumerate(waves):
+                    kind = str(wave.get("kind", "env")).lower()
+                    if kind not in ("env", "vz"):
+                        raise ValueError(
+                            f"config.waves[{gen_key}][{i}] has unknown kind '{kind}'"
+                        )
+                    allowed = self.WAVE_ENV_KEYS if kind == "env" else self.WAVE_VZ_KEYS
+                    self._validate_keys(
+                        wave,
+                        set(allowed),
+                        f"config.waves[{gen_key}][{i}]",
+                    )
+
+        generators_cfg = config.get("generators")
+        if generators_cfg is not None:
+            if not isinstance(generators_cfg, list):
+                raise ValueError("config.generators must be a list")
+            for i, gen_cfg in enumerate(generators_cfg):
+                self._validate_keys(gen_cfg, set(self.GENERATOR_KEYS), f"config.generators[{i}]")
+                drive = gen_cfg.get("drive")
+                if drive is not None:
+                    self._validate_keys(
+                        drive, set(self.DRIVE_KEYS), f"config.generators[{i}].drive"
+                    )
+                readout = gen_cfg.get("readout")
+                if readout is not None:
+                    self._validate_keys(
+                        readout, set(self.READOUT_KEYS), f"config.generators[{i}].readout"
+                    )
+
+        acquisitions_cfg = config.get("acquisitions")
+        if acquisitions_cfg is not None:
+            if not isinstance(acquisitions_cfg, list):
+                raise ValueError("config.acquisitions must be a list")
+            for i, acq_cfg in enumerate(acquisitions_cfg):
+                self._validate_keys(
+                    acq_cfg, set(self.ACQUISITION_KEYS), f"config.acquisitions[{i}]"
+                )
+
+        trigger_cfg = config.get("trigger")
+        if trigger_cfg is not None:
+            self._validate_keys(trigger_cfg, set(self.TRIGGER_KEYS), "config.trigger")
+            for key in ("drive", "readout"):
+                mapping = trigger_cfg.get(key)
+                if mapping is None:
+                    continue
+                if not isinstance(mapping, dict):
+                    raise ValueError(f"config.trigger.{key} must be a dict")
+                for ch_key, spec in mapping.items():
+                    self._validate_keys(
+                        spec, set(self.TRIGGER_SPEC_KEYS), f"config.trigger.{key}[{ch_key}]"
+                    )
+
+    def _validate_sweep_message(self, msg: dict, allow_inline_config: bool) -> None:
+        if not isinstance(msg, dict):
+            raise ValueError("sweep message must be a dict")
+        allowed = set(self.SWEEP_MSG_KEYS | self.SWEEP_META_KEYS)
+        if allow_inline_config:
+            allowed.update(self.TOP_LEVEL_KEYS)
+        unexpected = set(msg.keys()) - allowed
+        if unexpected:
+            raise ValueError(f"Unexpected keys in sweep message: {sorted(unexpected)}")
 
     # =========================================================================
     #           EXPERIMENT EXECUTION METHODS
@@ -876,6 +1102,7 @@ class MessageHandler:
         log = []
         
         try:
+            self._validate_config(config)
             # Stage 1: preparation steps, kept modular to allow caching across runs.
             # Preparation stages are optional by design to enable caching across runs:
             # - envelopes can be uploaded once and referenced by name;
@@ -913,7 +1140,8 @@ class MessageHandler:
         self,
         msg: dict,
         on_point: Callable[[SweepPointResult], None],
-        stop_event: Optional[Event] = None
+        stop_event: Optional[Event] = None,
+        on_plan: Optional[Callable[[List[Dict[str, Any]]], None]] = None
     ) -> SweepStatus:
         """
         Execute a multi-point sweep with an optimized "fast path".
@@ -945,7 +1173,10 @@ class MessageHandler:
         """
 
         sweep_id = msg.get("sweep_id", "unnamed")
+        has_base = "base" in msg
+        self._validate_sweep_message(msg, allow_inline_config=not has_base)
         base_config = msg.get("base", msg)
+        self._validate_config(base_config)
         variables = msg.get("variables", [])
         sweep_mode = msg.get("sweep_mode", "cartesian")
 
@@ -988,15 +1219,22 @@ class MessageHandler:
 
             touches_int = False
             touches_float = False
+            touches_bool = False
             for p in paths:
                 last = p.split(".")[-1]
                 if last in self.INT_FIELDS:
                     touches_int = True
                 if last in self.FLOAT_FIELDS:
                     touches_float = True
+                if last in self.BOOL_FIELDS:
+                    touches_bool = True
             
             # A single variable must not drive both discrete and continuous fields:
             # that would be ambiguous and error-prone.
+            if touches_bool and (touches_int or touches_float):
+                raise ValueError(
+                    f"Variable '{name}' touches both bool and numeric fields: {sorted(paths)}"
+                )
             if touches_int and touches_float:
                 raise ValueError(
                     f"Variable '{name}' touches both int and float fields: {sorted(paths)}"
@@ -1006,6 +1244,9 @@ class MessageHandler:
                 var_cast[name] = "int"
             elif touches_float:
                 var_cast[name] = "float"
+            elif touches_bool:
+                # Generate sweep points as ints (0/1), then coerce to bool.
+                var_cast[name] = "int"
             else:
                 # Field not in known classifications - default to float for safety
                 self.logger.warning(
@@ -1016,7 +1257,20 @@ class MessageHandler:
 
         # 4) Generate sweep points with appropriate cast
         points = generate_sweep_points(variables, sweep_mode, var_cast)
+        if self.BOOL_FIELDS:
+            for p in points:
+                for key in list(p.keys()):
+                    if key in var_cast and var_cast[key] == "int":
+                        # Only coerce fields declared as bool.
+                        # This keeps other int fields untouched.
+                        for path in var_to_paths.get(key, set()):
+                            if path.split(".")[-1] in self.BOOL_FIELDS:
+                                p[key] = bool(p[key])
+                                break
         n_points = len(points)
+
+        if on_plan is not None:
+            on_plan(points)
 
         
         self.logger.info(f"Sweep '{sweep_id}': {n_points} points, setup_needed={setup_needed}")
