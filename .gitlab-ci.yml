@@ -1,0 +1,14 @@
+stages:
+  - code-style
+
+style:
+  stage: code-style
+  tags: ["python3.10"]
+  before_script:
+    - python3.10 -m venv venv
+    - . venv/bin/activate
+    - pip install requirements.txt
+  script:
+    - . venv/bin/activate
+    - python -m black --check .
+    - python -m ruff check .

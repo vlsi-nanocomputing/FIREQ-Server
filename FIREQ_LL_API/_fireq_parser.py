@@ -1,18 +1,24 @@
 import xml.etree.ElementTree as ET
 
-__all__ = ['FIREQ_parser']
+__all__ = ["FireqParser"]
 
-# stings found in .hwh file that define a module as a master for a certain axi connection
-MASTER_TYPE_LIST = ['MASTER', 'INITIATOR']
+# strings found in .hwh file that define a module as a master for a certain axi connection
+MASTER_TYPE_LIST = ["MASTER", "INITIATOR"]
 # names of ips that are considered to be transparent to a master slave connection for our purposes
-PASS_THROUGH_MODULES = ['xilinx.com:ip:axis_dwidth_converter:', 'xilinx.com:ip:axis_data_fifo:', 'xilinx.com:ip:axis_register_slice:', 'xilinx.com:ip:axis_switch:']
+PASS_THROUGH_MODULES = [
+    "xilinx.com:ip:axis_dwidth_converter:",
+    "xilinx.com:ip:axis_data_fifo:",
+    "xilinx.com:ip:axis_register_slice:",
+    "xilinx.com:ip:axis_switch:",
+]
 
-class FIREQ_parser:
+
+class FireqParser:
     """
-    FIREQ parser class, used to parse the .hwh file to retrive module connectivity and memory mappings.
+    FIREQ parser class, used to parse the .hwh file to retrieve module connectivity and memory mappings.
     """
 
-    def __init__ (self, hwh_file : str):
+    def __init__(self, hwh_file: str):
         """
         Initialize the FIREQ parser with a hardware description file.
 
@@ -20,15 +26,15 @@ class FIREQ_parser:
         :type hwh_file: str
         """
         # set .hwh file path
-        self._FilePath = hwh_file
+        self._file_path = hwh_file
         # generate a tree from file (xml)
-        self._Tree = ET.parse(hwh_file)
+        self._tree = ET.parse(hwh_file)
         # get the tree root
-        self._Root = self._Tree.getroot()
+        self._root = self._tree.getroot()
         # find all modules (IPs) in the design
-        self._Modules = self._Root.find('MODULES')
+        self._modules = self._root.find("MODULES")
 
-    def get_module(self, module_name : str):
+    def get_module(self, module_name: str):
         """
         Get the xml description of the IP named by module_name.
 
@@ -39,13 +45,13 @@ class FIREQ_parser:
         """
 
         # find the module
-        for module in self._Modules:
-            if module.tag == 'MODULE' and module.attrib['INSTANCE'] == module_name:
+        for module in self._modules:
+            if module.tag == "MODULE" and module.attrib["INSTANCE"] == module_name:
                 return module
 
         # return none if module not found
         return None
-    
+
     def get_bus_interfaces(self, module: ET.Element):
         """
         Get a dictionary of the bus interfaces connected to the module.\n
@@ -59,13 +65,13 @@ class FIREQ_parser:
         """
         bus_interface_dict = {}
         # get the axi bus interfaces for this module
-        module_bus_interfaces = module.find('BUSINTERFACES')
+        module_bus_interfaces = module.find("BUSINTERFACES")
 
         # parse the bus interfaces
-        for bus_interface in module_bus_interfaces.iter('BUSINTERFACE'):
-            bus_name = bus_interface.attrib['BUSNAME']
+        for bus_interface in module_bus_interfaces.iter("BUSINTERFACE"):
+            bus_name = bus_interface.attrib["BUSNAME"]
             bus_interface_dict[bus_name] = bus_interface.attrib.copy()
-            del bus_interface_dict[bus_name]['BUSNAME']
+            del bus_interface_dict[bus_name]["BUSNAME"]
 
         # return the parsed bus interfaces
         # the BUSNAME, e.g. the keys of this dict is the name of the bus net
@@ -74,8 +80,8 @@ class FIREQ_parser:
         #    TYPE: {MASTER,INITIATOR} OR {SLAVE,TARGET}
         #    VLNV: xilinx.com:interface:aximm:1.0 for AXI4 and xilinx.com:interface:axis:1.0 for AXI STREAM
         return bus_interface_dict
-    
-    def get_connectivity(self, master_module : ET.Element, module_list : list):
+
+    def get_connectivity(self, master_module: ET.Element, module_list: list):
         """
         Get the connectivity path of the master interfaces of master module.\n
         The return is a dictionary that encodes the connections in a graph like manner,
@@ -90,15 +96,15 @@ class FIREQ_parser:
         :rtype: dict[str, Any]
         """
         # get the name for the master module
-        master_module_name = master_module.attrib['INSTANCE']
+        master_module_name = master_module.attrib["INSTANCE"]
         # create the return dictionary
-        connectivity_graph = {'NODE' : master_module_name, 'BUS_M/S' : (None, None), 'CHILDREN' : []}
+        connectivity_graph = {"NODE": master_module_name, "BUS_M/S": (None, None), "CHILDREN": []}
         # get the bus interfaces for this module
         master_bus_interfaces = self.get_bus_interfaces(master_module)
         # iterate over the bus interfaces
         for bus_name in master_bus_interfaces:
             # check if the bus type is a master
-            if master_bus_interfaces[bus_name]['TYPE'] not in MASTER_TYPE_LIST:
+            if master_bus_interfaces[bus_name]["TYPE"] not in MASTER_TYPE_LIST:
                 continue
             # iterate over the modules to find the slave module connected to bus
             for slave_module in module_list:
@@ -107,17 +113,28 @@ class FIREQ_parser:
                     continue
                 else:
                     # if it's present in this dictionary it must be a slave module
-                    if any(slave_module.attrib['VLNV'].startswith(item) for item in PASS_THROUGH_MODULES):
+                    if any(slave_module.attrib["VLNV"].startswith(item) for item in PASS_THROUGH_MODULES):
                         child_node = self.get_connectivity(slave_module, module_list)
-                        child_node['BUS_M/S'] = (master_bus_interfaces[bus_name]['NAME'], slave_bus_interfaces[bus_name]['NAME'])
-                        connectivity_graph['CHILDREN'].append(child_node)
+                        child_node["BUS_M/S"] = (
+                            master_bus_interfaces[bus_name]["NAME"],
+                            slave_bus_interfaces[bus_name]["NAME"],
+                        )
+                        connectivity_graph["CHILDREN"].append(child_node)
                         break
                     else:
-                        connectivity_graph['CHILDREN'].append({'NODE' : slave_module.attrib['INSTANCE'], 'BUS_M/S': (master_bus_interfaces[bus_name]['NAME'], slave_bus_interfaces[bus_name]['NAME'])})
+                        connectivity_graph["CHILDREN"].append(
+                            {
+                                "NODE": slave_module.attrib["INSTANCE"],
+                                "BUS_M/S": (
+                                    master_bus_interfaces[bus_name]["NAME"],
+                                    slave_bus_interfaces[bus_name]["NAME"],
+                                ),
+                            }
+                        )
                         break
 
         return connectivity_graph
-    
+
     def get_address_mapping(self):
         """
         Gets the AXI Memory mapping of the PS/PL master interface
@@ -127,20 +144,20 @@ class FIREQ_parser:
         """
         address_mapping_dict = {}
         # find the zynq
-        for module in self._Root.findall("./MODULES//MEMORYMAP/.."):
-            if module.attrib['VLNV'].startswith('xilinx.com:ip:zynq_ultra_ps_e:'):
+        for module in self._root.findall("./MODULES//MEMORYMAP/.."):
+            if module.attrib["VLNV"].startswith("xilinx.com:ip:zynq_ultra_ps_e:"):
                 # get all memrange children
                 for memory_range in module.findall("./MEMORYMAP/MEMRANGE"):
                     # append to return dict the memory mapping
                     try:
-                        address_mapping_dict[memory_range.attrib['INSTANCE']].append(memory_range.attrib.copy())
+                        address_mapping_dict[memory_range.attrib["INSTANCE"]].append(memory_range.attrib.copy())
                     except KeyError:
-                        address_mapping_dict[memory_range.attrib['INSTANCE']] = [memory_range.attrib.copy()]
+                        address_mapping_dict[memory_range.attrib["INSTANCE"]] = [memory_range.attrib.copy()]
                     # remove instance name from memory mapping since we are using it for the dict keys
-                    del address_mapping_dict[memory_range.attrib['INSTANCE']][-1]['INSTANCE']
+                    del address_mapping_dict[memory_range.attrib["INSTANCE"]][-1]["INSTANCE"]
                 # return the dictionary with the memory mapping
                 return address_mapping_dict
-    
+
     def get_parameter(self, module_name: str, param_name: str):
         """
         Return the VALUE of a PARAMETER with NAME=param_name for module INSTANCE=module_name.

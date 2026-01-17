@@ -1,146 +1,185 @@
-from pynq import MMIO
-import numpy as  np
-from ._utils import *
+from ._utils import _FIREQDriver
 
-__all__ = ['TriggerGeneratorDriver']
+__all__ = ["TriggerGeneratorDriver"]
+
 
 class TriggerGeneratorDriver(_FIREQDriver):
     """
     Driver class for the trigger generator IP.
+
     Provides methods to set the generation time of pulses and acquisition events.
     """
 
-    bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
+    bindto = ["user.org:user:axisTriggerGeneratorIP:1.0"]
 
-    def __init__(self, description):
+    def __init__(self, description: dict):
+        """
+        Initialize the TriggerGeneratorDriver.
 
-        super().__init__(description= description)
+        :param description: Dictionary containing IP parameters and configuration
+        :type description: dict
+        """
+        super().__init__(description=description)
         # parse the number of channels of the trigger generator
-        self.trigger_channels = int(description['parameters']['TriggerWordWidth'])
+        self.trigger_channels = int(description["parameters"]["TriggerWordWidth"])
         # parse the fifo interface depth and create mmio handle
-        self.fifo_interface_memory_depth = pow(2,int(description['parameters']['C_S00_AXI_ADDR_WIDTH']))
-        # fifo depth in number of words 
-        self.channel_fifo_depth = pow(2,int(description['parameters']['FifoAddressWidth']))
+        self.fifo_interface_memory_depth = pow(2, int(description["parameters"]["C_S00_AXI_ADDR_WIDTH"]))
+        # fifo depth in number of words
+        self.channel_fifo_depth = pow(2, int(description["parameters"]["FifoAddressWidth"]))
         # fifo output width
-        self.fifo_output_width = int(description['parameters']['FifoOutputWidth'])
+        self.fifo_output_width = int(description["parameters"]["FifoOutputWidth"])
         # maximum drive delay
-        self.drive_delay_max = pow(2,self.fifo_output_width-1)
+        self.drive_delay_max = pow(2, self.fifo_output_width - 1)
         # experiment max
-        self.experiment_timer_max = pow(2,int(description['parameters']['ExperimentTimerWidth']))
-        # parse the size of the repitition counter
-        self.max_hw_repetitions = pow(2,int(description['parameters']['RepetitionWidth']))
+        self.experiment_timer_max = pow(2, int(description["parameters"]["ExperimentTimerWidth"]))
+        # parse the size of the repetition counter
+        self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
 
-        self.ctrl = 0
-        self.experiment_dur_l = 2
-        self.experiment_dur_h = 3
-        self.readout_delay_l = 4
-        self.readout_delay_h = 5
-        self.shots_num_l = 1
+        self._ctrl = 0
+        self._experiment_dur_l = 2
+        self._experiment_dur_h = 3
+        self._readout_delay_l = 4
+        self._readout_delay_h = 5
+        self._shots_num_l = 1
 
         # Bit position definition
-        self.manual_trigger_pos = 31
+        self._manual_trigger_pos = 31
 
-    def print_description(self):
-        print("trigger_channels: " + str(self.trigger_channels))
-        print("fifo_interface_axi_depth: " + str(self.fifo_interface_memory_depth))
-        print("fifo_channel_depth: " + str(self.channel_fifo_depth))
-        print("maximum_number_of_hardware_repetitions: " + str(self.max_hw_repetitions))
-    
-    def init_axi_full_interface(self, base_address : int, axi_depth : int):
+    def print_description(self) -> None:
+        """
+        Print the description of the trigger generator IP.
+
+        :return: None
+        :rtype: None
+        """
+        print(f"trigger_channels: {self.trigger_channels}")
+        print(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
+        print(f"fifo_channel_depth: {self.channel_fifo_depth}")
+        print(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
+
+    def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
+        """
+        Initialize the AXI Full interface for this IP.
+
+        :param base_address: Base address of the AXI Full interface
+        :type base_address: int
+        :param axi_depth: Depth of the AXI interface in bytes
+        :type axi_depth: int
+        :return: None
+        :rtype: None
+        """
         super().init_axi_full_interface(base_address, axi_depth)
 
-    def init_axi_lite_interface(self, base_address : int, axi_depth : int):
+    def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
+        """
+        Initialize the AXI Lite interface for this IP.
+
+        :param base_address: Base address of the AXI Lite interface
+        :type base_address: int
+        :param axi_depth: Depth of the AXI interface in bytes
+        :type axi_depth: int
+        :return: None
+        :rtype: None
+        """
         super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
         del self.mmio
-    
-    def set_experiment_duration(self,duration):
+
+    def set_experiment_duration(self, duration: int) -> None:
         """
-        Set the experiment duration for a single shot
-        
+        Set the experiment duration for a single shot.
+
         :param duration: Duration in clock cycles
-        :type duration: uint
+        :type duration: int
+        :return: None
+        :rtype: None
         """
+        # write duration LOW
+        self._axi_lite_interface_mmio.write(self._experiment_dur_l * 4, duration & 0xFFFFFFFF)
+        # write duration HIGH
+        self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
-        # write inc LOW
-        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
-        # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_h*4, duration >> 32)
+    def set_number_of_shots(self, value: int) -> None:
+        """
+        Set the number of shots to execute in hardware.
 
-    def set_number_of_shots(self, value):
+        :param value: Number of shots (must be between 1 and max_hw_repetitions)
+        :type value: int
+        :return: None
+        :rtype: None
+        :raises ValueError: If value is outside the valid range
         """
-        Set the number of shots to execute in hardware
-        
-        :param value: number of shots
-        :type value: uint
-        """
-        if(value < 1 or value > self.max_hw_repetitions):
-            print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.max_hw_repetitions))
-            return
+        if value < 1 or value > self.max_hw_repetitions:
+            raise ValueError(f"Number of shots {value} is outside of range 1 to " f"{self.max_hw_repetitions}")
 
-        self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value - 1))
+        self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
-    def start_experiment(self):
+    def start_experiment(self) -> None:
         """
-        Start the generation of triggers
-        """
-        self.AxiLiteInterfaceMMIO.write(0,1 << self.manual_trigger_pos)
+        Start the generation of triggers.
 
-    def is_done(self):
+        :return: None
+        :rtype: None
         """
-        Check if the experiment is finished
+        self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
 
-        :return: 1 if the experiment is finished, 0 if still running
-        :rtype: Literal[1, 0]
+    def is_done(self) -> bool:
         """
-        control_register = self.AxiLiteInterfaceMMIO.read(0)
-        if ((control_register & 0x40000000) == 0x40000000):
-            return 1
-        else:
-            return 0
+        Check if the experiment is finished.
 
-    def insert_drive_delay(self, channel, index, delay, generate_trigger):
+        :return: True if the experiment is finished, False if still running
+        :rtype: bool
         """
-        Insert a delay value in the FIFO of a drive channel at index. The generate_trigger input is used to 
-        tell the trigger generator if a trigger should be generated at the end of the delay
-        
-        :param channel: Drive channel
-        :type channel: uint
-        :param index: FIFO index, 1 is the start
-        :type index: uint
-        :param delay: Delay in clock cycles
-        :type delay: uint
+        control_register = self._axi_lite_interface_mmio.read(0)
+        return (control_register & 0x40000000) == 0x40000000
+
+    def insert_drive_delay(self, channel: int, index: int, delay: int, generate_trigger: int) -> None:
+        """
+        Insert a delay value in the FIFO of a drive channel at index.
+
+        The generate_trigger input is used to tell the trigger generator if a
+        trigger should be generated at the end of the delay.
+
+        :param channel: Drive channel (1 to trigger_channels)
+        :type channel: int
+        :param index: FIFO index (1 is the start)
+        :type index: int
+        :param delay: Delay in clock cycles (1 to drive_delay_max)
+        :type delay: int
         :param generate_trigger: Generates a trigger if set to 1
-        :type generate_trigger: Literal[1, 0]
-        """
-        if (channel< 1 or channel > self.trigger_channels):
-            print("error, channel " + str(channel) + " is outside of range 1 to " + str(self.trigger_channels))
-            return -3
-
-        if (index < 1 or index > self.channel_fifo_depth):
-            print("error, the index is outside of range")
-            return -3
-
-        if (delay < 1 or delay > self.drive_delay_max):
-            print("error, the delay is outside of range")
-            return -3
-        
-        real_delay = (delay - 1) | (generate_trigger << 31)
-        real_address = (channel - 1)*self.channel_fifo_depth + index - 1
-        self.AxiFullInterfaceMMIO.write(real_address*4, int(real_delay))
-        return 0
-    
-    def set_readout_delay(self,delay : int,channel : int):
-        """
-        Set the experiment duration for a single shot
-        
-        :param duration: Duration in clock cycles
-        :type duration: uint
+        :type generate_trigger: int
+        :return: None
+        :rtype: None
+        :raises ValueError: If channel, index, or delay is outside valid range
         """
         if channel < 1 or channel > self.trigger_channels:
-            print("error, channel selection out of range")
-            return -3
-        # write inc LOW
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_l + (channel - 1)*2)*4, delay & 0xFFFFFFFF)
-        # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_h + (channel - 1)*2)*4, delay >> 32)
+            raise ValueError(f"Channel {channel} is outside of range 1 to {self.trigger_channels}")
+
+        if index < 1 or index > self.channel_fifo_depth:
+            raise ValueError(f"Index {index} is outside of range 1 to {self.channel_fifo_depth}")
+
+        if delay < 1 or delay > self.drive_delay_max:
+            raise ValueError(f"Delay {delay} is outside of range 1 to {self.drive_delay_max}")
+
+        real_delay = (delay - 1) | (generate_trigger << 31)
+        real_address = (channel - 1) * self.channel_fifo_depth + index - 1
+        self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
+
+    def set_readout_delay(self, delay: int, channel: int) -> None:
+        """
+        Set the readout delay for a specific channel.
+
+        :param delay: Delay in clock cycles
+        :type delay: int
+        :param channel: Channel number (1 to trigger_channels)
+        :type channel: int
+        :return: None
+        :rtype: None
+        :raises ValueError: If channel is outside valid range
+        """
+        if channel < 1 or channel > self.trigger_channels:
+            raise ValueError(f"Channel {channel} is outside of range 1 to {self.trigger_channels}")
+        # write delay LOW
+        self._axi_lite_interface_mmio.write((self._readout_delay_l + (channel - 1) * 2) * 4, delay & 0xFFFFFFFF)
+        # write delay HIGH
+        self._axi_lite_interface_mmio.write((self._readout_delay_h + (channel - 1) * 2) * 4, delay >> 32)

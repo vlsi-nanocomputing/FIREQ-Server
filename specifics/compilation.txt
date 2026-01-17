@@ -1,0 +1,40 @@
+CLIENT REQUEST 
+{
+  "cmd": "compile_waves",
+  "session_id": "ses_001",
+  "waves": {
+    "0": [ // KEY: generator index
+      // TYPE 1: Standard pulse
+      {
+        "wave_id": "pi_pulse_x",
+        "kind": "env",            // Default se omesso
+        "envelope": "GAUSS_SIGMA_10",
+        "duration": 256,          // Durata in campioni/cicli
+        "gain": 0.95,             // Range [-1.0, 1.0]
+        "switch_iq": false,
+        "keep_last": false
+      },
+      //  TYPE 2: Virtual Z Gate
+      {
+        "wave_id": "vz_gate_pi_half",
+        "kind": "vz",
+        "vz_phase_rad": 1.570796  // Fase in radianti
+      }
+    ]
+  }
+}
+
+SERVER RESPONSE
+{
+  "cmd": "compile_waves",
+  "session_id": "ses_001",
+  "ok": true,
+  "payload": {
+    "0": {
+      "waves": ["pi_pulse_x", "vz_gate_pi_half"], // ID succesfully compiled
+      "replaced": [],
+      "skipped": [],
+      "failed": []
+    }
+  }
+}

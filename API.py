@@ -1,9 +1,8 @@
-from pynq import Overlay
-from pynq import PL
+import os
+
 import xrfclk
 import xrfdc
-
-import os
+from pynq import PL, Overlay
 
 from FIREQ_LL_API.OverlayDriver import FIREQ_SoC
 
@@ -21,7 +20,7 @@ def main():
     if not ol_filename:
         ol_filename = "overlay.bit"
 
-    ol_filepath = BASE_PATH + ol_folder + '/' + ol_filename
+    ol_filepath = BASE_PATH + ol_folder + "/" + ol_filename
 
     # check existence of overlay
     if not os.path.exists(ol_filepath):
@@ -33,5 +32,5 @@ def main():
     ol = FIREQ_SoC(ol_filepath)
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

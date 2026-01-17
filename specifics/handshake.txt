@@ -1,0 +1,15 @@
+CLIENT REQUEST
+
+{
+  "type": "handshake_ack",
+  "token": "fireq",             // Token FIREQServer (default: "fireq")
+  "client_name": "Lab_Control_PC"
+}
+
+SERVER RESPONSE
+
+{
+  "type": "handshake_ok",
+  "protocol_version": "2.1",    // Protocol version: 2.0 = binary acquisitions, 2.1 = + binary envelopes
+  "message": "Welcome Lab_Control_PC"
+}
