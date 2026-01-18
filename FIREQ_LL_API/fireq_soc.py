@@ -15,8 +15,7 @@ __all__ = ["FIREQSoC"]
 
 
 class FIREQSoC(Overlay):
-    """
-    Low-level representation of the FIREQ SoC.
+    """Low-level representation of the FIREQ SoC.
 
     Responsibilities:
     - Load the bitfile.
@@ -34,12 +33,12 @@ class FIREQSoC(Overlay):
         ignore_version: bool = False,
         init_clocks: bool = True,
     ):
-        """
-        Initialize the FIREQ SoC overlay.
+        """Initialize the FIREQ SoC overlay.
 
         :param bitfile_name: Path to the .bit file
         :type bitfile_name: str
-        :param ignore_version: Whether to ignore the bitfile version check, defaults to False
+        :param ignore_version: Whether to ignore the bitfile version check, defaults to
+            False
         :type ignore_version: bool
         :param init_clocks: Whether to initialize RF clocks on startup, defaults to True
         :type init_clocks: bool
@@ -99,11 +98,10 @@ class FIREQSoC(Overlay):
 
     @staticmethod
     def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
-        """
-        Initialise the LMK and LMX clocks for the RF-DC hierarchy.
+        """Initialise the LMK and LMX clocks for the RF-DC hierarchy.
 
-        The radio clocks are required to talk to the RF-DCs and only need
-        to be initialised once per session.
+        The radio clocks are required to talk to the RF-DCs and only need to be
+        initialised once per session.
 
         :param lmk_freq: Frequency of the LMK clock in MHz, defaults to 245.76
         :type lmk_freq: float
@@ -116,8 +114,7 @@ class FIREQSoC(Overlay):
     # Discovery helpers
     # ------------------------------------------------------------------
     def _discover_fireq_ips(self) -> None:
-        """
-        Bind AXI interfaces and classify FIREQ IPs by type.
+        """Bind AXI interfaces and classify FIREQ IPs by type.
 
         Uses the parser's get_address_mapping() to initialize AXI interfaces
         and populates the following instance attributes:
@@ -157,8 +154,8 @@ class FIREQSoC(Overlay):
                 self._trigger_ip.append(ip_object)
 
     def _map_rf_topology(self) -> None:
-        """
-        Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
+        """Derive the physical RF connections (Tile/Block) for Generators and
+        Acquisitions.
 
         Traverses the AXI-Stream connectivity graph to populate:
 
@@ -358,8 +355,7 @@ class FIREQSoC(Overlay):
     # Hardware specs builder
     # ------------------------------------------------------------------
     def _build_hw_specs(self) -> dict:
-        """
-        Build a validated dictionary of hardware specifications.
+        """Build a validated dictionary of hardware specifications.
 
         Return structure (high level)::
 
@@ -574,8 +570,7 @@ class FIREQSoC(Overlay):
     _WDW_BYTES = 16  # 128-bit per WDW
 
     def _get_gen(self, gen_index: int) -> GeneratorDriver:
-        """
-        Retrieve a GeneratorDriver by index.
+        """Retrieve a GeneratorDriver by index.
 
         :param gen_index: Index of the generator
         :type gen_index: int
@@ -588,8 +583,7 @@ class FIREQSoC(Overlay):
         return self._generation_ips[gen_index]
 
     def envelope_cache(self, gen_index: int = 0) -> dict:
-        """
-        Return a snapshot of the GeneratorDriver envelope cache.
+        """Return a snapshot of the GeneratorDriver envelope cache.
 
         :param gen_index: Index of the generator
         :type gen_index: int
@@ -600,8 +594,7 @@ class FIREQSoC(Overlay):
         return dict(gen.envelope_memory_dict)
 
     def wave_cache(self, gen_index: int = 0) -> dict:
-        """
-        Return a snapshot of the GeneratorDriver wave cache.
+        """Return a snapshot of the GeneratorDriver wave cache.
 
         :param gen_index: Index of the generator
         :type gen_index: int
@@ -612,12 +605,12 @@ class FIREQSoC(Overlay):
         return dict(gen.wave_memory_dict)
 
     def wave_mem_stats(self, gen_index: int = 0) -> dict:
-        """
-        Return wave memory usage statistics.
+        """Return wave memory usage statistics.
 
         :param gen_index: Index of the generator
         :type gen_index: int
-        :return: Dictionary with used_bytes, total_bytes, used_slots, total_slots, free_slots
+        :return: Dictionary with used_bytes, total_bytes, used_slots, total_slots,
+            free_slots
         :rtype: dict
         """
         gen = self._get_gen(gen_index)
@@ -637,11 +630,10 @@ class FIREQSoC(Overlay):
     # Public properties
     # ------------------------------------------------------------------
     def configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict:
-        """
-        Configure RF-DC NyquistZone for a generator label based on frequency.
+        """Configure RF-DC NyquistZone for a generator label based on frequency.
 
-        Automatically determines if mixing mode is needed (even Nyquist zones)
-        and configures the appropriate DAC tile/block.
+        Automatically determines if mixing mode is needed (even Nyquist zones) and
+        configures the appropriate DAC tile/block.
 
         :param gen_index: Generator index
         :type gen_index: int
@@ -697,11 +689,10 @@ class FIREQSoC(Overlay):
     # FIREQ IPs
 
     def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> dict:
-        """
-        Configure RF-DC NyquistZone for an ADC channel based on frequency.
+        """Configure RF-DC NyquistZone for an ADC channel based on frequency.
 
-        Automatically determines if mixing mode is needed (even Nyquist zones)
-        and configures the appropriate ADC tile/block.
+        Automatically determines if mixing mode is needed (even Nyquist zones) and
+        configures the appropriate ADC tile/block.
 
         :param acq_index: Acquisition IP index
         :type acq_index: int
@@ -749,8 +740,7 @@ class FIREQSoC(Overlay):
 
     @property
     def generators(self):
-        """
-        List of GeneratorDriver instances.
+        """List of GeneratorDriver instances.
 
         :return: The list of available generator drivers
         :rtype: list[GeneratorDriver]
@@ -759,8 +749,7 @@ class FIREQSoC(Overlay):
 
     @property
     def acquisitions(self):
-        """
-        List of AcquisitionDriver instances.
+        """List of AcquisitionDriver instances.
 
         :return: The list of available acquisition drivers
         :rtype: list[AcquisitionDriver]
@@ -781,8 +770,7 @@ class FIREQSoC(Overlay):
 
     @property
     def rf(self):
-        """
-        RF-DC hierarchy (usp_rf_data_converter_0).
+        """RF-DC hierarchy (usp_rf_data_converter_0).
 
         :return: The PYNQ RF-DC object or None if not present
         :rtype: object | None
@@ -791,8 +779,7 @@ class FIREQSoC(Overlay):
 
     @property
     def axis_switch(self):
-        """
-        AXI-Stream switch (axis_switch_0), if present.
+        """AXI-Stream switch (axis_switch_0), if present.
 
         :return: The AXI Stream Switch object or None
         :rtype: object | None
@@ -801,8 +788,7 @@ class FIREQSoC(Overlay):
 
     @property
     def dma(self):
-        """
-        AXI DMA (axi_dma_0), if present.
+        """AXI DMA (axi_dma_0), if present.
 
         :return: The DMA object or None
         :rtype: pynq.lib.dma.DMA | None
@@ -811,8 +797,7 @@ class FIREQSoC(Overlay):
 
     @property
     def is_healthy(self) -> bool:
-        """
-        True if hardware specs were built without errors.
+        """True if hardware specs were built without errors.
 
         :return: Health status of the SoC configuration
         :rtype: bool
@@ -820,8 +805,7 @@ class FIREQSoC(Overlay):
         return bool(self._healthy)
 
     def summary(self) -> dict:
-        """
-        Return a compact dictionary describing the SoC.
+        """Return a compact dictionary describing the SoC.
 
         :return: Dictionary containing bitfile info, IP counts, and hardware specs
         :rtype: dict
@@ -839,8 +823,7 @@ class FIREQSoC(Overlay):
 
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:
-    """
-    Helper function to create and initialize a FIREQSoC instance.
+    """Helper function to create and initialize a FIREQSoC instance.
 
     :param bitfile_name: Path to the bitfile to load
     :type bitfile_name: str

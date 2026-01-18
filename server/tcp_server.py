@@ -1,6 +1,5 @@
 # file: fireq-utils/server/tcp_server.py
-"""
-FIREQ TCP Server.
+"""FIREQ TCP Server.
 
 This module implements a single-client TCP server that receives length-prefixed JSON commands
 from a client and executes them through a MessageHandler (message_handler.py).
@@ -83,8 +82,7 @@ MAX_PAYLOAD_BYTES = 10 * 1024 * 1024
 
 
 class FIREQServer:
-    """
-    TCP server for FIREQ experiments.
+    """TCP server for FIREQ experiments.
 
     The server receives client commands as JSON dictionaries and routes them to a
     :class:`~.message_handler.MessageHandler` instance.
@@ -118,8 +116,7 @@ class FIREQServer:
         auth_token: str = "fireq",
         logger: Optional[logging.Logger] = None,
     ):
-        """
-        Inizializza il server.
+        """Inizializza il server.
 
         :param handler: MessageHandler instance
         :param host: bind address
@@ -168,8 +165,7 @@ class FIREQServer:
     # =========================================================================
 
     def start(self):
-        """
-        Start the server and block on the main thread.
+        """Start the server and block on the main thread.
 
         This method:
         - starts the network accept/receiver thread (daemon thread),
@@ -242,8 +238,7 @@ class FIREQServer:
     # =========================================================================
 
     def _main_loop(self):
-        """
-        Consume commands from ``queue_in`` and execute them.
+        """Consume commands from ``queue_in`` and execute them.
 
         This loop runs on the main thread to keep hardware-related operations
         stable.
@@ -267,8 +262,7 @@ class FIREQServer:
         self.logger.info("Main loop exited")
 
     def _process_message(self, msg: dict):
-        """
-        Execute one command message and enqueue a response.
+        """Execute one command message and enqueue a response.
 
         Parameters
         ----------
@@ -512,8 +506,7 @@ class FIREQServer:
     # =========================================================================
 
     def _network_receiver_thread(self):
-        """
-        Accept TCP connections and handle one client at a time.
+        """Accept TCP connections and handle one client at a time.
 
         Loop:
         1) Create/bind/listen socket.
@@ -670,8 +663,7 @@ class FIREQServer:
             self.logger.info("Client disconnected, ready for new connection")
 
     def _receiver_loop(self, sock: socket.socket):
-        """
-        Receive client messages and enqueue commands for execution.
+        """Receive client messages and enqueue commands for execution.
 
         Notes
         -----
@@ -739,8 +731,7 @@ class FIREQServer:
                 break
 
     def _sender_loop(self):
-        """
-        Send responses from ``queue_out`` to the connected client.
+        """Send responses from ``queue_out`` to the connected client.
 
         Uses binary transmission mode for all data acquisitions.
         Exits when it receives ``None`` or when the client disconnects.
@@ -819,13 +810,12 @@ class FIREQServer:
         """Build the server -> client handshake message."""
         return {
             "type": "handshake",
-            "protocol_version": "2.3",  # 2.0: binary acquisitions, 2.1: + binary envelopes, 2.2: sweep header stream, 2.3: timing trailer
+            "protocol_version": "0.1",
             "hw_summary": self.handler.status_h.hw_summary,
         }
 
     def _do_handshake(self, sock: socket.socket) -> bool:
-        """
-        Perform handshake authentication with the client.
+        """Perform handshake authentication with the client.
 
         Flow
         ----
@@ -902,12 +892,10 @@ class FIREQServer:
             return False
 
     def _handle_logout(self):
-        """
-        Reset server-side caches and notify the client.
+        """Reset server-side caches and notify the client.
 
-        This uses the handler reset subsystem to clear envelope/wave caches for
-        all generators (preserving nothing by default) and then enqueues a logout
-        response.
+        This uses the handler reset subsystem to clear envelope/wave caches for all
+        generators (preserving nothing by default) and then enqueues a logout response.
         """
         self.logger.info("Logout requested, resetting caches...")
 
@@ -943,9 +931,8 @@ class FIREQServer:
     # =========================================================================
 
     def _receive_message(self, sock: socket.socket) -> Optional[dict]:
-        """
-        Receive one length-prefixed JSON message.
-        Returning None indicates either a clean disconnect (EOF) or a protocol-level error.
+        """Receive one length-prefixed JSON message. Returning None indicates either a
+        clean disconnect (EOF) or a protocol-level error.
 
         Parameters
         ----------
@@ -1020,8 +1007,7 @@ class FIREQServer:
         sock.sendall(length + payload)
 
     def _send_binary_frame(self, sock: socket.socket, adc_index: int, data: np.ndarray):
-        """
-        Send a single binary data frame for one ADC.
+        """Send a single binary data frame for one ADC.
 
         Frame format:
         [4 bytes: ADC index (uint32 big-endian)]
@@ -1051,8 +1037,7 @@ class FIREQServer:
         sock.sendall(payload)
 
     def _recv_envelope_frames(self, sock: socket.socket, total_count: int) -> Dict[Tuple[int, int], np.ndarray]:
-        """
-        Receive binary envelope sample frames.
+        """Receive binary envelope sample frames.
 
         Frame format per envelope:
         [4 bytes: generator index (uint32 big-endian)]
@@ -1091,11 +1076,10 @@ class FIREQServer:
         return envelope_data
 
     def _recv_exact(self, sock: socket.socket, n: int) -> Optional[bytes]:
-        """
-        Receive exactly *n* bytes from the socket.
+        """Receive exactly *n* bytes from the socket.
 
-        Returns None if the connection is closed before the requested number of
-        bytes is received.
+        Returns None if the connection is closed before the requested number of bytes is
+        received.
         """
         data = b""
 

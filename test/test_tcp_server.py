@@ -1,7 +1,5 @@
 # file: fireq-utils/test/test_tcp_server.py
-"""
-TCP Server Integration & Robustness Test Suite (Pytest Version).
-"""
+"""TCP Server Integration & Robustness Test Suite (Pytest Version)."""
 
 import json
 import socket
@@ -27,8 +25,8 @@ except ImportError:
 
 
 class TCPClientHelper:
-    """
-    Simple TCP client wrapper for testing purposes.
+    """Simple TCP client wrapper for testing purposes.
+
     Renamed from TestClient to avoid Pytest collection warnings.
     """
 
@@ -275,9 +273,8 @@ def test_broken_pipe_during_sweep(client, server_ctx):
 
 
 def test_abort_command_execution(client, server_ctx):
-    """
-    Verifies that the 'abort' command effectively interrupts a long-running operation.
-    """
+    """Verifies that the 'abort' command effectively interrupts a long-running
+    operation."""
     original_run_sweep = server_ctx.server.handler.run_sweep
 
     # Improved Mock: Checks stop_event immediately after waking up
@@ -336,9 +333,9 @@ def test_abort_command_execution(client, server_ctx):
 
 
 def test_internal_exception_handling(client, server_ctx):
-    """
-    Ensures that exceptions raised within the handler are caught
-    and returned as JSON errors without killing the server.
+    """Ensures that exceptions raised within the handler are caught and returned as JSON
+    errors without killing the server.
+
     Uses a drain loop to ignore stale packets from previous tests.
     """
     # Clean queue just in case

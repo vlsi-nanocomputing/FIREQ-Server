@@ -104,27 +104,21 @@ class AcquisitionEngine:
     def __init__(
         self, dma: Any, switch: Any, logger: Optional[logging.Logger] = None, hw_specs: Dict[str, Any] = None
     ) -> None:
-        """
-        Construct an acquisition engine bound to a specific DMA + stream switch.
+        """Construct an acquisition engine bound to a specific DMA + stream switch.
 
-        :param dma:
-            PYNQ DMA instance
+        :param dma: PYNQ DMA instance
         :type dma: Any
-        :param switch:
-            AXI Stream Switch IP used to route the selected ADC/mode stream into the DMA.
+        :param switch: AXI Stream Switch IP used to route the selected ADC/mode stream
+            into the DMA.
         :type switch: Any
-        :param logger:
-            Optional logger. If not provided, a module logger is used.
+        :param logger: Optional logger. If not provided, a module logger is used.
         :type logger: Optional[logging.Logger]
-        :param hw_specs:
-            Hardware specification dictionary describing acquisition IP properties.
-            This is treated as the "single source of truth" for buffer sizing
-            and limits.
+        :param hw_specs: Hardware specification dictionary describing acquisition IP
+            properties. This is treated as the "single source of truth" for buffer
+            sizing and limits.
         :type hw_specs: Dict[str, Any]
-
-        :raises DMAError:
-            If the DMA channel cannot be started (indicates invalid overlay
-            wiring or a broken DMA object).
+        :raises DMAError: If the DMA channel cannot be started (indicates invalid
+            overlay wiring or a broken DMA object).
         """
 
         self.dma = dma
@@ -161,8 +155,7 @@ class AcquisitionEngine:
     # ------------------------------------------------------------------
 
     def abort(self) -> None:
-        """
-        Abort an in-flight DMA acquisition and force the hardware into a known state.
+        """Abort an in-flight DMA acquisition and force the hardware into a known state.
 
         This method is "defensive": it attempts a stop via PYNQ (when available),
         then unconditionally performs a low-level reset sequence.
@@ -173,8 +166,6 @@ class AcquisitionEngine:
         indefinitely sometimes. A direct reset is the only reliable way to
         restore forward progress and prevent subsequent acquisitions from
         reusing a corrupted DMA state.
-
-
         """
 
         try:
@@ -187,8 +178,7 @@ class AcquisitionEngine:
         self._hard_reset()
 
     def free_resources(self) -> None:
-        """
-        Release all persistent DMA buffers allocated by this instance.
+        """Release all persistent DMA buffers allocated by this instance.
 
         Buffer lifetime policy
         ----------------------
@@ -221,8 +211,8 @@ class AcquisitionEngine:
         samp_per_shot: int,
         adc_index: int,
     ) -> int:
-        """
-        Compute the maximum number of shots that can fit in the acquisition FIFO/buffer.
+        """Compute the maximum number of shots that can fit in the acquisition
+        FIFO/buffer.
 
         This is a hardware-capacity computation based on the FIFO depth/width
         described in ``hw_specs``. It intentionally does not consider
@@ -335,9 +325,8 @@ class AcquisitionEngine:
         adc_index: int,
         timeout: Optional[float] = None,
     ) -> np.ndarray:
-        """
-        Wait for DMA completion, apply timeout protection, and parse the
-        acquired data.
+        """Wait for DMA completion, apply timeout protection, and parse the acquired
+        data.
 
         Hardware DMA can hang (commonly: missing TLAST, upstream stream
         starvation). In those cases, waiting indefinitely would deadlock
@@ -545,10 +534,7 @@ class AcquisitionEngine:
         self.logger.debug(f"Sweep prepared: mode={mode}")
 
     def end_sweep(self) -> None:
-        """
-        Disable sweep mode and return to conservative validation behavior.
-
-        """
+        """Disable sweep mode and return to conservative validation behavior."""
         self._sweep_prepared = False
         self._sweep_mode = None
 
@@ -557,8 +543,7 @@ class AcquisitionEngine:
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
     ) -> Any:
-        """
-        Optimized sweep arm path.
+        """Optimized sweep arm path.
 
         Differences vs full path:
 
@@ -598,8 +583,7 @@ class AcquisitionEngine:
     # Internal methods: routing, dimensions, parsing, reset
     # ------------------------------------------------------------------
     def _ensure_started(self) -> None:
-        """
-        Ensure the PYNQ DMA recvchannel is started.
+        """Ensure the PYNQ DMA recvchannel is started.
 
         Motivation
         ---------
@@ -626,8 +610,7 @@ class AcquisitionEngine:
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
     ) -> int:
-        """
-        Compute the DMA buffer length required by the selected mode.
+        """Compute the DMA buffer length required by the selected mode.
 
         This is based on *hardware maximum duration* as described by
         ``hw_specs``, not on the user's requested duration. The intention
@@ -672,8 +655,7 @@ class AcquisitionEngine:
             raise DMAError(f"Unknown acquisition mode for buffer sizing: {mode}")
 
     def _route_switch(self, adc_index: int, raw_mode: bool) -> None:
-        """
-        Route the AXI Stream Switch to select the desired ADC and output mode.
+        """Route the AXI Stream Switch to select the desired ADC and output mode.
 
         The switch is modeled as having two ports per ADC index:
         - even port: raw stream
@@ -713,8 +695,7 @@ class AcquisitionEngine:
             raise DMAError(f"AXI switch routing failed: {e}") from e
 
     def _parse(self, buffer: Any, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> np.ndarray:
-        """
-        Converts the raw DMA buffer into a complex numpy array.
+        """Converts the raw DMA buffer into a complex numpy array.
 
         This method processes raw data retrieved from the DMA, handling different
         firmware data formats (decimated/raw vs accumulated).
@@ -810,8 +791,7 @@ class AcquisitionEngine:
             raise DMAError(f"Unknown acquisition mode for parsing: {mode}")
 
     def _hard_reset(self) -> None:
-        """
-        Perform a robust MMIO-based reset of the AXI DMA channel.
+        """Perform a robust MMIO-based reset of the AXI DMA channel.
 
         Why this exists
         ---------------
@@ -897,9 +877,8 @@ class AcquisitionEngine:
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
     ) -> None:
-        """
-        Validate that the requested acquisition fits in the FPGA-side
-        buffering capacity.
+        """Validate that the requested acquisition fits in the FPGA-side buffering
+        capacity.
 
         This check is performed in *bits* using FIFO depth/width taken from
         ``hw_specs``. It prevents silent truncation and protects against
@@ -1001,8 +980,7 @@ class AcquisitionEngine:
                 )
 
     def _get_or_allocate_buffer(self, adc_index: int, total_words: int) -> Any:
-        """
-        Return a persistent DMA buffer for the given ADC, allocating if necessary.
+        """Return a persistent DMA buffer for the given ADC, allocating if necessary.
 
         Performance
         -----------

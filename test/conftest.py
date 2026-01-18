@@ -1,6 +1,5 @@
 # file: fireq-utils/test/conftest.py
-"""
-Global Pytest Configuration and Fixtures.
+"""Global Pytest Configuration and Fixtures.
 
 CRITICAL: This module performs "eager mocking". It patches sys.modules at the
 top-level (global scope) to ensure that hardware dependencies (pynq, xrfdc)

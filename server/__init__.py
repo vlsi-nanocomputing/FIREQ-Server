@@ -1,8 +1,7 @@
-"""
-FIREQ Server Module.
+"""FIREQ Server Module.
 
-This package exposes the main adapter, data structures, exceptions,
-and the TCP server class for the FIREQ system.
+This package exposes the main adapter, data structures, exceptions, and the TCP server
+class for the FIREQ system.
 """
 
 # Import DMA engine

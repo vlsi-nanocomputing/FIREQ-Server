@@ -17,11 +17,10 @@ except ImportError:
 
 @pytest.fixture
 def stack():
-    """
-    Provides a MessageHandler connected to MockOverlay via OverlayAdapter.
+    """Provides a MessageHandler connected to MockOverlay via OverlayAdapter.
 
-    This stack mocks the DMA engine to bypass hardware buffer calculations
-    that are not valid in a simulation environment.
+    This stack mocks the DMA engine to bypass hardware buffer calculations that are not
+    valid in a simulation environment.
     """
 
     class HandlerStack:
@@ -106,17 +105,15 @@ def test_run_sweep_optimized(stack):
 
 
 class TestRobustness:
-    """
-    Advanced test suite covering edge cases, partial configurations, and error resilience.
-    """
+    """Advanced test suite covering edge cases, partial configurations, and error
+    resilience."""
 
     def test_input_sanity_validation(self, stack):
-        """
-        Verify that physically impossible values are rejected before hitting hardware drivers.
+        """Verify that physically impossible values are rejected before hitting hardware
+        drivers.
 
-        **Rationale:**
-        Passing negative durations or non-physical parameters to FPGA registers
-        can lead to integer underflows (very large uint values) causing
+        **Rationale:** Passing negative durations or non-physical parameters to FPGA
+        registers can lead to integer underflows (very large uint values) causing
         hardware lockups that require a power cycle.
         """
         # Scenario: User requests a negative duration
@@ -140,9 +137,8 @@ class TestRobustness:
         assert "Duration must be positive" in result.error
 
     def test_partial_config_caching(self, stack):
-        """
-        Verify that partial configurations do NOT trigger unnecessary upload/compile steps.
-        """
+        """Verify that partial configurations do NOT trigger unnecessary upload/compile
+        steps."""
         # 1. Configuration WITHOUT 'envelopes' or 'waves'
         minimal_config = {
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}],
@@ -169,9 +165,7 @@ class TestRobustness:
         stack.adapter.generator_modulation.assert_called()
 
     def test_fail_fast_on_compilation_error(self, stack):
-        """
-        Verify the 'Fail-Fast' mechanism during the preparation stage.
-        """
+        """Verify the 'Fail-Fast' mechanism during the preparation stage."""
         config = {
             "waves": {"0": [{"wave_id": "w1"}]},
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}],
@@ -196,9 +190,7 @@ class TestRobustness:
         stack.adapter.generator_modulation.assert_not_called()
 
     def test_status_handler_resilience(self, stack):
-        """
-        Verify that StatusHandler does not crash if a single generator fails.
-        """
+        """Verify that StatusHandler does not crash if a single generator fails."""
 
         # MOCK THE ADAPTER METHOD to inject a Side Effect (Exception)
         def side_effect(gen_index):
@@ -225,9 +217,8 @@ class TestRobustness:
         assert "FPGA timeout" in statuses[1]["error"]
 
     def test_reset_preserve_specs_flag(self, stack):
-        """
-        Verify that the reset handler correctly propagates the 'preserve_specs' flag.
-        """
+        """Verify that the reset handler correctly propagates the 'preserve_specs'
+        flag."""
         # MOCK THE ADAPTER METHOD to verify arguments
         stack.adapter.reset_wave_memory = MagicMock(return_value={})
 
@@ -238,9 +229,7 @@ class TestRobustness:
         stack.adapter.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
 
     def test_deep_variable_substitution(self, stack):
-        """
-        Verify recursive variable substitution.
-        """
+        """Verify recursive variable substitution."""
         from server.message_handler import find_variable_paths, substitute_variables
 
         base_config = {
@@ -260,9 +249,7 @@ class TestRobustness:
         assert base_config["sequence"][0]["args"]["freq"] == "$f1"
 
     def test_sweep_interruption(self, stack):
-        """
-        Verify that a running sweep can be aborted via the stop_event.
-        """
+        """Verify that a running sweep can be aborted via the stop_event."""
         # 1. Setup a multi-point sweep
         msg = {
             "sweep_id": "long_run",
@@ -304,9 +291,7 @@ class TestRobustness:
         stack.adapter.end_sweep.assert_called_once()
 
     def test_sweep_integer_casting_edge_cases(self, stack):
-        """
-        Verify strict type casting for discrete hardware parameters.
-        """
+        """Verify strict type casting for discrete hardware parameters."""
         # Config sweeping a discrete parameter (nyquist_zone) with FLOAT values
         msg = {
             "base": {"generators": [{"gen_index": 0, "drive": {"nyquist_zone": "$nz"}}]},
@@ -332,9 +317,8 @@ class TestRobustness:
             assert not isinstance(zone_arg, float)
 
     def test_acquisition_timeout_handling(self, stack):
-        """
-        Verify system stability when acquisition times out (Hardware/Driver failure).
-        """
+        """Verify system stability when acquisition times out (Hardware/Driver
+        failure)."""
         config = {"acquisitions": [{"acq_index": 0, "duration": 100}], "timeout": 1.0}
 
         # 1. Simulate a Timeout Exception from the driver
@@ -354,15 +338,13 @@ class TestRobustness:
         assert any("acq 0" in entry for entry in result.config_log)
 
     def test_zipped_sweep_topology(self, stack):
-        """
-        Verify 'zipped' sweep mode behavior (Diagonal vs Cartesian).
+        """Verify 'zipped' sweep mode behavior (Diagonal vs Cartesian).
 
-        **Rationale:**
-        Standard sweeps are Cartesian (all combinations). 'Zipped' sweeps proceed
-        point-wise (p1 with p1, p2 with p2). This is critical for simultaneous
-        parameter variation (e.g., keeping a ratio constant: freq up AND amp up).
-        This test ensures the handler correctly maps the topology and doesn't
-        accidentally perform a massive Cartesian grid.
+        **Rationale:** Standard sweeps are Cartesian (all combinations). 'Zipped' sweeps
+        proceed point-wise (p1 with p1, p2 with p2). This is critical for simultaneous
+        parameter variation (e.g., keeping a ratio constant: freq up AND amp up). This
+        test ensures the handler correctly maps the topology and doesn't accidentally
+        perform a massive Cartesian grid.
         """
         msg = {
             "sweep_id": "diag_test",
@@ -403,13 +385,11 @@ class TestRobustness:
         assert vars_p3["f"] == 30.0 and vars_p3["g"] == 0.3
 
     def test_trigger_delay_propagation(self, stack):
-        """
-        Verify that trigger parameters are correctly propagated to the adapter.
+        """Verify that trigger parameters are correctly propagated to the adapter.
 
-        **Rationale:**
-        Trigger timing is complex. The MessageHandler receives high-level keys
-        like 'drive_start_index' and must pass them to the
-        adapter's 'tg_program_delays'. This test ensures arguments aren't lost or swapped.
+        **Rationale:** Trigger timing is complex. The MessageHandler receives high-level
+        keys like 'drive_start_index' and must pass them to the adapter's
+        'tg_program_delays'. This test ensures arguments aren't lost or swapped.
         """
         config = {
             "trigger": {
@@ -442,13 +422,11 @@ class TestRobustness:
         )
 
     def test_invalid_hardware_index_handling(self, stack):
-        """
-        Verify behavior when user requests a non-existent generator index.
+        """Verify behavior when user requests a non-existent generator index.
 
-        **Rationale:**
-        If the hardware has 2 generators (indices 0, 1) and the user requests index 99,
-        the low-level driver (or list access) will raise an IndexError.
-        The handler must catch this and report it as a configuration error,
+        **Rationale:** If the hardware has 2 generators (indices 0, 1) and the user
+        requests index 99, the low-level driver (or list access) will raise an
+        IndexError. The handler must catch this and report it as a configuration error,
         not crash the server process.
         """
         config = {"generators": [{"gen_index": 99, "drive": {"frequency_mhz": 100.0}}]}
@@ -467,13 +445,12 @@ class TestRobustness:
         assert isinstance(result.error, str)
 
     def test_config_log_completeness(self, stack):
-        """
-        Verify that the execution log captures key actions for audit.
+        """Verify that the execution log captures key actions for audit.
 
-        **Rationale:**
-        In scientific experiments, data without metadata is useless. The 'config_log'
-        returned with the results allows researchers to verify exactly what was executed
-        (e.g., "Was the drive frequency updated?"). This test ensures the log isn't empty.
+        **Rationale:** In scientific experiments, data without metadata is useless. The
+        'config_log' returned with the results allows researchers to verify exactly what
+        was executed (e.g., "Was the drive frequency updated?"). This test ensures the
+        log isn't empty.
         """
         config = {
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 50.0}}],
@@ -498,9 +475,7 @@ class TestRobustness:
         assert "acq 0 listening to trigger channel 1" in log_text
 
     def test_sweep_string_substitution(self, stack):
-        """
-        Verify that string sweep variables are rejected by numeric casting.
-        """
+        """Verify that string sweep variables are rejected by numeric casting."""
         # Scenario: Sweeping the envelope name referenced by a wave definition
         msg = {
             "sweep_id": "shape_optimization",
@@ -519,13 +494,12 @@ class TestRobustness:
             stack.handler.run_sweep(msg, MagicMock())
 
     def test_empty_payload_behavior(self, stack):
-        """
-        Verify system stability when receiving an empty configuration.
+        """Verify system stability when receiving an empty configuration.
 
-        **Rationale:**
-        This serves as a 'Null Operation' test. If a client sends an empty JSON `{}`,
-        the server should essentially do nothing (no hardware reconfiguration)
-        and return a success status with no data. It MUST NOT crash due to missing keys.
+        **Rationale:** This serves as a 'Null Operation' test. If a client sends an
+        empty JSON `{}`, the server should essentially do nothing (no hardware
+        reconfiguration) and return a success status with no data. It MUST NOT crash due
+        to missing keys.
         """
         config = {}
 
@@ -547,8 +521,7 @@ class TestRobustness:
         stack.adapter.acquisition_timing.assert_not_called()
 
     def test_readout_wave_upload_flow(self, stack):
-        """
-        Verify the dedicated path for uploading readout waveforms.
+        """Verify the dedicated path for uploading readout waveforms.
 
         **Rationale:**
         Readout waveforms (used for matched filtering or specific drive tones) are handled

@@ -1,6 +1,5 @@
 # file: fireq-utils/server/message_handler.py
-"""
-Server-side message orchestration for FIREQ experiments.
+"""Server-side message orchestration for FIREQ experiments.
 
 This module translates high-level JSON-like experiment configurations into concrete
 hardware actions through an adapter (``OverlayAdapter``). It provides:
@@ -34,8 +33,7 @@ import numpy as np
 
 @dataclass
 class HardwareStatusResult:
-    """
-    Structured status snapshot for a single generator.
+    """Structured status snapshot for a single generator.
 
     This is an object meant to return user-friendly status queries.
 
@@ -61,8 +59,8 @@ class HardwareStatusResult:
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """
-        Convert to dictionary for JSON serialization.
+        """Convert to dictionary for JSON serialization.
+
         :return: Dict representation of the status.
         :rtype: dict
         """
@@ -81,8 +79,7 @@ class HardwareStatusResult:
 
 @dataclass
 class ResetResult:
-    """
-    Outcome of a reset operation on a generator-owned memory region.
+    """Outcome of a reset operation on a generator-owned memory region.
 
     Reset operations are used to recover from stale state (e.g., compiled waves referring
     to removed envelopes) or to enforce a clean execution environment for a new session.
@@ -100,8 +97,8 @@ class ResetResult:
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """
-        Convert to dictionary for JSON serialization.
+        """Convert to dictionary for JSON serialization.
+
         :return: Dict representation of the reset outcome.
         :rtype: dict
         """
@@ -116,11 +113,10 @@ class ResetResult:
 
 @dataclass
 class EnvelopeResult:
-    """
-    Result of an envelope upload stage.
+    """Result of an envelope upload stage.
 
-    The upload stage is separated from wave compilation because envelopes should be reused
-    across many experiments/sweep points, and transferring large sample arrays is
+    The upload stage is separated from wave compilation because envelopes should be
+    reused across many experiments/sweep points, and transferring large sample arrays is
     expensive compared to referencing cached envelope names.
     """
 
@@ -129,8 +125,8 @@ class EnvelopeResult:
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """
-        Convert to dictionary for JSON serialization.
+        """Convert to dictionary for JSON serialization.
+
         :return: Dict representation of the upload result.
         :rtype: dict
         """
@@ -139,8 +135,7 @@ class EnvelopeResult:
 
 @dataclass
 class WaveResult:
-    """
-    Result of a wave compilation stage.
+    """Result of a wave compilation stage.
 
     Wave compilation resolves references (e.g., envelope names) and produces/updates the
     hardware-side "wave definition words" (WDWs). On failure, ``error`` should explain
@@ -153,8 +148,8 @@ class WaveResult:
     error: Optional[str] = None
 
     def to_dict(self) -> dict:
-        """
-        Convert to dictionary for JSON serialization.
+        """Convert to dictionary for JSON serialization.
+
         :return: Dict representation of the compilation result.
         :rtype: dict
         """
@@ -163,8 +158,7 @@ class WaveResult:
 
 @dataclass
 class ExperimentResult:
-    """
-    Result of a single experiment execution.
+    """Result of a single experiment execution.
 
     This encapsulates the end-to-end outcome of ``MessageHandler.run()``:
     - optional preparation steps (envelope upload, wave compilation),
@@ -181,8 +175,8 @@ class ExperimentResult:
     config_log: Optional[List[str]] = None
 
     def to_dict(self) -> dict:
-        """
-        Convert result to dictionary, formatting NumPy arrays for JSON.
+        """Convert result to dictionary, formatting NumPy arrays for JSON.
+
         :return: Dict with I/Q data and execution logs.
         :rtype: dict
         """
@@ -199,12 +193,11 @@ class ExperimentResult:
         return d
 
     def to_metadata_dict(self) -> dict:
-        """
-        Generate metadata dictionary for binary transmission protocol.
+        """Generate metadata dictionary for binary transmission protocol.
 
-        Instead of converting arrays to lists, this method generates minimal
-        metadata describing the arrays (dtype and shape only), allowing the
-        client to reconstruct arrays from binary frames.
+        Instead of converting arrays to lists, this method generates minimal metadata
+        describing the arrays (dtype and shape only), allowing the client to reconstruct
+        arrays from binary frames.
 
         :return: Dict with metadata for binary reconstruction.
         :rtype: dict
@@ -224,8 +217,7 @@ class ExperimentResult:
         return d
 
     def get_binary_data(self) -> Dict[int, np.ndarray]:
-        """
-        Return raw numpy arrays for binary transmission.
+        """Return raw numpy arrays for binary transmission.
 
         :return: Dictionary mapping ADC index to numpy array.
         :rtype: Dict[int, np.ndarray]
@@ -235,8 +227,7 @@ class ExperimentResult:
 
 @dataclass
 class SweepPointResult:
-    """
-    Result emitted for each sweep point.
+    """Result emitted for each sweep point.
 
     The sweep loop reports progress incrementally through ``on_point`` so the caller can
     either stream the result or collect them in larger chunks.
@@ -257,8 +248,7 @@ class SweepPointResult:
         return d
 
     def to_metadata_dict(self) -> dict:
-        """
-        Generate metadata dictionary for binary transmission protocol.
+        """Generate metadata dictionary for binary transmission protocol.
 
         :return: Dict with sweep point info and array metadata.
         :rtype: dict
@@ -270,8 +260,7 @@ class SweepPointResult:
         return d
 
     def get_binary_data(self) -> Dict[int, np.ndarray]:
-        """
-        Return raw numpy arrays for binary transmission.
+        """Return raw numpy arrays for binary transmission.
 
         :return: Dictionary mapping ADC index to numpy array.
         :rtype: Dict[int, np.ndarray]
@@ -281,8 +270,7 @@ class SweepPointResult:
 
 @dataclass
 class SweepStatus:
-    """
-    Final sweep summary.
+    """Final sweep summary.
 
     This is the "end-of-run" status of ``MessageHandler.run_sweep()`` and is meant to be
     small and robust: it reports whether the sweep completed successfully, how many points
@@ -311,8 +299,7 @@ class SweepStatus:
 
 
 def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[str, Set[str]]:
-    """
-    Discover where sweep variables are used inside a nested config structure.
+    """Discover where sweep variables are used inside a nested config structure.
 
     A "variable use" is detected when a string equals ``"$<name>"`` where ``name`` is
     one of ``var_names``. The function returns a mapping:
@@ -368,8 +355,8 @@ def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[s
 
 
 def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
-    """
-    Classify whether generators/acquisitions/trigger require reconfiguration in a sweep.
+    """Classify whether generators/acquisitions/trigger require reconfiguration in a
+    sweep.
 
     The returned dict is used to decide whether the sweep loop can use a selective setup
     for subsequent points, or whether a full reconfiguration is needed.
@@ -389,8 +376,7 @@ def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
 
 
 def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
-    """
-    Create a point-specific config by replacing variable placeholders.
+    """Create a point-specific config by replacing variable placeholders.
 
     This replaces any string leaf equal to ``"$VAR"`` with ``point["VAR"]``.
 
@@ -428,8 +414,7 @@ def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
 def generate_sweep_points(
     variables: List[dict], mode: str = "cartesian", var_cast: Optional[Dict[str, str]] = None
 ) -> List[Dict[str, Any]]:
-    """
-    Generate the list of sweep points from variable specifications.
+    """Generate the list of sweep points from variable specifications.
 
     Supported variable formats
     --------------------------
@@ -527,15 +512,14 @@ def generate_sweep_points(
 
 
 class StatusHandler:
-    """
-    Status/inspection API over the hardware adapter.
+    """Status/inspection API over the hardware adapter.
 
     This handler exists to keep read-only operations separate from experiment execution,
     so status calls remain safe and do not accidentally mutate hardware state.
 
-    It also caches the hardware summary because it is assumed immutable at
-    runtime and is frequently used for handshake/status responses (e.g. opening
-    single-client connections many times).
+    It also caches the hardware summary because it is assumed immutable at runtime and
+    is frequently used for handshake/status responses (e.g. opening single-client
+    connections many times).
     """
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
@@ -559,8 +543,8 @@ class StatusHandler:
         return self._hw_summary.get("num_acquisitions", 0)
 
     def get_all_generators_status(self) -> List[dict]:
-        """
-        Get status for ALL generators in one call.
+        """Get status for ALL generators in one call.
+
         Useful for 'status' command without manual iteration.
         """
         statuses = []
@@ -570,8 +554,8 @@ class StatusHandler:
         return statuses
 
     def get_gen_status(self, gen_index: int) -> HardwareStatusResult:
-        """
-        Retrieve the current state of a specific generator from hardware and cache.
+        """Retrieve the current state of a specific generator from hardware and cache.
+
         :param gen_index: Target generator index.
         :type gen_index: int
         :return: Structured hardware status.
@@ -603,8 +587,7 @@ class StatusHandler:
 
 
 class ResetHandler:
-    """
-    Recovery-oriented reset operations for generator-owned memories.
+    """Recovery-oriented reset operations for generator-owned memories.
 
     Separating reset logic from the main execution path makes it explicit the operation
     of discarding cached state (waves/envelopes) and why. This is useful both for safety
@@ -612,8 +595,8 @@ class ResetHandler:
     """
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
-        """
-        Initialize the ResetHandler.
+        """Initialize the ResetHandler.
+
         :param adapter: OverlayAdapter instance.
         :type adapter: OverlayAdapter
         """
@@ -621,8 +604,8 @@ class ResetHandler:
         self.logger = logger or logging.getLogger(__name__)
 
     def reset_waves(self, gen_index: int, preserve_specs: bool = True) -> ResetResult:
-        """
-        Reset wave memory for a generator.
+        """Reset wave memory for a generator.
+
         :param gen_index: Target generator index.
         :type gen_index: int
         :param preserve_specs: If True, keeps definitions but invalidates compiled WDWs.
@@ -643,8 +626,8 @@ class ResetHandler:
             return ResetResult(ok=False, gen_index=gen_index, action="wave_reset", details={}, error=str(e))
 
     def reset_envelopes(self, gen_index: int) -> ResetResult:
-        """
-        Reset envelope memory for a generator.
+        """Reset envelope memory for a generator.
+
         :param gen_index: Target generator index.
         :type gen_index: int
         :return: Outcome of the envelope reset.
@@ -657,8 +640,8 @@ class ResetHandler:
             return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
 
     def reset_all_generators(self, preserve_wave_specs: bool = False) -> List[ResetResult]:
-        """
-        Reset waves and envelopes for ALL generators.
+        """Reset waves and envelopes for ALL generators.
+
         Returns list of results (one per generator).
         """
         results = []
@@ -673,17 +656,16 @@ class ResetHandler:
 
 
 class EnvelopeHandler:
-    """
-    Envelope upload handler.
+    """Envelope upload handler.
 
-    Envelopes can be large (sample arrays) and are expensive to transfer. This
-    stage is thus isolated so experiments and sweep points can reuse already-uploaded envelopes
+    Envelopes can be large (sample arrays) and are expensive to transfer. This stage is
+    thus isolated so experiments and sweep points can reuse already-uploaded envelopes
     by name, minimizing I/O and latency.
     """
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
-        """
-        Initialize the EnvelopeHandler.
+        """Initialize the EnvelopeHandler.
+
         :param adapter: OverlayAdapter instance.
         :type adapter: OverlayAdapter
         """
@@ -691,13 +673,12 @@ class EnvelopeHandler:
         self.logger = logger or logging.getLogger(__name__)
 
     def upload(self, config: dict, envelope_data: Optional[Dict[Tuple[int, int], np.ndarray]] = None) -> EnvelopeResult:
-        """
-        Process the 'envelopes' section of the configuration.
+        """Process the 'envelopes' section of the configuration.
 
         :param config: Dictionary containing envelope specifications (metadata).
         :type config: dict
-        :param envelope_data: Binary envelope data mapping (gen_idx, env_idx) to float32 I/Q arrays
-                              (shape: N×2). Required for envelope upload.
+        :param envelope_data: Binary envelope data mapping (gen_idx, env_idx) to float32
+            I/Q arrays (shape: N×2). Required for envelope upload.
         :type envelope_data: Optional[Dict[Tuple[int, int], np.ndarray]]
         :return: Detailed result of the upload process.
         :rtype: EnvelopeResult
@@ -759,8 +740,7 @@ class EnvelopeHandler:
 
 
 class WaveHandler:
-    """
-    Wave compilation handler.
+    """Wave compilation handler.
 
     This stage resolves envelope references and produces generator-side compiled wave
     descriptors. It is isolated because compilation failures should be reported with
@@ -768,8 +748,8 @@ class WaveHandler:
     """
 
     def __init__(self, adapter, logger: Optional[logging.Logger] = None):
-        """
-        Initialize the WaveHandler.
+        """Initialize the WaveHandler.
+
         :param adapter: OverlayAdapter instance.
         :type adapter: OverlayAdapter
         """
@@ -777,8 +757,8 @@ class WaveHandler:
         self.logger = logger or logging.getLogger(__name__)
 
     def compile(self, config: dict) -> WaveResult:
-        """
-        Process the 'waves' section of the configuration.
+        """Process the 'waves' section of the configuration.
+
         :param config: Dictionary containing wave definitions and optional replace flag.
         :type config: dict
         :return: Detailed result of the compilation.
@@ -829,8 +809,7 @@ class WaveHandler:
 
 
 class MessageHandler:
-    """
-    High-level orchestrator for FIREQ experiment execution.
+    """High-level orchestrator for FIREQ experiment execution.
 
     This class provides two main entry points:
     - ``run``: execute a single experiment end-to-end.
@@ -882,14 +861,14 @@ class MessageHandler:
     TRIGGER_SPEC_KEYS = frozenset(["delay"])
 
     def __init__(self, adapter, *, logger: Optional[logging.Logger] = None):
-        """
-        Initialize the orchestrator and its specialized sub-handlers.
+        """Initialize the orchestrator and its specialized sub-handlers.
 
         Sub-handlers are built once so they can reuse cached adapter information.
 
         :param adapter: Hardware adapter implementing the FIREQ control surface.
         :type adapter: OL_adapter
-        :param logger: Optional logger used across all sub-handlers for consistent tracing.
+        :param logger: Optional logger used across all sub-handlers for consistent
+            tracing.
         :type logger: logging.Logger | None
         """
 
@@ -992,8 +971,7 @@ class MessageHandler:
     # =========================================================================
 
     def run(self, config: dict) -> ExperimentResult:
-        """
-        Execute a single experiment configuration.
+        """Execute a single experiment configuration.
 
         Execution stages
         ----------------
@@ -1069,8 +1047,7 @@ class MessageHandler:
         stop_event: Optional[Event] = None,
         on_plan: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
     ) -> SweepStatus:
-        """
-        Execute a multi-point sweep with an optimized "fast path".
+        """Execute a multi-point sweep with an optimized "fast path".
 
         High-level algorithm
         --------------------
@@ -1307,8 +1284,7 @@ class MessageHandler:
     # =========================================================================
 
     def _setup_generator(self, gen_cfg: dict, log: Optional[list] = None):
-        """
-        Configure a single generator from a config dictionary.
+        """Configure a single generator from a config dictionary.
 
         This method applies generator-level configuration in a stable order:
         - modulation (DDS, phase/gain/frequency),
@@ -1380,8 +1356,7 @@ class MessageHandler:
                     log.append(f"gen {gen_index} readout wave uploaded")
 
     def _setup_acquisition(self, acq_cfg: dict, log: Optional[list] = None):
-        """
-        Configure a single acquisition block from a config dictionary.
+        """Configure a single acquisition block from a config dictionary.
 
         Acquisition is treated as independent from readout: an acquisition IP may be used for
         loopback tests or standalone capture. The config is expected to fully specify its routing
@@ -1416,8 +1391,7 @@ class MessageHandler:
                 log.append(f"acq {acq_index} timing set: tof={tof}")
 
     def _setup_generator_selective(self, gen_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """
-        Selective generator reconfiguration for sweep fast-path.
+        """Selective generator reconfiguration for sweep fast-path.
 
         Only the fields affected by ``variable_paths`` are re-applied. This reduces overhead
         compared to a full generator setup at every sweep point.
@@ -1504,8 +1478,7 @@ class MessageHandler:
                 self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
 
     def _setup_acquisition_selective(self, acq_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """
-        Selective acquisition reconfiguration for sweep fast-path.
+        """Selective acquisition reconfiguration for sweep fast-path.
 
         Re-apply only acquisition parameters that are variable-driven (e.g., delay/duration/shots),
         assuming routing/topology remains unchanged across points.
@@ -1553,14 +1526,13 @@ class MessageHandler:
             self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
 
     def _setup_trigger(self, trigger_cfg: dict, log: Optional[list] = None):
-        """
-        Configure trigger routing and timing.
+        """Configure trigger routing and timing.
 
-        Trigger configuration is performed after generators and acquisitions so that all involved
-        endpoints (channels, indices) are already known and validated.
+        Trigger configuration is performed after generators and acquisitions so that all
+        involved endpoints (channels, indices) are already known and validated.
 
-        :param trigger_cfg: Trigger configuration dictionary.
-                            "shots" is optional; when provided, value must be >= 1.
+        :param trigger_cfg: Trigger configuration dictionary. "shots" is optional; when
+            provided, value must be >= 1.
         :type trigger_cfg: dict
         :param log: Optional list used to append human-readable configuration actions.
         :type log: list | None
@@ -1588,11 +1560,10 @@ class MessageHandler:
                     log.append(f"trigger delays programmed for {shots} shots")
 
     def _setup_trigger_selective(self, trigger_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """
-        Selective trigger reconfiguration for sweep fast-path.
+        """Selective trigger reconfiguration for sweep fast-path.
 
-        Only re-apply trigger fields that are variable-driven to avoid
-        reprogramming drive FIFOs when not needed.
+        Only re-apply trigger fields that are variable-driven to avoid reprogramming
+        drive FIFOs when not needed.
         """
         if not trigger_cfg:
             return
@@ -1638,8 +1609,7 @@ class MessageHandler:
                 log.append("trigger delays programmed (selective)")
 
     def _run_acquisition(self, config: dict, log: Optional[list] = None) -> Dict[int, np.ndarray]:
-        """
-        Run the acquisition sequence and return captured samples.
+        """Run the acquisition sequence and return captured samples.
 
         This is the "data plane" step: it is expected to produce large numerical buffers and
         the only step that returns bulk data. All previous steps are control-plane.
@@ -1681,14 +1651,13 @@ class MessageHandler:
         return results
 
     def _get_adc_indices(self, config: dict) -> List[int]:
-        """
-        Extract the ADC indices involved in the current experiment.
+        """Extract the ADC indices involved in the current experiment.
 
-        This helper is used by sweep preparation to pre-configure the acquisition pipeline
-        once (fast-path), avoiding repeated validation/initialization.
+        This helper is used by sweep preparation to pre-configure the acquisition
+        pipeline once (fast-path), avoiding repeated validation/initialization.
 
-        :param config: Experiment configuration.
-                       Must contain non-empty "acquisitions" list.
+        :param config: Experiment configuration. Must contain non-empty "acquisitions"
+            list.
         :type config: dict
         :return: List of ADC indices to be captured.
         :rtype: list[int]
@@ -1702,11 +1671,10 @@ class MessageHandler:
         return [acq.get("acq_index", i) for i, acq in enumerate(acquisitions)]
 
     def _get_acq_mode(self, config: dict) -> str:
-        """
-        Determine the acquisition mode requested by the experiment.
+        """Determine the acquisition mode requested by the experiment.
 
-        The mode is forwarded to the adapter so it can select the proper hardware capture path
-        (e.g., standard vs sweep-optimized acquisition).
+        The mode is forwarded to the adapter so it can select the proper hardware
+        capture path (e.g., standard vs sweep-optimized acquisition).
 
         :param config: Experiment configuration.
         :type config: dict

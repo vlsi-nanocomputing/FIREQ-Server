@@ -14,13 +14,11 @@ PASS_THROUGH_MODULES = [
 
 
 class FireqParser:
-    """
-    FIREQ parser class, used to parse the .hwh file to retrieve module connectivity and memory mappings.
-    """
+    """FIREQ parser class, used to parse the .hwh file to retrieve module connectivity
+    and memory mappings."""
 
     def __init__(self, hwh_file: str):
-        """
-        Initialize the FIREQ parser with a hardware description file.
+        """Initialize the FIREQ parser with a hardware description file.
 
         :param hwh_file: Path to the .hwh (Xilinx Hardware Handoff) file
         :type hwh_file: str
@@ -35,8 +33,7 @@ class FireqParser:
         self._modules = self._root.find("MODULES")
 
     def get_module(self, module_name: str):
-        """
-        Get the xml description of the IP named by module_name.
+        """Get the xml description of the IP named by module_name.
 
         :param module_name: IP instance name given in vivado block diagram
         :type module_name: str
@@ -53,14 +50,14 @@ class FireqParser:
         return None
 
     def get_bus_interfaces(self, module: ET.Element):
-        """
-        Get a dictionary of the bus interfaces connected to the module.\n
-        Returns a dictionary where each key is the bus name and the entry is a dictionary
-        with the rest of the xml elements.
+        """Get a dictionary of the bus interfaces connected to the module.\n Returns a
+        dictionary where each key is the bus name and the entry is a dictionary with the
+        rest of the xml elements.
 
         :param module: Child object of xml file with tag MODULE
         :type module: xml.etree.ElementTree.Element
-        :return: Dictionary with bus name as key and dictionary description of bus as item
+        :return: Dictionary with bus name as key and dictionary description of bus as
+            item
         :rtype: dict[str, dict[str, str]]
         """
         bus_interface_dict = {}
@@ -82,9 +79,8 @@ class FireqParser:
         return bus_interface_dict
 
     def get_connectivity(self, master_module: ET.Element, module_list: list):
-        """
-        Get the connectivity path of the master interfaces of master module.\n
-        The return is a dictionary that encodes the connections in a graph like manner,
+        """Get the connectivity path of the master interfaces of master module.\n The
+        return is a dictionary that encodes the connections in a graph like manner,
         where each node is a module and the connections are defined by the axi bus
         names.
 
@@ -136,8 +132,7 @@ class FireqParser:
         return connectivity_graph
 
     def get_address_mapping(self):
-        """
-        Gets the AXI Memory mapping of the PS/PL master interface
+        """Gets the AXI Memory mapping of the PS/PL master interface.
 
         :return: Dict describing the mapping for ips
         :rtype: dict | None
@@ -159,8 +154,8 @@ class FireqParser:
                 return address_mapping_dict
 
     def get_parameter(self, module_name: str, param_name: str):
-        """
-        Return the VALUE of a PARAMETER with NAME=param_name for module INSTANCE=module_name.
+        """Return the VALUE of a PARAMETER with NAME=param_name for module
+        INSTANCE=module_name.
 
         :param module_name: IP instance name given in vivado block diagram
         :type module_name: str

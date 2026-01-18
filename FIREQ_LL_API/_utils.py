@@ -5,8 +5,7 @@ __all__ = ["_FIREQDriver", "_DebugMMIO", "_get_bit", "_get_bits", "_set_bit", "_
 
 
 class _FIREQDriver(DefaultIP):
-    """
-    Base driver class for FIREQ IP drivers.
+    """Base driver class for FIREQ IP drivers.
 
     This class provides methods to initialize the AXI Lite and Full interfaces of an IP.
     """
@@ -14,8 +13,7 @@ class _FIREQDriver(DefaultIP):
     bindto = []
 
     def __init__(self, description):
-        """
-        Initialize the FIREQ driver.
+        """Initialize the FIREQ driver.
 
         :param description: Dictionary containing IP parameters and configuration
         :type description: dict
@@ -26,16 +24,14 @@ class _FIREQDriver(DefaultIP):
         self._debug_level = 0
 
     def print_description(self):
-        """
-        Print the description of the IP.
+        """Print the description of the IP.
 
         This method should be overridden by subclasses.
         """
         pass
 
     def init_axi_full_interface(self, base_address, axi_depth):
-        """
-        Initialize the AXI Full interface for this IP.
+        """Initialize the AXI Full interface for this IP.
 
         :param base_address: Base address of the AXI Full interface
         :type base_address: int
@@ -46,8 +42,7 @@ class _FIREQDriver(DefaultIP):
             self._axi_full_interface_mmio = MMIO(base_address, axi_depth)
 
     def init_axi_lite_interface(self, base_address, axi_depth):
-        """
-        Initialize the AXI Lite interface for this IP.
+        """Initialize the AXI Lite interface for this IP.
 
         :param base_address: Base address of the AXI Lite interface
         :type base_address: int
@@ -58,8 +53,7 @@ class _FIREQDriver(DefaultIP):
             self._axi_lite_interface_mmio = MMIO(base_address, axi_depth)
 
     def set_debug_level(self, level, axi_lite_file_handler, axi_full_file_handler):
-        """
-        Set the level of debugging on the AXI interfaces.
+        """Set the level of debugging on the AXI interfaces.
 
         :param level: 0 for no debugging, 1 for file logging
         :type level: int
@@ -92,16 +86,14 @@ class _FIREQDriver(DefaultIP):
 
 
 class _DebugMMIO:
-    """
-    MMIO-like class used for debug purposes.
+    """MMIO-like class used for debug purposes.
 
-    The intended use is to (completely or partially) replace an MMIO handler
-    to log AXI transactions to a file.
+    The intended use is to (completely or partially) replace an MMIO handler to log AXI
+    transactions to a file.
     """
 
     def __init__(self, replaces, debug_level, file):
-        """
-        Initialize the DebugMMIO wrapper.
+        """Initialize the DebugMMIO wrapper.
 
         :param replaces: MMIO object that it replaces
         :type replaces: MMIO
@@ -118,8 +110,7 @@ class _DebugMMIO:
 
     @property
     def replaces(self):
-        """
-        Return the original MMIO object that this wrapper replaces.
+        """Return the original MMIO object that this wrapper replaces.
 
         :return: The original MMIO object
         :rtype: MMIO
@@ -127,8 +118,7 @@ class _DebugMMIO:
         return self._replaces
 
     def read(self, address):
-        """
-        Read a 32-bit unsigned value at a certain address.
+        """Read a 32-bit unsigned value at a certain address.
 
         :param address: Byte aligned address
         :type address: int
@@ -142,8 +132,7 @@ class _DebugMMIO:
         return self._memory[address]
 
     def write(self, address, data):
-        """
-        Write a 32-bit unsigned value (data) at a certain address.
+        """Write a 32-bit unsigned value (data) at a certain address.
 
         :param address: Byte aligned unsigned address
         :type address: int
@@ -172,8 +161,7 @@ class _DebugMMIO:
 
 
 def _set_bit(value, pos, setvalue):
-    """
-    Set the bit at index pos of value to setvalue.
+    """Set the bit at index pos of value to setvalue.
 
     :param value: Input value to be manipulated
     :type value: int
@@ -189,8 +177,7 @@ def _set_bit(value, pos, setvalue):
 
 
 def _get_bit(value, pos):
-    """
-    Get the bit at position pos of argument value.
+    """Get the bit at position pos of argument value.
 
     :param value: Input value to extract bit from
     :type value: int
@@ -203,8 +190,7 @@ def _get_bit(value, pos):
 
 
 def _set_bits(value, start, length, setvalue):
-    """
-    Set bits from start for a length equal to length to setvalue.
+    """Set bits from start for a length equal to length to setvalue.
 
     :param value: Input value to set bits
     :type value: int
@@ -223,8 +209,7 @@ def _set_bits(value, start, length, setvalue):
 
 
 def _get_bits(value, start, length):
-    """
-    Get a number of sequential bits from argument value.
+    """Get a number of sequential bits from argument value.
 
     :param value: Input to extract bits
     :type value: int
@@ -240,8 +225,8 @@ def _get_bits(value, start, length):
 
 
 def _compute_pinc_poff(frequency, phase, samplerate, phase_depth):
-    """
-    Compute the phase increment and phase offset depending on the input frequency and phase.
+    """Compute the phase increment and phase offset depending on the input frequency and
+    phase.
 
     :param frequency: Frequency in Hz
     :type frequency: float

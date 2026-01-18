@@ -4,8 +4,7 @@ __all__ = ["TriggerGeneratorDriver"]
 
 
 class TriggerGeneratorDriver(_FIREQDriver):
-    """
-    Driver class for the trigger generator IP.
+    """Driver class for the trigger generator IP.
 
     Provides methods to set the generation time of pulses and acquisition events.
     """
@@ -13,8 +12,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
     bindto = ["user.org:user:axisTriggerGeneratorIP:1.0"]
 
     def __init__(self, description: dict):
-        """
-        Initialize the TriggerGeneratorDriver.
+        """Initialize the TriggerGeneratorDriver.
 
         :param description: Dictionary containing IP parameters and configuration
         :type description: dict
@@ -46,8 +44,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._manual_trigger_pos = 31
 
     def print_description(self) -> None:
-        """
-        Print the description of the trigger generator IP.
+        """Print the description of the trigger generator IP.
 
         :return: None
         :rtype: None
@@ -58,8 +55,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         print(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
 
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
-        """
-        Initialize the AXI Full interface for this IP.
+        """Initialize the AXI Full interface for this IP.
 
         :param base_address: Base address of the AXI Full interface
         :type base_address: int
@@ -71,8 +67,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         super().init_axi_full_interface(base_address, axi_depth)
 
     def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
-        """
-        Initialize the AXI Lite interface for this IP.
+        """Initialize the AXI Lite interface for this IP.
 
         :param base_address: Base address of the AXI Lite interface
         :type base_address: int
@@ -86,8 +81,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         del self.mmio
 
     def set_experiment_duration(self, duration: int) -> None:
-        """
-        Set the experiment duration for a single shot.
+        """Set the experiment duration for a single shot.
 
         :param duration: Duration in clock cycles
         :type duration: int
@@ -100,8 +94,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
     def set_number_of_shots(self, value: int) -> None:
-        """
-        Set the number of shots to execute in hardware.
+        """Set the number of shots to execute in hardware.
 
         :param value: Number of shots (must be between 1 and max_hw_repetitions)
         :type value: int
@@ -115,8 +108,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
     def start_experiment(self) -> None:
-        """
-        Start the generation of triggers.
+        """Start the generation of triggers.
 
         :return: None
         :rtype: None
@@ -124,8 +116,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
 
     def is_done(self) -> bool:
-        """
-        Check if the experiment is finished.
+        """Check if the experiment is finished.
 
         :return: True if the experiment is finished, False if still running
         :rtype: bool
@@ -134,11 +125,10 @@ class TriggerGeneratorDriver(_FIREQDriver):
         return (control_register & 0x40000000) == 0x40000000
 
     def insert_drive_delay(self, channel: int, index: int, delay: int, generate_trigger: int) -> None:
-        """
-        Insert a delay value in the FIFO of a drive channel at index.
+        """Insert a delay value in the FIFO of a drive channel at index.
 
-        The generate_trigger input is used to tell the trigger generator if a
-        trigger should be generated at the end of the delay.
+        The generate_trigger input is used to tell the trigger generator if a trigger
+        should be generated at the end of the delay.
 
         :param channel: Drive channel (1 to trigger_channels)
         :type channel: int
@@ -166,8 +156,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
 
     def set_readout_delay(self, delay: int, channel: int) -> None:
-        """
-        Set the readout delay for a specific channel.
+        """Set the readout delay for a specific channel.
 
         :param delay: Delay in clock cycles
         :type delay: int

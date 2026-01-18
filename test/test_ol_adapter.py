@@ -14,11 +14,10 @@ except ImportError:
 
 
 class AdapterContext:
-    """
-    Context holder for the Adapter test suite.
+    """Context holder for the Adapter test suite.
 
-    Bundles the high-level adapter instance with its underlying hardware mocks
-    to simplify test signatures.
+    Bundles the high-level adapter instance with its underlying hardware mocks to
+    simplify test signatures.
     """
 
     def __init__(self, adapter, overlay, mock_gen, mock_trig, mock_acq):
@@ -31,11 +30,10 @@ class AdapterContext:
 
 @pytest.fixture
 def ctx():
-    """
-    Pytest fixture that initializes a MockOverlay and an OverlayAdapter.
+    """Pytest fixture that initializes a MockOverlay and an OverlayAdapter.
 
-    It configures specific MagicMocks for critical driver methods to ensure
-    isolation during unit testing.
+    It configures specific MagicMocks for critical driver methods to ensure isolation
+    during unit testing.
     """
     mock_ol = MockOverlay()
 
@@ -139,8 +137,7 @@ def test_upload_readout_wave(ctx):
 
 
 def test_iq_quantization_logic(ctx):
-    """
-    Verify floating-point to complex int16 quantization.
+    """Verify floating-point to complex int16 quantization.
 
     Checks:
     - Zero mapping.
@@ -183,7 +180,8 @@ def test_modulation_setup(ctx):
 
 
 def test_upload_envelopes_failure(ctx):
-    """Verify that low-level driver errors (-3) are converted into a readable ConfigurationError hint."""
+    """Verify that low-level driver errors (-3) are converted into a readable
+    ConfigurationError hint."""
     # Configure mock to return error code
     ctx.gen.add_envelope_to_envelope_memory.return_value = -3
 
@@ -207,7 +205,8 @@ def test_upload_envelopes_failure(ctx):
 
 
 def test_compile_waves_cache_hit(ctx):
-    """Verify that an identical wave specification does not trigger a new hardware compilation."""
+    """Verify that an identical wave specification does not trigger a new hardware
+    compilation."""
     wave_spec = {"wave_id": "w1", "kind": "env", "envelope": "e1", "duration": 100, "gain": 1.0}
 
     # 1. Correct Setup:
@@ -235,7 +234,8 @@ def test_compile_waves_cache_hit(ctx):
 
 
 def test_compile_waves_conflict_raises_error(ctx):
-    """Verify ConfigurationError is raised when overwriting a wave without replace=True."""
+    """Verify ConfigurationError is raised when overwriting a wave without
+    replace=True."""
 
     # 1. Initial Setup
     wave_v1 = {"wave_id": "w1", "kind": "env", "envelope": "e1", "duration": 100, "gain": 1.0}
@@ -254,7 +254,8 @@ def test_compile_waves_conflict_raises_error(ctx):
 
 
 def test_run_multi_acquisition_chunking(ctx):
-    """Verify that acquisitions exceeding hardware buffer limits are split into chunks."""
+    """Verify that acquisitions exceeding hardware buffer limits are split into
+    chunks."""
     hw_limit = 100
     ctx.adapter.dma_engine.get_max_shots.return_value = hw_limit
 
@@ -300,7 +301,8 @@ def test_fifo_patching_consistency(ctx):
 
 
 def test_fifo_patching_out_of_bounds(ctx):
-    """Verify that patching beyond the known sequence length raises a ConfigurationError."""
+    """Verify that patching beyond the known sequence length raises a
+    ConfigurationError."""
     ctx.adapter._wave_store[0] = {"A": MagicMock(wdw=1)}
     ctx.gen.wave_memory_dict = {"A": 1}
 
@@ -389,11 +391,10 @@ def test_program_drive_sequence_overflow(ctx):
 
 
 def test_upload_envelopes_symmetry_constraint(ctx):
-    """
-    Verify that symmetric optimization is rejected for non-interpolated envelopes.
+    """Verify that symmetric optimization is rejected for non-interpolated envelopes.
 
-    The hardware interpolation filter requires specific symmetry constraints.
-    Applying symmetry flags to raw envelopes leads to undefined behavior.
+    The hardware interpolation filter requires specific symmetry constraints. Applying
+    symmetry flags to raw envelopes leads to undefined behavior.
     """
     # Case: is_symmetric=True but for_interpolation=False -> MUST FAIL
     bad_envelope = [
@@ -416,8 +417,8 @@ def test_upload_envelopes_symmetry_constraint(ctx):
 
 
 def test_acquisition_single_shot_overflow(ctx):
-    """
-    Verify rejection of configurations where a single shot exceeds the total buffer memory.
+    """Verify rejection of configurations where a single shot exceeds the total buffer
+    memory.
 
     If samp_per_shot > buffer_size, chunking is impossible.
     """

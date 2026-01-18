@@ -1,15 +1,13 @@
 # file: fireq-utils/server/exceptions.py
-"""
-Custom exceptions for the hardware layer.
+"""Custom exceptions for the hardware layer.
 
-These exceptions provide a clean, typed error interface for the orchestrator,
-isolating it from the inconsistent error handling in the low-level drivers.
+These exceptions provide a clean, typed error interface for the orchestrator, isolating
+it from the inconsistent error handling in the low-level drivers.
 """
 
 
 class FireqHardwareError(Exception):
-    """
-    Base exception for all hardware-related errors.
+    """Base exception for all hardware-related errors.
 
     All exceptions in the hardware layer inherit from this,
     allowing callers to catch all hardware errors with a single except clause.
@@ -33,8 +31,7 @@ class FireqHardwareError(Exception):
 
 
 class DriverError(FireqHardwareError):
-    """
-    Error originating from a low-level driver.
+    """Error originating from a low-level driver.
 
     This wraps the inconsistent return codes (-3, None, etc.) from the
     FIREQ_LL_API drivers into proper Python exceptions.
@@ -60,8 +57,7 @@ class DriverError(FireqHardwareError):
 
 
 class TimingError(FireqHardwareError):
-    """
-    Invalid timing parameters for an experiment.
+    """Invalid timing parameters for an experiment.
 
     Raised when experiment parameters violate hardware constraints such as:
     - Duration too short/long
@@ -83,8 +79,7 @@ class TimingError(FireqHardwareError):
 
 
 class ConfigurationError(FireqHardwareError):
-    """
-    Invalid hardware configuration.
+    """Invalid hardware configuration.
 
     Raised when attempting to configure hardware with invalid parameters:
     - Frequency out of range
@@ -105,8 +100,7 @@ class ConfigurationError(FireqHardwareError):
 
 
 class FrequencyError(ConfigurationError):
-    """
-    Raised when frequency is out of valid range.
+    """Raised when frequency is out of valid range.
 
     Provides information about valid Nyquist zones and frequency ranges.
 
@@ -132,8 +126,7 @@ class FrequencyError(ConfigurationError):
 
 
 class DMAError(FireqHardwareError):
-    """
-    DMA-related error.
+    """DMA-related error.
 
     Raised when DMA operations fail, such as:
     - DMA channel stuck/busy
@@ -147,8 +140,7 @@ class DMAError(FireqHardwareError):
 
 
 class DMATimeoutError(DMAError):
-    """
-    Exception raised when a DMA transfer exceeds the allowed time limit.
+    """Exception raised when a DMA transfer exceeds the allowed time limit.
 
     This is a specific, recoverable case of DMA failure where the transfer
     simply took too long.
@@ -162,8 +154,7 @@ class DMATimeoutError(DMAError):
 
 
 class RecoverableDMAError(DMAError):
-    """
-    DMA error that occurred but data may still be recoverable.
+    """DMA error that occurred but data may still be recoverable.
 
     Example: Internal error bit set but TLAST (transfer last) received,
     indicating the transfer actually completed.
@@ -179,8 +170,7 @@ class RecoverableDMAError(DMAError):
 
 
 class HardwareResourceError(FireqHardwareError):
-    """
-    Raised when a hardware resource cannot be accessed or allocated.
+    """Raised when a hardware resource cannot be accessed or allocated.
 
     Examples:
     - Invalid generator/acquisition index
@@ -202,8 +192,7 @@ class HardwareResourceError(FireqHardwareError):
 
 
 class HardwareStateError(FireqHardwareError):
-    """
-    Raised when hardware is in unexpected state.
+    """Raised when hardware is in unexpected state.
 
     Examples:
     - DMA not idle after stop command

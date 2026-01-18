@@ -9,11 +9,10 @@ import numpy as np
 # MOCK PYNQ BUFFER
 # =============================================================================
 class MockPynqBuffer(np.ndarray):
-    """
-    Simulates a PYNQ Contiguous Memory Buffer.
+    """Simulates a PYNQ Contiguous Memory Buffer.
 
-    Inherits from numpy.ndarray to mimic buffer behavior while adding
-    virtual physical address attributes required by DMA drivers.
+    Inherits from numpy.ndarray to mimic buffer behavior while adding virtual physical
+    address attributes required by DMA drivers.
     """
 
     def __new__(cls, shape, dtype=np.uint32):
@@ -41,11 +40,10 @@ class MockPynqBuffer(np.ndarray):
 # MOCK LOW-LEVEL DRIVERS
 # =============================================================================
 class MockGeneratorDriver:
-    """
-    Simulates the low-level Generator IP driver.
+    """Simulates the low-level Generator IP driver.
 
-    Maintains internal state for Envelope and Wave memory to support
-    verification of high-level adapter logic (caching, replacement, etc.).
+    Maintains internal state for Envelope and Wave memory to support verification of
+    high-level adapter logic (caching, replacement, etc.).
     """
 
     def __init__(self, idx: int):
@@ -62,8 +60,7 @@ class MockGeneratorDriver:
         return 0
 
     def create_wave_definition_word(self, env_name, *args):
-        """
-        Simulates WDW compilation.
+        """Simulates WDW compilation.
 
         Returns:
             int: A dummy WDW (123456) on success.
@@ -185,8 +182,7 @@ class MockDMA:
 
 
 class MockOverlay:
-    """
-    Simulates the entire PYNQ Overlay structure.
+    """Simulates the entire PYNQ Overlay structure.
 
     Aggregates Generators, Acquisitions, Trigger, and DMA drivers.
     """
