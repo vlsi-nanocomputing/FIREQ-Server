@@ -1,3 +1,7 @@
+"""Low-level driver for the FIREQ acquisition IP."""
+
+from typing import Any
+
 from ._utils import _compute_pinc_poff, _FIREQDriver, _set_bit, _set_bits
 
 __all__ = ["AcquisitionDriver"]
@@ -11,7 +15,7 @@ class AcquisitionDriver(_FIREQDriver):
 
     bindto = ["user.org:user:axisAcquisitionIP:1.0"]
 
-    def __init__(self, description):
+    def __init__(self, description: dict[str, Any]) -> None:
         """Initialize the AcquisitionDriver with the given description.
 
         :param description: Dictionary containing IP parameters and configuration
@@ -49,7 +53,7 @@ class AcquisitionDriver(_FIREQDriver):
         self._manual_trigger_pos = 31
         self._accumulate_select_pos = 27
 
-    def print_description(self):
+    def print_description(self) -> None:
         """Print the driver configuration parameters to stdout."""
         print("maximum_duration: " + str(self._maximum_duration) + ", maximum duration of acquisition in clock cycles")
         print("sample_size: " + str(self._sample_size) + ", width of samples (bits)")
@@ -66,7 +70,7 @@ class AcquisitionDriver(_FIREQDriver):
         )
         print("time_of_flight_width: " + str(self._time_of_flight_width) + ", width of the time of flight timer (bits)")
 
-    def init_axi_lite_interface(self, base_address, axi_depth):
+    def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface for register access.
 
         :param base_address: Base address of the AXI Lite interface
@@ -78,9 +82,8 @@ class AcquisitionDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def set_acquisition_dds_parameters(self, frequency, phase, adc_samplerate):
-        """Set parameters for acquisition such as demodulation frequency and phase
-        offset.
+    def set_acquisition_dds_parameters(self, frequency: float, phase: float, adc_samplerate: float) -> int:
+        """Set acquisition demodulation parameters.
 
         :param frequency: Frequency of the demodulation signal in MHz
         :type frequency: float
@@ -109,7 +112,7 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def _set_readout_pinc_poff(self, inc, off):
+    def _set_readout_pinc_poff(self, inc: int, off: int) -> int:
         """Set readout increment and offset values.
 
         :param inc: Increment value for readout
@@ -131,17 +134,13 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def trigger_manually(self):
-        """Trigger the acquisition manually.
-
-        :return: None
-        :rtype: None
-        """
+    def trigger_manually(self) -> None:
+        """Trigger the acquisition manually."""
         manual_trigger_mask = 1 << self._manual_trigger_pos
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
         self._axi_lite_interface_mmio.write(0, control_register)
 
-    def set_acquisition_duration(self, duration):
+    def set_acquisition_duration(self, duration: int) -> int:
         """Set the acquisition duration.
 
         :param duration: Duration in clock cycles
@@ -158,7 +157,7 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         return 0
 
-    def set_trigger_channel(self, channel):
+    def set_trigger_channel(self, channel: int) -> int:
         """Set the readout trigger channel.
 
         :param channel: Channel selection, set to 0 to deactivate external triggers
@@ -176,7 +175,7 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         return 0
 
-    def set_time_of_flight(self, time_of_flight):
+    def set_time_of_flight(self, time_of_flight: int) -> int:
         """Set time of flight.
 
         :param time_of_flight: Time of flight in clock cycles
@@ -198,7 +197,7 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         return 0
 
-    def set_decimated_output_type(self, output_type):
+    def set_decimated_output_type(self, output_type: str) -> int:
         """Set the type of output data of the decimated stream.
 
         Can be set to output the decimated samples or the accumulated values.

@@ -46,7 +46,7 @@ Lifecycle
 4. Client disconnects -> internal states persist (envelope memory and wave cache), server returns to accept loop.
 5. Explicit logout -> reset caches (client may then disconnect).
 
-Notes
+Notes:
 -----
 - Hardware stability: experiment execution is deliberately kept on the main thread.
 - Abort semantics: command ``abort`` bypasses the main queue and sets ``stop_event``
@@ -60,7 +60,7 @@ import struct
 import time
 from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -101,7 +101,7 @@ class FIREQServer:
         Optional logger instance. If not provided, ``logging.getLogger(__name__)``
         is used.
 
-    Examples
+    Examples:
     --------
     >>> handler = MessageHandler(adapter)
     >>> server = FIREQServer(handler, port=5000, auth_token="secret")
@@ -114,8 +114,8 @@ class FIREQServer:
         host: str = "0.0.0.0",
         port: int = 5000,
         auth_token: str = "fireq",
-        logger: Optional[logging.Logger] = None,
-    ):
+        logger: logging.Logger | None = None,
+    ) -> None:
         """Inizializza il server.
 
         :param handler: MessageHandler instance
@@ -124,7 +124,6 @@ class FIREQServer:
         :param auth_token: simple authentication token
         :param logger: Logger instance
         """
-
         self.handler = handler
         self.host = host
         self.port = port
@@ -157,14 +156,14 @@ class FIREQServer:
         self._abort_in_progress = Event()
 
         # Socket references (owned by the network threads, shared with the sender thread)
-        self._server_socket: Optional[socket.socket] = None
-        self._client_socket: Optional[socket.socket] = None
+        self._server_socket: socket.socket | None = None
+        self._client_socket: socket.socket | None = None
 
     # =========================================================================
     # PUBLIC API
     # =========================================================================
 
-    def start(self):
+    def start(self) -> None:
         """Start the server and block on the main thread.
 
         This method:
@@ -191,7 +190,7 @@ class FIREQServer:
         # Main thread runs the experiment execution loop.
         self._main_loop()
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the server.
 
         Effects:
@@ -237,7 +236,7 @@ class FIREQServer:
     # MAIN THREAD - experiment execution
     # =========================================================================
 
-    def _main_loop(self):
+    def _main_loop(self) -> None:
         """Consume commands from ``queue_in`` and execute them.
 
         This loop runs on the main thread to keep hardware-related operations
@@ -261,7 +260,7 @@ class FIREQServer:
 
         self.logger.info("Main loop exited")
 
-    def _process_message(self, msg: dict):
+    def _process_message(self, msg: dict) -> None:
         """Execute one command message and enqueue a response.
 
         Parameters
@@ -282,13 +281,13 @@ class FIREQServer:
         - reset_envelopes
         - reset_all
 
-        Notes
+        Notes:
         -----
         Command ``abort`` is handled directly in the receiver loop (network thread)
         to be immediate; it bypasses ``queue_in``.
         """
 
-        def ensure_dict(res):
+        def ensure_dict(res: object) -> dict | object:
             """Convert handler results to dict if they expose ``to_dict()``."""
             return res.to_dict() if hasattr(res, "to_dict") else res
 
@@ -302,7 +301,7 @@ class FIREQServer:
                 total_envelopes = 0
                 invalid_metadata = False
 
-                for gen_index_str, envelopes in msg.get("envelopes", {}).items():
+                for _gen_index_str, envelopes in msg.get("envelopes", {}).items():
                     for e in envelopes:
                         total_envelopes += 1
                         if "samples_iq" in e or "num_samples" not in e:
@@ -358,8 +357,7 @@ class FIREQServer:
                 # batch_size=1 effectively disables batching (legacy behavior)
                 # ============================================================
                 batch_size = msg.get("batch_size", SWEEP_BATCH_SIZE)
-                if batch_size < 1:
-                    batch_size = 1
+                batch_size = max(batch_size, 1)
 
                 self.logger.info(f"Sweep '{sweep_id}' with batch_size={batch_size}, stream_mode=header_binary")
 
@@ -368,17 +366,17 @@ class FIREQServer:
                 # ============================================================
                 # BATCHING: Local buffers for accumulating points
                 # ============================================================
-                binary_buffer: List[Dict[int, np.ndarray]] = []
-                timing_buffer: List[Tuple[float, float]] = []
+                binary_buffer: list[dict[int, np.ndarray]] = []
+                timing_buffer: list[tuple[float, float]] = []
                 batch_index = [0]  # Use list to allow mutation in nested function
                 header_sent = [False]
-                sweep_points_plan: List[Dict[str, Any]] = []
+                sweep_points_plan: list[dict[str, Any]] = []
 
-                def on_plan(points: List[Dict[str, Any]]):
+                def on_plan(points: list[dict[str, Any]]) -> None:
                     sweep_points_plan.clear()
                     sweep_points_plan.extend(points)
 
-                def flush_binary_batch():
+                def flush_binary_batch() -> None:
                     """Send accumulated sweep points as binary-only batch."""
                     if not binary_buffer:
                         return
@@ -397,8 +395,8 @@ class FIREQServer:
                     timing_buffer.clear()
                     batch_index[0] += 1
 
-                def on_point(r: SweepPointResult):
-                    """Callback for each sweep point."""
+                def on_point(r: SweepPointResult) -> None:
+                    """Handle each sweep point callback."""
                     point_payload = r.to_metadata_dict()
 
                     # --- [TIMING] Inject per-point timing stats ---
@@ -505,7 +503,7 @@ class FIREQServer:
     # NETWORK RECEIVER THREAD - incoming connections and client handling
     # =========================================================================
 
-    def _network_receiver_thread(self):
+    def _network_receiver_thread(self) -> None:
         """Accept TCP connections and handle one client at a time.
 
         Loop:
@@ -541,7 +539,7 @@ class FIREQServer:
             try:
                 try:
                     client_socket, addr = self._server_socket.accept()
-                except socket.timeout:
+                except TimeoutError:
                     # Normal timeout, just check _running and continue
                     continue
                 except OSError:
@@ -575,7 +573,7 @@ class FIREQServer:
 
         self.logger.info("Network thread exited")
 
-    def _handle_client(self, client_socket: socket.socket):
+    def _handle_client(self, client_socket: socket.socket) -> None:
         """Handle a single client session.
 
         Steps:
@@ -662,10 +660,10 @@ class FIREQServer:
             self._authenticated = False
             self.logger.info("Client disconnected, ready for new connection")
 
-    def _receiver_loop(self, sock: socket.socket):
+    def _receiver_loop(self, sock: socket.socket) -> None:
         """Receive client messages and enqueue commands for execution.
 
-        Notes
+        Notes:
         -----
         The ``abort`` command is handled immediately by setting ``_stop_event`` and
         sending an acknowledgement, bypassing the main execution queue.
@@ -710,7 +708,7 @@ class FIREQServer:
                         invalid_metadata = False
                         total_envelopes = 0
 
-                        for gen_index_str, envelopes in msg.get("envelopes", {}).items():
+                        for _gen_index_str, envelopes in msg.get("envelopes", {}).items():
                             for e in envelopes:
                                 total_envelopes += 1
                                 if "samples_iq" in e or "num_samples" not in e:
@@ -730,7 +728,7 @@ class FIREQServer:
                 self.logger.error(f"Unexpected error in receiver: {e}")
                 break
 
-    def _sender_loop(self):
+    def _sender_loop(self) -> None:
         """Send responses from ``queue_out`` to the connected client.
 
         Uses binary transmission mode for all data acquisitions.
@@ -824,12 +822,11 @@ class FIREQServer:
         3) Server validates the token.
         4) Server replies with either ``handshake_ok`` or ``handshake_error``.
 
-        Returns
+        Returns:
         -------
         bool
             True if authenticated successfully, False otherwise.
         """
-
         # Authentication model (minimal):
         # - Shared token sent by the client during handshake.
         # - If authentication fails, we reject immediately and keep the server "stateless"
@@ -891,7 +888,7 @@ class FIREQServer:
             self.logger.error(f"Handshake failed: {e}")
             return False
 
-    def _handle_logout(self):
+    def _handle_logout(self) -> None:
         """Reset server-side caches and notify the client.
 
         This uses the handler reset subsystem to clear envelope/wave caches for all
@@ -930,22 +927,24 @@ class FIREQServer:
     # PROTOCOL - Length-prefixed JSON
     # =========================================================================
 
-    def _receive_message(self, sock: socket.socket) -> Optional[dict]:
-        """Receive one length-prefixed JSON message. Returning None indicates either a
-        clean disconnect (EOF) or a protocol-level error.
+    def _receive_message(self, sock: socket.socket) -> dict | None:
+        """Receive one length-prefixed JSON message.
+
+        Returning None indicates either a clean disconnect (EOF) or a protocol-level
+        error.
 
         Parameters
         ----------
         sock:
             Connected socket.
 
-        Returns
+        Returns:
         -------
         dict or None
             Parsed JSON dictionary, or None if the client disconnects or an error
             occurs.
 
-        Notes
+        Notes:
         -----
         A hard cap is applied to protect against unexpectedly large payloads.
         """
@@ -985,7 +984,7 @@ class FIREQServer:
             self.logger.error(f"Receive error: {e}")
             return None
 
-    def _send_message(self, sock: socket.socket, msg: dict, include_timing: bool = False):
+    def _send_message(self, sock: socket.socket, msg: dict, include_timing: bool = False) -> None:
         """Send one length-prefixed JSON message."""
         payload = json.dumps(msg).encode("utf-8")
         if include_timing and isinstance(msg, dict):
@@ -1006,7 +1005,7 @@ class FIREQServer:
         # Writes are performed by the sender thread only: avoid interleaved frames.
         sock.sendall(length + payload)
 
-    def _send_binary_frame(self, sock: socket.socket, adc_index: int, data: np.ndarray):
+    def _send_binary_frame(self, sock: socket.socket, adc_index: int, data: np.ndarray) -> None:
         """Send a single binary data frame for one ADC.
 
         Frame format:
@@ -1031,12 +1030,12 @@ class FIREQServer:
             f"Sent binary frame: ADC {adc_index}, {len(data_bytes)} bytes, " f"dtype={data.dtype}, shape={data.shape}"
         )
 
-    def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float):
+    def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
         """Send a fixed-size timing trailer (2x float32, big-endian)."""
         payload = struct.pack(">ff", float(hw_ms), float(sw_ms))
         sock.sendall(payload)
 
-    def _recv_envelope_frames(self, sock: socket.socket, total_count: int) -> Dict[Tuple[int, int], np.ndarray]:
+    def _recv_envelope_frames(self, sock: socket.socket, total_count: int) -> dict[tuple[int, int], np.ndarray]:
         """Receive binary envelope sample frames.
 
         Frame format per envelope:
@@ -1075,7 +1074,7 @@ class FIREQServer:
 
         return envelope_data
 
-    def _recv_exact(self, sock: socket.socket, n: int) -> Optional[bytes]:
+    def _recv_exact(self, sock: socket.socket, n: int) -> bytes | None:
         """Receive exactly *n* bytes from the socket.
 
         Returns None if the connection is closed before the requested number of bytes is

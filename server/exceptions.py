@@ -49,7 +49,14 @@ class DriverError(FireqHardwareError):
         ...     print(f"Return code: {e.return_code}")
     """
 
-    def __init__(self, message: str, driver_name: str = None, operation: str = None, return_code: int = None):
+    def __init__(
+        self,
+        message: str,
+        driver_name: str | None = None,
+        operation: str | None = None,
+        return_code: int | None = None,
+    ) -> None:
+        """Initialize a DriverError with optional driver context."""
         super().__init__(message)
         self.driver_name = driver_name
         self.operation = operation
@@ -116,7 +123,8 @@ class FrequencyError(ConfigurationError):
         ...     print(f"Valid ranges: {e.valid_ranges}")
     """
 
-    def __init__(self, freq_mhz: float, reason: str, valid_ranges: list = None):
+    def __init__(self, freq_mhz: float, reason: str, valid_ranges: list[tuple[float, float]] | None = None) -> None:
+        """Initialize a FrequencyError with optional valid ranges."""
         self.freq_mhz = freq_mhz
         self.valid_ranges = valid_ranges or []
         message = f"Frequency {freq_mhz} MHz: {reason}"
@@ -185,7 +193,8 @@ class HardwareResourceError(FireqHardwareError):
         resource_id: Identifier of the resource
     """
 
-    def __init__(self, message: str, resource_type: str = None, resource_id: any = None):
+    def __init__(self, message: str, resource_type: str | None = None, resource_id: object | None = None) -> None:
+        """Initialize a HardwareResourceError with resource metadata."""
         super().__init__(message)
         self.resource_type = resource_type
         self.resource_id = resource_id
@@ -208,7 +217,14 @@ class HardwareStateError(FireqHardwareError):
         actual_state: Description of actual state
     """
 
-    def __init__(self, message: str, status_code: int = None, expected_state: str = None, actual_state: str = None):
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        expected_state: str | None = None,
+        actual_state: str | None = None,
+    ) -> None:
+        """Initialize a HardwareStateError with state details."""
         super().__init__(message)
         self.status_code = status_code
         self.expected_state = expected_state

@@ -65,4 +65,4 @@ future-annotations = true
 docstring-code-format = true
 
 [tool.ruff.lint.pydocstyle]
-convention = "google"
+convention = "pep257"

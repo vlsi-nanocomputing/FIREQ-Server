@@ -1,3 +1,5 @@
+"""Tests for OverlayAdapter and related behavior."""
+
 # file: fireq-utils/test/test_ol_adapter.py
 from unittest.mock import MagicMock
 
@@ -14,13 +16,17 @@ except ImportError:
 
 
 class AdapterContext:
-    """Context holder for the Adapter test suite.
+    """Context holder for the Adapter test suite."""
 
-    Bundles the high-level adapter instance with its underlying hardware mocks to
-    simplify test signatures.
-    """
-
-    def __init__(self, adapter, overlay, mock_gen, mock_trig, mock_acq):
+    def __init__(
+        self,
+        adapter: OverlayAdapter,
+        overlay: object,
+        mock_gen: object,
+        mock_trig: object,
+        mock_acq: object,
+    ) -> None:
+        """Initialize the adapter test context."""
         self.adapter = adapter
         self.ol = overlay
         self.gen = mock_gen
@@ -29,12 +35,8 @@ class AdapterContext:
 
 
 @pytest.fixture
-def ctx():
-    """Pytest fixture that initializes a MockOverlay and an OverlayAdapter.
-
-    It configures specific MagicMocks for critical driver methods to ensure isolation
-    during unit testing.
-    """
+def ctx() -> AdapterContext:
+    """Create a mock overlay/adapter context."""
     mock_ol = MockOverlay()
 
     # Setup Generator - Wrap envelope memory to allow logic, mock others
@@ -70,12 +72,12 @@ def ctx():
 # --- TESTS ---
 
 
-def test_initialization_success(ctx):
+def test_initialization_success(ctx: AdapterContext) -> None:
     """Verify that the adapter initializes correctly with a healthy overlay."""
     assert ctx.adapter.ol.is_healthy
 
 
-def test_upload_envelopes_success(ctx):
+def test_upload_envelopes_success(ctx: AdapterContext) -> None:
     """Verify successful upload of a standard envelope."""
     envelopes = [
         {
@@ -92,7 +94,7 @@ def test_upload_envelopes_success(ctx):
     ctx.gen.add_envelope_to_envelope_memory.assert_called_once()
 
 
-def test_upload_envelopes_padding(ctx):
+def test_upload_envelopes_padding(ctx: AdapterContext) -> None:
     """Verify that non-interpolated envelopes are automatically zero-padded."""
     envelopes = [
         {
@@ -110,7 +112,7 @@ def test_upload_envelopes_padding(ctx):
     assert len(args[0]) >= 3
 
 
-def test_compile_waves_success(ctx):
+def test_compile_waves_success(ctx: AdapterContext) -> None:
     """Verify the compilation of a standard wave using an existing envelope."""
     ctx.gen.envelope_memory_dict["rect"] = {}
     waves = [{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}]
@@ -119,7 +121,7 @@ def test_compile_waves_success(ctx):
     ctx.gen.create_wave_definition_word.assert_called()
 
 
-def test_compile_virtual_z_wave(ctx):
+def test_compile_virtual_z_wave(ctx: AdapterContext) -> None:
     """Verify the compilation of a Virtual-Z gate."""
     waves = [{"wave_id": "vz_pi_2", "kind": "vz", "vz_phase_rad": 1.57}]
     res = ctx.adapter.compile_waves(gen_index=0, waves=waves, replace=False)
@@ -127,7 +129,7 @@ def test_compile_virtual_z_wave(ctx):
     ctx.gen.create_vz_gate_definition_word.assert_called_once()
 
 
-def test_upload_readout_wave(ctx):
+def test_upload_readout_wave(ctx: AdapterContext) -> None:
     """Verify the dedicated upload path for readout waveforms."""
     ctx.gen.envelope_memory_dict["readout_env"] = {}
     wave_spec = {"envelope": "readout_env", "duration": 200, "gain": 0.5}
@@ -136,7 +138,7 @@ def test_upload_readout_wave(ctx):
     ctx.gen.write_readout_wave.assert_called_once()
 
 
-def test_iq_quantization_logic(ctx):
+def test_iq_quantization_logic(ctx: AdapterContext) -> None:
     """Verify floating-point to complex int16 quantization.
 
     Checks:
@@ -159,7 +161,7 @@ def test_iq_quantization_logic(ctx):
     assert np.imag(res[2]) == -32768
 
 
-def test_tg_program_delays_logic(ctx):
+def test_tg_program_delays_logic(ctx: AdapterContext) -> None:
     """Verify the programming of trigger delays into the FIFO."""
     drive_spec = {0: {"delay": [[10, 0], [20, 1]]}}
     ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
@@ -173,15 +175,18 @@ def test_tg_program_delays_logic(ctx):
     assert ctx.trig.insert_drive_delay.call_count == 2 * 1024  # second run
 
 
-def test_modulation_setup(ctx):
+def test_modulation_setup(ctx: AdapterContext) -> None:
     """Verify the generator modulation setup calls."""
-    ctx.adapter.generator_modulation(gen_index=0, label="drive", gen_mod={"frequency_mhz": 100.0, "phase": 0.0})
+    ctx.adapter.generator_modulation(
+        gen_index=0,
+        label="drive",
+        gen_mod={"frequency_mhz": 100.0, "phase": 0.0},
+    )
     ctx.gen.set_drive_dds_parameters.assert_called_with(frequency=100.0, dac_samplerate=4000.0)
 
 
-def test_upload_envelopes_failure(ctx):
-    """Verify that low-level driver errors (-3) are converted into a readable
-    ConfigurationError hint."""
+def test_upload_envelopes_failure(ctx: AdapterContext) -> None:
+    """Verify that low-level driver errors (-3) become ConfigurationError hints."""
     # Configure mock to return error code
     ctx.gen.add_envelope_to_envelope_memory.return_value = -3
 
@@ -204,10 +209,15 @@ def test_upload_envelopes_failure(ctx):
     assert "samples must be complex" in res["failed"][0]["error"]
 
 
-def test_compile_waves_cache_hit(ctx):
-    """Verify that an identical wave specification does not trigger a new hardware
-    compilation."""
-    wave_spec = {"wave_id": "w1", "kind": "env", "envelope": "e1", "duration": 100, "gain": 1.0}
+def test_compile_waves_cache_hit(ctx: AdapterContext) -> None:
+    """Verify identical wave specs do not trigger recompilation."""
+    wave_spec = {
+        "wave_id": "w1",
+        "kind": "env",
+        "envelope": "e1",
+        "duration": 100,
+        "gain": 1.0,
+    }
 
     # 1. Correct Setup:
     # Perform a real compilation. This populates:
@@ -222,7 +232,8 @@ def test_compile_waves_cache_hit(ctx):
     ctx.gen.create_wave_definition_word.reset_mock()
 
     # 3. Cache Hit Test
-    # Manually update the mock dictionary to simulate hardware state (since MagicMock doesn't have side effects)
+    # Manually update the mock dictionary to simulate hardware state (since
+    # MagicMock doesn't have side effects)
     ctx.gen.wave_memory_dict["w1"] = 123456
 
     # Request the same wave again
@@ -233,17 +244,28 @@ def test_compile_waves_cache_hit(ctx):
     assert ctx.gen.create_wave_definition_word.call_count == 0
 
 
-def test_compile_waves_conflict_raises_error(ctx):
-    """Verify ConfigurationError is raised when overwriting a wave without
-    replace=True."""
+def test_compile_waves_conflict_raises_error(ctx: AdapterContext) -> None:
+    """Verify ConfigurationError on overwrite without replace=True."""
 
     # 1. Initial Setup
-    wave_v1 = {"wave_id": "w1", "kind": "env", "envelope": "e1", "duration": 100, "gain": 1.0}
+    wave_v1 = {
+        "wave_id": "w1",
+        "kind": "env",
+        "envelope": "e1",
+        "duration": 100,
+        "gain": 1.0,
+    }
     ctx.adapter.compile_waves(gen_index=0, waves=[wave_v1], replace=True)
 
     # 2. Conflicting Action
     # Attempt modification (gain 0.5 vs 1.0) with replace=False
-    wave_v2 = {"wave_id": "w1", "kind": "env", "envelope": "e1", "duration": 100, "gain": 0.5}
+    wave_v2 = {
+        "wave_id": "w1",
+        "kind": "env",
+        "envelope": "e1",
+        "duration": 100,
+        "gain": 0.5,
+    }
 
     res = ctx.adapter.compile_waves(gen_index=0, waves=[wave_v2], replace=False)
 
@@ -253,13 +275,19 @@ def test_compile_waves_conflict_raises_error(ctx):
     assert "spec differs" in res["failed"][0]["error"]
 
 
-def test_run_multi_acquisition_chunking(ctx):
-    """Verify that acquisitions exceeding hardware buffer limits are split into
-    chunks."""
+def test_run_multi_acquisition_chunking(ctx: AdapterContext) -> None:
+    """Verify acquisitions exceeding buffer limits are chunked."""
     hw_limit = 100
     ctx.adapter.dma_engine.get_max_shots.return_value = hw_limit
 
-    def retrieve_side_effect(buffer, mode, shots, samp_per_shot, adc_index, timeout):
+    def retrieve_side_effect(
+        buffer: object,
+        mode: str,
+        shots: int,
+        samp_per_shot: int,
+        adc_index: int,
+        timeout: float | None,
+    ) -> np.ndarray:
         return np.zeros((shots, samp_per_shot))
 
     ctx.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
@@ -272,7 +300,7 @@ def test_run_multi_acquisition_chunking(ctx):
     assert ctx.trig.start_experiment.call_count == 3
 
 
-def test_fifo_patching_consistency(ctx):
+def test_fifo_patching_consistency(ctx: AdapterContext) -> None:
     """Verify that partial FIFO updates maintain consistency in the HL cache."""
     # 1. Initial Setup: Sequence [A, B, C]
     # Mock cache presence to bypass validation
@@ -300,9 +328,8 @@ def test_fifo_patching_consistency(ctx):
     assert ctx.adapter._last_fifo[0] == ["A", "D", "C"]
 
 
-def test_fifo_patching_out_of_bounds(ctx):
-    """Verify that patching beyond the known sequence length raises a
-    ConfigurationError."""
+def test_fifo_patching_out_of_bounds(ctx: AdapterContext) -> None:
+    """Verify patching beyond known sequence length raises ConfigurationError."""
     ctx.adapter._wave_store[0] = {"A": MagicMock(wdw=1)}
     ctx.gen.wave_memory_dict = {"A": 1}
 
@@ -312,7 +339,7 @@ def test_fifo_patching_out_of_bounds(ctx):
     assert "cannot patch" in str(excinfo.value)
 
 
-def test_reset_wave_memory_preserve_specs(ctx):
+def test_reset_wave_memory_preserve_specs(ctx: AdapterContext) -> None:
     """Verify that 'preserve_specs' clears WDW compilation but keeps the WaveEntry."""
     # 1. Populate cache
     entry = MagicMock()
@@ -331,13 +358,13 @@ def test_reset_wave_memory_preserve_specs(ctx):
     ctx.gen.reset_wave_memory_dict.assert_called_once()
 
 
-def test_multi_acquisition_mid_stream_failure(ctx):
-    """Verify that errors during a chunked acquisition are propagated correctly."""
+def test_multi_acquisition_mid_stream_failure(ctx: AdapterContext) -> None:
+    """Verify errors during chunked acquisition are propagated."""
     # Setup for chunking (low limit)
     ctx.adapter.dma_engine.get_max_shots.return_value = 100
 
     # Simulate 3 calls: Success, Success, Failure
-    def side_effect(*args, **kwargs):
+    def side_effect(*args: object, **kwargs: object) -> np.ndarray:
         if ctx.adapter.dma_engine.retrieve_acquisition.call_count == 3:
             raise TimeoutError("DMA Timeout")
         return np.zeros((100, 10))
@@ -351,7 +378,7 @@ def test_multi_acquisition_mid_stream_failure(ctx):
     assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 3
 
 
-def test_sweep_lifecycle(ctx):
+def test_sweep_lifecycle(ctx: AdapterContext) -> None:
     """Verify the lifecycle management of the sweep mode (prepare/end)."""
     # Mock DMA engine methods
     ctx.adapter.dma_engine.prepare_sweep = MagicMock()
@@ -375,7 +402,7 @@ def test_sweep_lifecycle(ctx):
     ctx.adapter.dma_engine.end_sweep.assert_called_once()
 
 
-def test_program_drive_sequence_overflow(ctx):
+def test_program_drive_sequence_overflow(ctx: AdapterContext) -> None:
     """Verify that the adapter prevents writing beyond the FIFO capacity."""
     # Simulated capacity: 4096 words
     max_capacity = 4096
@@ -390,7 +417,7 @@ def test_program_drive_sequence_overflow(ctx):
     ctx.gen.add_wave_to_drive_wave_sequence.assert_not_called()
 
 
-def test_upload_envelopes_symmetry_constraint(ctx):
+def test_upload_envelopes_symmetry_constraint(ctx: AdapterContext) -> None:
     """Verify that symmetric optimization is rejected for non-interpolated envelopes.
 
     The hardware interpolation filter requires specific symmetry constraints. Applying
@@ -416,9 +443,8 @@ def test_upload_envelopes_symmetry_constraint(ctx):
     ctx.gen.add_envelope_to_envelope_memory.assert_not_called()
 
 
-def test_acquisition_single_shot_overflow(ctx):
-    """Verify rejection of configurations where a single shot exceeds the total buffer
-    memory.
+def test_acquisition_single_shot_overflow(ctx: AdapterContext) -> None:
+    """Verify rejection when a single shot exceeds total buffer memory.
 
     If samp_per_shot > buffer_size, chunking is impossible.
     """

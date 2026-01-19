@@ -1,3 +1,5 @@
+from typing import Any, TextIO
+
 import numpy as np
 from pynq import MMIO, DefaultIP
 
@@ -12,7 +14,7 @@ class _FIREQDriver(DefaultIP):
 
     bindto = []
 
-    def __init__(self, description):
+    def __init__(self, description: dict[str, Any]) -> None:
         """Initialize the FIREQ driver.
 
         :param description: Dictionary containing IP parameters and configuration
@@ -23,14 +25,14 @@ class _FIREQDriver(DefaultIP):
         self._axi_lite_interface_mmio = None
         self._debug_level = 0
 
-    def print_description(self):
+    def print_description(self) -> None:
         """Print the description of the IP.
 
         This method should be overridden by subclasses.
         """
         pass
 
-    def init_axi_full_interface(self, base_address, axi_depth):
+    def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface for this IP.
 
         :param base_address: Base address of the AXI Full interface
@@ -41,7 +43,7 @@ class _FIREQDriver(DefaultIP):
         if self._axi_full_interface_mmio is None:
             self._axi_full_interface_mmio = MMIO(base_address, axi_depth)
 
-    def init_axi_lite_interface(self, base_address, axi_depth):
+    def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface for this IP.
 
         :param base_address: Base address of the AXI Lite interface
@@ -52,7 +54,12 @@ class _FIREQDriver(DefaultIP):
         if self._axi_lite_interface_mmio is None:
             self._axi_lite_interface_mmio = MMIO(base_address, axi_depth)
 
-    def set_debug_level(self, level, axi_lite_file_handler, axi_full_file_handler):
+    def set_debug_level(
+        self,
+        level: int,
+        axi_lite_file_handler: TextIO,
+        axi_full_file_handler: TextIO | None,
+    ) -> int:
         """Set the level of debugging on the AXI interfaces.
 
         :param level: 0 for no debugging, 1 for file logging
@@ -92,7 +99,7 @@ class _DebugMMIO:
     transactions to a file.
     """
 
-    def __init__(self, replaces, debug_level, file):
+    def __init__(self, replaces: MMIO, debug_level: int, file: TextIO) -> None:
         """Initialize the DebugMMIO wrapper.
 
         :param replaces: MMIO object that it replaces
@@ -109,7 +116,7 @@ class _DebugMMIO:
         self.base_addr = self._replaces.base_addr
 
     @property
-    def replaces(self):
+    def replaces(self) -> MMIO:
         """Return the original MMIO object that this wrapper replaces.
 
         :return: The original MMIO object
@@ -117,7 +124,7 @@ class _DebugMMIO:
         """
         return self._replaces
 
-    def read(self, address):
+    def read(self, address: int) -> int:
         """Read a 32-bit unsigned value at a certain address.
 
         :param address: Byte aligned address
@@ -131,7 +138,7 @@ class _DebugMMIO:
             return 0
         return self._memory[address]
 
-    def write(self, address, data):
+    def write(self, address: int, data: int | bytes) -> None:
         """Write a 32-bit unsigned value (data) at a certain address.
 
         :param address: Byte aligned unsigned address
@@ -160,7 +167,7 @@ class _DebugMMIO:
                 raise ValueError("Data type must be int or bytes.")
 
 
-def _set_bit(value, pos, setvalue):
+def _set_bit(value: int, pos: int, setvalue: int) -> int:
     """Set the bit at index pos of value to setvalue.
 
     :param value: Input value to be manipulated
@@ -176,7 +183,7 @@ def _set_bit(value, pos, setvalue):
     return (value & ~(1 << pos)) | (bitvalue << pos)
 
 
-def _get_bit(value, pos):
+def _get_bit(value: int, pos: int) -> int:
     """Get the bit at position pos of argument value.
 
     :param value: Input value to extract bit from
@@ -189,7 +196,7 @@ def _get_bit(value, pos):
     return (value & (1 << pos)) >> pos
 
 
-def _set_bits(value, start, length, setvalue):
+def _set_bits(value: int, start: int, length: int, setvalue: int) -> int:
     """Set bits from start for a length equal to length to setvalue.
 
     :param value: Input value to set bits
@@ -208,7 +215,7 @@ def _set_bits(value, start, length, setvalue):
     return (value & ~mask) | safe_setvalue
 
 
-def _get_bits(value, start, length):
+def _get_bits(value: int, start: int, length: int) -> int:
     """Get a number of sequential bits from argument value.
 
     :param value: Input to extract bits
@@ -224,9 +231,8 @@ def _get_bits(value, start, length):
     return (value & mask) >> start
 
 
-def _compute_pinc_poff(frequency, phase, samplerate, phase_depth):
-    """Compute the phase increment and phase offset depending on the input frequency and
-    phase.
+def _compute_pinc_poff(frequency: float, phase: float, samplerate: float, phase_depth: int) -> tuple[int, int]:
+    """Compute the phase increment and phase offset.
 
     :param frequency: Frequency in Hz
     :type frequency: float

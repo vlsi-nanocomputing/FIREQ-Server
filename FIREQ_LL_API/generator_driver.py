@@ -1,3 +1,5 @@
+"""Low-level driver for the FIREQ generator IP."""
+
 import numpy as np
 
 from ._utils import (
@@ -13,12 +15,15 @@ __all__ = ["GeneratorDriver"]
 
 
 class GeneratorDriver(_FIREQDriver):
-    """Driver class for the generator IP.\n Provides methods to set up envelopes, pulse
-    sequences, readout pulse and modulation frequency and phase."""
+    """Driver class for the generator IP.
+
+    Provides methods to set up envelopes, pulse sequences, readout pulse, and
+    modulation frequency and phase.
+    """
 
     bindto = ["user.org:user:axisGeneratorIP:2.0"]
 
-    def __init__(self, description):
+    def __init__(self, description: dict[str, object]) -> None:
         """Initialize the GeneratorDriver.
 
         :param description: Dictionary containing IP parameters and configuration
@@ -81,7 +86,7 @@ class GeneratorDriver(_FIREQDriver):
         self.man_trig_sel = 28
         self.manual_trigger_pos = 31
 
-    def init_axi_full_interface(self, base_address: int, axi_depth: int):
+    def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface and reset the envelope dictionary.
 
         :param base_address: Base address of the AXI Full interface
@@ -93,7 +98,7 @@ class GeneratorDriver(_FIREQDriver):
         # reset envelope dictionary and memory
         self.reset_envelope_dict()
 
-    def init_axi_lite_interface(self, base_address: int, axi_depth: int):
+    def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface and delete the PYNQ-created MMIO object.
 
         :param base_address: Base address of the AXI Lite interface
@@ -105,7 +110,7 @@ class GeneratorDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def print_description(self):
+    def print_description(self) -> None:
         """Print a detailed description of the generator IP configuration parameters."""
         print(
             "sample_memory_address_width: "
@@ -155,12 +160,12 @@ class GeneratorDriver(_FIREQDriver):
             + ", width of lsfr seed and memory mapped FIFO entries (bits)"
         )
 
-    def reset_envelope_dict(self):
-        """Resets the cached information about the envelope memory.
+    def reset_envelope_dict(self) -> None:
+        """Reset the cached information about the envelope memory.
 
-        The actual memory is not modified by this function. \n Since resetting this
+        The actual memory is not modified by this function. Since resetting this
         memory invalidates the wave definition words, the wave memory cache is also
-        cleared
+        cleared.
         """
         self.envelope_memory_dict = {}
         self.envelope_memory_dict_reserved_names = []
@@ -180,9 +185,11 @@ class GeneratorDriver(_FIREQDriver):
         self.envelope_memory_dict_reserved_names.append("_RECTANGULAR")
         self.reset_wave_memory_dict()
 
-    def reset_wave_memory_dict(self):
-        """Resets the cached information about the wave memory and also clears the
-        generator wave memory."""
+    def reset_wave_memory_dict(self) -> None:
+        """Reset the cached information about the wave memory.
+
+        This also clears the generator wave memory.
+        """
         self.wave_memory_dict = {}
         self.wave_memory_dict_reserved_names = []
 
@@ -196,7 +203,7 @@ class GeneratorDriver(_FIREQDriver):
         ):
             self._axi_full_interface_mmio.write(address, 0)
 
-    def trigger_manually(self):
+    def trigger_manually(self) -> int:
         """Trigger the generator manually.
 
         :return: Error code
@@ -206,10 +213,10 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self.ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
         return 0
 
-    def set_trigger_channel(self, channel, ttype):
-        """Set the channel where the generator is listening for a trigger for the
-        readout and drive trigger types.\n Set the channel to 0 if you want to disable
-        external triggers.
+    def set_trigger_channel(self, channel: int, ttype: str) -> int:
+        """Set the channel where the generator listens for triggers.
+
+        Set the channel to 0 if you want to disable external triggers.
 
         :param channel: Channel number, 1 to trigger_channels
         :type channel: int
@@ -241,7 +248,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def get_trigger_channel(self, ttype):
+    def get_trigger_channel(self, ttype: str) -> int:
         """Get the trigger channel for the generator where triggers are received.
 
         :param ttype: trigger type: 'drive' or 'readout'
@@ -249,7 +256,6 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-
         if ttype == "drive":
             selector = 0
         elif ttype == "readout":
@@ -266,9 +272,8 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_drive_order_source(self, source):
-        """
-        set the source for the generator: lfsr or fifo
+    def set_drive_order_source(self, source: int) -> int:
+        """Set the source for the generator: lfsr or fifo.
 
         :param source: Source for wave, 1 for LFSR 0 for FIFO
         :type source: int
@@ -285,9 +290,8 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
         return 0
 
-    def get_drive_order_source(self):
-        """
-        get the source for the generator: lfsr or fifo
+    def get_drive_order_source(self) -> int:
+        """Get the source for the generator: lfsr or fifo.
 
         :return: Error code
         :rtype: int
@@ -300,7 +304,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_lfsr_seed(self, seed):
+    def set_lfsr_seed(self, seed: int) -> int:
         """Set the seed for lfsr.
 
         :param seed: Seed for LFSR
@@ -316,7 +320,7 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
         return 0
 
-    def get_lfsr_seed(self):
+    def get_lfsr_seed(self) -> int:
         """Get the seed for lfsr.
 
         :return: Error code
@@ -328,9 +332,11 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def _set_readout_pinc_poff(self, inc, off):
-        """Set readout phase increment and phase offset values, used to generate the
-        modulation carrier for waves on the readout output line.
+    def _set_readout_pinc_poff(self, inc: int, off: int) -> int:
+        """Set readout phase increment and phase offset values.
+
+        These values generate the modulation carrier for waves on the readout output
+        line.
 
         :param inc: Increment value for readout
         :type inc: int
@@ -351,7 +357,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def _get_readout_pinc_poff(self):
+    def _get_readout_pinc_poff(self) -> int:
         """Get readout phase increment and phase offset values.
 
         :return: Error code
@@ -371,9 +377,10 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def _set_drive_pinc(self, inc):
-        """Set drive phase increment value, used to generate the modulation carrier for
-        waves on the drive output line.
+    def _set_drive_pinc(self, inc: int) -> int:
+        """Set drive phase increment value.
+
+        This value generates the modulation carrier for waves on the drive output line.
 
         :param inc: Increment value for readout
         :type inc: int
@@ -387,7 +394,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def _get_drive_pinc(self):
+    def _get_drive_pinc(self) -> int:
         """Get drive phase increment value.
 
         :return: Error code
@@ -402,10 +409,11 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_manual_wave_destination_output_channel(self, destination):
-        """Set the destination of a manually generated wave. The wave to be generated is
-        the one set for readout but you can select if the manually generated wave should
-        output on the readout or drive line.
+    def set_manual_wave_destination_output_channel(self, destination: str) -> int:
+        """Set the destination of a manually generated wave.
+
+        The wave to be generated is the one set for readout but you can select if the
+        manually generated wave should output on the readout or drive line.
 
         :param destination: 'readout' or 'drive'
         :type destination: str
@@ -426,9 +434,8 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
         return 0
 
-    def get_manual_wave_destination_output_channel(self):
-        """Get the destination output line for the generator when triggered from the
-        manual trigger."""
+    def get_manual_wave_destination_output_channel(self) -> int:
+        """Get the destination output line for manual trigger."""
         dest = _get_bit(self._axi_lite_interface_mmio.read(self.ctrl * 4), self.man_trig_sel)
         if dest:
             print("Manual trigger destination is readout line")
@@ -436,7 +443,7 @@ class GeneratorDriver(_FIREQDriver):
             print("Manual trigger destination is drive line")
         return 0
 
-    def set_readout_dds_parameters(self, frequency: float, phase: float, dac_samplerate: int):
+    def set_readout_dds_parameters(self, frequency: float, phase: float, dac_samplerate: int) -> int:
         """Set frequency and phase for the readout carrier signal.
 
         :param frequency: Frequency of the carrier in MHz
@@ -460,7 +467,7 @@ class GeneratorDriver(_FIREQDriver):
         self._set_readout_pinc_poff(phase_parameters[0], phase_parameters[1])
         return 0
 
-    def set_drive_dds_parameters(self, frequency, dac_samplerate):
+    def set_drive_dds_parameters(self, frequency: float, dac_samplerate: int) -> int:
         """Set modulation frequency for the drive output channel.
 
         :param frequency: Frequency in MHz
@@ -490,14 +497,16 @@ class GeneratorDriver(_FIREQDriver):
         i_even: bool,
         q_even: bool,
         envelope_name: str,
-    ):
-        """
-        Write to the envelope memory (sample memory) a series of samples to be used to generate a wave. \n
-        An envelope description is cached and a name is associated to it. \n
-        Important note: symmetric waves should have an odd number of samples and only half of the samples
-        (including the center sample) should be passed to this function. \n
-        Warning: the values in the array should be representable in int16, if not they will be saturated
-        to the maximum or negative value (values must be within -2^15 and +2^15-1).
+    ) -> int:
+        """Write samples into envelope memory for wave generation.
+
+        An envelope description is cached and a name is associated to it. Symmetric
+        waves should have an odd number of samples and only half of the samples
+        (including the center sample) should be passed to this function.
+
+        Warning: values should be representable in int16, otherwise they will be
+        saturated to the maximum or minimum value (values must be within -2^15 and
+        +2^15-1).
 
         :param envelope_samples: complex array of samples, real and imaginary part used as I/Q values
         :type envelope_samples: complex int16 numpy array
@@ -589,11 +598,11 @@ class GeneratorDriver(_FIREQDriver):
 
     def create_wave_definition_word(
         self, envelope_name: str, duration: int, gain: float, switch_iq: bool, keep_last: bool = False
-    ):
-        """Function to generate a wave definition word, uses cached envelopes stored in
-        envelope memory to correctly generate a wave.\n For envelopes not marked for
-        interpolation, it is advised to set the duration input to zero, this way the
-        envelope's natural size is used instead.
+    ) -> int:
+        """Generate a wave definition word using cached envelopes.
+
+        For envelopes not marked for interpolation, it is advised to set the duration
+        input to zero, this way the envelope's natural size is used instead.
 
         :param envelope_name: Name of the envelope precedently stored in envelope memory
         :type envelope_name: str
@@ -650,35 +659,33 @@ class GeneratorDriver(_FIREQDriver):
             wavedef = wavedef | (1 << 121)
             real_duration = duration
             natural_envelope_duration = duration
-        else:
-            # NOTE (non-interpolated envelopes):
-            # In non-interpolated mode the read address increment is fixed (typically 1/NumberOfChannels),
-            # so the LUT is read sequentially and the waveform length is effectively bounded by the amount
-            # of samples stored in memory (natural_envelope_duration).
-            #
-            # Policy:
-            # - duration == 0  -> use natural_envelope_duration (recommended default)
-            # - duration < natural_envelope_duration -> allowed (truncates the envelope)
-            # - duration > natural_envelope_duration -> NOT allowed because it would read past the loaded data
-            #   (undefined samples). If keep_last is enabled, we clamp to natural_envelope_duration and rely on
-            #   KEEP_LAST for CW behavior instead of reading out-of-range data.
+        # NOTE (non-interpolated envelopes):
+        # In non-interpolated mode the read address increment is fixed (typically 1/NumberOfChannels),
+        # so the LUT is read sequentially and the waveform length is effectively bounded by the amount
+        # of samples stored in memory (natural_envelope_duration).
+        #
+        # Policy:
+        # - duration == 0  -> use natural_envelope_duration (recommended default)
+        # - duration < natural_envelope_duration -> allowed (truncates the envelope)
+        # - duration > natural_envelope_duration -> NOT allowed because it would read past the loaded data
+        #   (undefined samples). If keep_last is enabled, we clamp to natural_envelope_duration and rely on
+        #   KEEP_LAST for CW behavior instead of reading out-of-range data.
 
-            if envelope_def["is_interp"]:
-                natural_envelope_duration = envelope_def["size"] * (1 + envelope_def["is_sym"]) - 1
-                real_duration = natural_envelope_duration if (duration == 0) else duration
-            else:
-                natural_envelope_duration = envelope_def["size"] * self.number_of_channels
-                if duration == 0:
+        elif envelope_def["is_interp"]:
+            natural_envelope_duration = envelope_def["size"] * (1 + envelope_def["is_sym"]) - 1
+            real_duration = natural_envelope_duration if (duration == 0) else duration
+        else:
+            natural_envelope_duration = envelope_def["size"] * self.number_of_channels
+            if duration == 0:
+                real_duration = natural_envelope_duration
+            elif duration > natural_envelope_duration:
+                if keep_last:
                     real_duration = natural_envelope_duration
                 else:
-                    if duration > natural_envelope_duration:
-                        if keep_last:
-                            real_duration = natural_envelope_duration
-                        else:
-                            print("error, duration exceeds envelope length for non-interpolated envelope")
-                            return -3
-                    else:
-                        real_duration = duration
+                    print("error, duration exceeds envelope length for non-interpolated envelope")
+                    return -3
+            else:
+                real_duration = duration
 
         # set the keep_last bit (Bit 122)
         if keep_last:
@@ -775,9 +782,11 @@ class GeneratorDriver(_FIREQDriver):
 
         return wavedef
 
-    def add_wave_in_wave_memory(self, wave_definition: int, wave_name: str):
-        """Add a wave definition word in the wave memory, there are no checks on the
-        word so the it should only be generated with provided functions.
+    def add_wave_in_wave_memory(self, wave_definition: int, wave_name: str) -> int:
+        """Add a wave definition word to the wave memory.
+
+        There are no checks on the word so it should only be generated with provided
+        functions.
 
         :param wave_definition: Wave definition word, low level definition of a wave
         :type wave_definition: int
@@ -809,16 +818,14 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def add_wave_to_drive_wave_sequence(self, index: int, wave_name: str):
-        """Write to memory mapped fifo the address of the wave memory containing the
-        wave definiton defined by wave_name.
+    def add_wave_to_drive_wave_sequence(self, index: int, wave_name: str) -> int:
+        """Write to memory mapped FIFO the address of a wave.
 
         :param index: Sequence index, the first one is 1
         :type index: int
         :param wave_name: Name of the wave definition previously added to wave memory
         :type wave_name: str
         """
-
         if index < 1 or index > self.memory_mapped_fifo_segment_depth // 4:
             print("error, the index is out of range")
             return -3
@@ -840,10 +847,10 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_full_interface_mmio.write(actual_address, wave_addr)
         return 0
 
-    def write_readout_wave(self, wave_definition: int):
-        """
-        Write the readout wave definition to the IP.\n
-        This is the wave definition that will be used for manual and readout waves.\n
+    def write_readout_wave(self, wave_definition: int) -> int | None:
+        """Write the readout wave definition to the IP.
+
+        This is the wave definition that will be used for manual and readout waves.
         HINT: for manual waves, you can set the output DAC (readout or drive channel)
         with the "trigger_manuallyDestination" function.
 
@@ -858,9 +865,12 @@ class GeneratorDriver(_FIREQDriver):
         for i in range(4):
             self._axi_lite_interface_mmio.write((self.readout_wave_l + i) * 4, (wave_definition >> i * 32) & 0xFFFFFFFF)
 
-    def replace_wave_in_wave_memory(self, wave_definition: int, old_wave_name: str, new_wave_name: str = None):
-        """Replace a certain wave definition word with another one. Optionally rename
-        the wave key in the local cache dictionary.
+    def replace_wave_in_wave_memory(
+        self, wave_definition: int, old_wave_name: str, new_wave_name: str | None = None
+    ) -> int:
+        """Replace a wave definition word with another one.
+
+        Optionally rename the wave key in the local cache dictionary.
 
         :param wave_definition: Wave definition word for the new wave (uint128)
         :param old_wave_name: Existing wave name to replace

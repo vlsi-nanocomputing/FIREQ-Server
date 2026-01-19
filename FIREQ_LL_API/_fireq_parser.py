@@ -1,4 +1,7 @@
+"""Parse FIREQ .hwh files for connectivity and memory mappings."""
+
 import xml.etree.ElementTree as ET
+from typing import Any
 
 __all__ = ["FireqParser"]
 
@@ -14,10 +17,9 @@ PASS_THROUGH_MODULES = [
 
 
 class FireqParser:
-    """FIREQ parser class, used to parse the .hwh file to retrieve module connectivity
-    and memory mappings."""
+    """Parse .hwh files to retrieve module connectivity and memory mappings."""
 
-    def __init__(self, hwh_file: str):
+    def __init__(self, hwh_file: str) -> None:
         """Initialize the FIREQ parser with a hardware description file.
 
         :param hwh_file: Path to the .hwh (Xilinx Hardware Handoff) file
@@ -32,7 +34,7 @@ class FireqParser:
         # find all modules (IPs) in the design
         self._modules = self._root.find("MODULES")
 
-    def get_module(self, module_name: str):
+    def get_module(self, module_name: str) -> ET.Element | None:
         """Get the xml description of the IP named by module_name.
 
         :param module_name: IP instance name given in vivado block diagram
@@ -40,7 +42,6 @@ class FireqParser:
         :return: xml element defining the IP or None if no ips were found
         :rtype: xml.etree.ElementTree.Element | None
         """
-
         # find the module
         for module in self._modules:
             if module.tag == "MODULE" and module.attrib["INSTANCE"] == module_name:
@@ -49,10 +50,11 @@ class FireqParser:
         # return none if module not found
         return None
 
-    def get_bus_interfaces(self, module: ET.Element):
-        """Get a dictionary of the bus interfaces connected to the module.\n Returns a
-        dictionary where each key is the bus name and the entry is a dictionary with the
-        rest of the xml elements.
+    def get_bus_interfaces(self, module: ET.Element) -> dict[str, dict[str, str]]:
+        """Get the bus interfaces connected to the module.
+
+        Returns a dictionary where each key is the bus name and the entry is a
+        dictionary with the rest of the xml elements.
 
         :param module: Child object of xml file with tag MODULE
         :type module: xml.etree.ElementTree.Element
@@ -78,11 +80,12 @@ class FireqParser:
         #    VLNV: xilinx.com:interface:aximm:1.0 for AXI4 and xilinx.com:interface:axis:1.0 for AXI STREAM
         return bus_interface_dict
 
-    def get_connectivity(self, master_module: ET.Element, module_list: list):
-        """Get the connectivity path of the master interfaces of master module.\n The
-        return is a dictionary that encodes the connections in a graph like manner,
-        where each node is a module and the connections are defined by the axi bus
-        names.
+    def get_connectivity(self, master_module: ET.Element, module_list: list[ET.Element]) -> dict[str, Any]:
+        """Get the connectivity path of the master interfaces.
+
+        The return is a dictionary that encodes the connections in a graph-like
+        manner, where each node is a module and the connections are defined by the
+        AXI bus names.
 
         :param master_module: Module to check connectivity from
         :type master_module: xml.etree.ElementTree.Element
@@ -107,32 +110,31 @@ class FireqParser:
                 slave_bus_interfaces = self.get_bus_interfaces(slave_module)
                 if bus_name not in slave_bus_interfaces or slave_module == master_module:
                     continue
+                # if it's present in this dictionary it must be a slave module
+                elif any(slave_module.attrib["VLNV"].startswith(item) for item in PASS_THROUGH_MODULES):
+                    child_node = self.get_connectivity(slave_module, module_list)
+                    child_node["BUS_M/S"] = (
+                        master_bus_interfaces[bus_name]["NAME"],
+                        slave_bus_interfaces[bus_name]["NAME"],
+                    )
+                    connectivity_graph["CHILDREN"].append(child_node)
+                    break
                 else:
-                    # if it's present in this dictionary it must be a slave module
-                    if any(slave_module.attrib["VLNV"].startswith(item) for item in PASS_THROUGH_MODULES):
-                        child_node = self.get_connectivity(slave_module, module_list)
-                        child_node["BUS_M/S"] = (
-                            master_bus_interfaces[bus_name]["NAME"],
-                            slave_bus_interfaces[bus_name]["NAME"],
-                        )
-                        connectivity_graph["CHILDREN"].append(child_node)
-                        break
-                    else:
-                        connectivity_graph["CHILDREN"].append(
-                            {
-                                "NODE": slave_module.attrib["INSTANCE"],
-                                "BUS_M/S": (
-                                    master_bus_interfaces[bus_name]["NAME"],
-                                    slave_bus_interfaces[bus_name]["NAME"],
-                                ),
-                            }
-                        )
-                        break
+                    connectivity_graph["CHILDREN"].append(
+                        {
+                            "NODE": slave_module.attrib["INSTANCE"],
+                            "BUS_M/S": (
+                                master_bus_interfaces[bus_name]["NAME"],
+                                slave_bus_interfaces[bus_name]["NAME"],
+                            ),
+                        }
+                    )
+                    break
 
         return connectivity_graph
 
-    def get_address_mapping(self):
-        """Gets the AXI Memory mapping of the PS/PL master interface.
+    def get_address_mapping(self) -> dict[str, list[dict[str, str]]] | None:
+        """Get the AXI Memory mapping of the PS/PL master interface.
 
         :return: Dict describing the mapping for ips
         :rtype: dict | None
@@ -153,9 +155,10 @@ class FireqParser:
                 # return the dictionary with the memory mapping
                 return address_mapping_dict
 
-    def get_parameter(self, module_name: str, param_name: str):
-        """Return the VALUE of a PARAMETER with NAME=param_name for module
-        INSTANCE=module_name.
+    def get_parameter(self, module_name: str, param_name: str) -> str | None:
+        """Return the VALUE of a PARAMETER for the given module.
+
+        The module is identified by INSTANCE=module_name.
 
         :param module_name: IP instance name given in vivado block diagram
         :type module_name: str

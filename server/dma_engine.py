@@ -1,5 +1,5 @@
 # file: fireq-utils/server/dma_engine.py
-"""
+"""High-level DMA acquisition utilities for the FIREQ server.
 
 Purpose
 -------
@@ -59,7 +59,7 @@ hardware configuration without ending the sweep and re-arming through the full p
 import logging
 import signal  # for timeout handling
 import time
-from typing import Any, Dict, Literal, Optional
+from typing import Literal, NoReturn
 
 import numpy as np
 from pynq import allocate
@@ -68,8 +68,8 @@ from .exceptions import DMAError, DMATimeoutError
 
 
 class AcquisitionEngine:
-    """
-    High-level manager for DMA acquisitions.
+    """High-level manager for DMA acquisitions.
+
     The intended call sequence is:
 
     - `arm_acquisition`:
@@ -102,25 +102,28 @@ class AcquisitionEngine:
     # Future-proof in case of multiple DMA in the same PL design
 
     def __init__(
-        self, dma: Any, switch: Any, logger: Optional[logging.Logger] = None, hw_specs: Dict[str, Any] = None
+        self,
+        dma: object,
+        switch: object,
+        logger: logging.Logger | None = None,
+        hw_specs: dict[str, object] | None = None,
     ) -> None:
         """Construct an acquisition engine bound to a specific DMA + stream switch.
 
         :param dma: PYNQ DMA instance
-        :type dma: Any
+        :type dma: object
         :param switch: AXI Stream Switch IP used to route the selected ADC/mode stream
             into the DMA.
-        :type switch: Any
+        :type switch: object
         :param logger: Optional logger. If not provided, a module logger is used.
         :type logger: Optional[logging.Logger]
         :param hw_specs: Hardware specification dictionary describing acquisition IP
             properties. This is treated as the "single source of truth" for buffer
             sizing and limits.
-        :type hw_specs: Dict[str, Any]
+        :type hw_specs: Dict[str, object]
         :raises DMAError: If the DMA channel cannot be started (indicates invalid
             overlay wiring or a broken DMA object).
         """
-
         self.dma = dma
         self.switch = switch
         self.logger = logger or logging.getLogger(__name__)
@@ -167,7 +170,6 @@ class AcquisitionEngine:
         restore forward progress and prevent subsequent acquisitions from
         reusing a corrupted DMA state.
         """
-
         try:
             # This is not trusted as a recovery mechanism because
             # some stuck conditions manifest as hangs inside PYNQ control paths.
@@ -194,7 +196,6 @@ class AcquisitionEngine:
         failures. Errors are logged but swallowed to prioritize cleanup
         completion over strict exception propagation.
         """
-
         for idx, buf in self._persistent_buffers.items():
             if hasattr(buf, "freebuffer"):
                 try:
@@ -211,8 +212,7 @@ class AcquisitionEngine:
         samp_per_shot: int,
         adc_index: int,
     ) -> int:
-        """Compute the maximum number of shots that can fit in the acquisition
-        FIFO/buffer.
+        """Compute the maximum number of shots that can fit in the acquisition FIFO/buffer.
 
         This is a hardware-capacity computation based on the FIFO depth/width
         described in ``hw_specs``. It intentionally does not consider
@@ -261,7 +261,7 @@ class AcquisitionEngine:
             bits_per_shot = samp_per_shot * parallelism * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Free resources in case the object is destroyed."""
         self.free_resources()
 
@@ -275,9 +275,8 @@ class AcquisitionEngine:
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
-    ) -> Any:
-        """
-        Arm a DMA acquisition: validate, route, allocate/reuse buffer, and start DMA.
+    ) -> object:
+        """Arm a DMA acquisition: validate, route, allocate/reuse buffer, and start DMA.
 
         This method is intentionally split into two paths:
 
@@ -303,12 +302,11 @@ class AcquisitionEngine:
         :type adc_index: int
         :return:
             The allocated (or reused) DMA buffer passed to ``recvchannel.transfer()``.
-        :rtype: Any
+        :rtype: object
 
         :raises DMAError:
             On invalid sizes, invalid mode, or inability to start DMA transfer.
         """
-
         # "Fast path "is correct if the caller keeps mode and sizing invariants stable
         # across iterations.
         if self._sweep_prepared and self._sweep_mode == mode:
@@ -318,15 +316,14 @@ class AcquisitionEngine:
 
     def retrieve_acquisition(
         self,
-        buffer: Any,
+        buffer: object,
         mode: str,
         shots: int,
         samp_per_shot: int,
         adc_index: int,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> np.ndarray:
-        """Wait for DMA completion, apply timeout protection, and parse the acquired
-        data.
+        """Wait for DMA completion, apply timeout protection, and parse the acquired data.
 
         Hardware DMA can hang (commonly: missing TLAST, upstream stream
         starvation). In those cases, waiting indefinitely would deadlock
@@ -341,7 +338,7 @@ class AcquisitionEngine:
 
         :param buffer:
             DMA destination buffer previously returned by :meth:`arm_acquisition`.
-        :type buffer: Any
+        :type buffer: object
         :param mode:
             Acquisition mode used for parsing.
         :type mode: str
@@ -366,9 +363,8 @@ class AcquisitionEngine:
         :raises DMAError:
             For other DMA failures or parsing/validation errors.
         """
-
         # --- Setup optional timeout via signals (UNIX only) ---
-        timeout_sec: Optional[float] = None
+        timeout_sec: float | None = None
         old_handler = None
         self.last_dma_wait_s = 0.0
         # NOTE: _hash_sigalrm variable is only meant
@@ -380,7 +376,7 @@ class AcquisitionEngine:
             if has_sigalrm:
                 timeout_sec = float(timeout)
 
-                def _timeout_handler(signum, frame):
+                def _timeout_handler(signum: int, frame: object) -> NoReturn:
                     raise TimeoutError("DMA wait timeout")
 
                 # Save old handler, set new one
@@ -448,10 +444,8 @@ class AcquisitionEngine:
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
-    ) -> Any:
-        """
-        Conservative arm path: validate capacity, check DMA state, route
-        stream, allocate buffer, start DMA.
+    ) -> object:
+        """Conservative arm path: validate capacity, check DMA state, route stream, allocate buffer, start DMA.
 
         This method is intentionally strict. The validation step is
         performed *before* routing/starting DMA so that configuration errors
@@ -461,7 +455,6 @@ class AcquisitionEngine:
             If parameters are invalid, capacity is exceeded, DMA is not
             startable, or transfer fails.
         """
-
         if shots_per_exp < 1:
             raise DMAError("shots_per_exp must be >= 1")
 
@@ -509,8 +502,8 @@ class AcquisitionEngine:
         self,
         mode: Literal["raw", "decimated", "accumulated"],
     ) -> None:
-        """
-        Enable sweep mode optimizations for repeated acquisitions.
+        """Enable sweep mode optimizations for repeated acquisitions.
+
         Sweep mode is a performance feature: repeated iterations share the same
         acquisition configuration (mode, duration limits, buffer sizing).
         Reuse persistent buffers and skip capacity validation on each arm.
@@ -528,7 +521,6 @@ class AcquisitionEngine:
         re-arm via the full path to avoid mis-sized buffers or mis-parsed
         data.
         """
-
         self._sweep_prepared = True
         self._sweep_mode = mode
         self.logger.debug(f"Sweep prepared: mode={mode}")
@@ -542,7 +534,7 @@ class AcquisitionEngine:
         self,
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
-    ) -> Any:
+    ) -> object:
         """Optimized sweep arm path.
 
         Differences vs full path:
@@ -559,7 +551,6 @@ class AcquisitionEngine:
         If the request grows beyond the cached buffer size, we allocate a
         larger one (safe monotonic growth).
         """
-
         # 1. Routing (always needed - changes per ADC)
         self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
 
@@ -592,7 +583,6 @@ class AcquisitionEngine:
         :raises DMAError:
             If the channel cannot be started.
         """
-
         ch = self.dma.recvchannel
         try:
             # PYNQ implementations differ: some expose a `.running` property, others do not.
@@ -626,7 +616,6 @@ class AcquisitionEngine:
         :raises DMAError:
             If ``mode`` is unknown.
         """
-
         # Buffer sizing uses hw_specs as the authoritative interface contract
         # between Python and FPGA firmware. Any mismatch here is a
         # versioning/configuration bug.
@@ -676,7 +665,6 @@ class AcquisitionEngine:
             If MMIO writes fail (indicates broken overlay wiring or IP
             address mismatch).
         """
-
         if not self.switch:
             return
 
@@ -694,14 +682,14 @@ class AcquisitionEngine:
         except Exception as e:
             raise DMAError(f"AXI switch routing failed: {e}") from e
 
-    def _parse(self, buffer: Any, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> np.ndarray:
-        """Converts the raw DMA buffer into a complex numpy array.
+    def _parse(self, buffer: object, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> np.ndarray:
+        """Convert the raw DMA buffer into a complex numpy array.
 
         This method processes raw data retrieved from the DMA, handling different
         firmware data formats (decimated/raw vs accumulated).
 
         :param buffer: The raw data buffer containing DMA samples.
-        :type buffer: Any
+        :type buffer: object
         :param mode: The acquisition mode ('decimated', 'raw', or 'accumulated').
         :type mode: str
         :param shots: Number of acquisition shots captured.
@@ -716,8 +704,8 @@ class AcquisitionEngine:
         """
         try:
             parallelism = int(self.hw_specs["acquisitions"][adc_index]["parallelism"])
-        except (KeyError, ValueError, TypeError):
-            raise DMAError(f"Cannot determine parallelism for ADC {adc_index} from hw_specs.")
+        except (KeyError, ValueError, TypeError) as err:
+            raise DMAError(f"Cannot determine parallelism for ADC {adc_index} from hw_specs.") from err
 
         # Parsing begins by interpreting the DMA payload as uint32 words.
         # The firmware exports word-aligned samples, and using uint32
@@ -817,7 +805,6 @@ class AcquisitionEngine:
         :raises DMAError:
             On unrecoverable reset failures.
         """
-
         self.logger.warning("Initiating DMA S2MM Hard Reset Sequence...")
         mmio = self.dma.mmio
 
@@ -877,8 +864,7 @@ class AcquisitionEngine:
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
     ) -> None:
-        """Validate that the requested acquisition fits in the FPGA-side buffering
-        capacity.
+        """Validate that the requested acquisition fits in the FPGA-side buffering capacity.
 
         This check is performed in *bits* using FIFO depth/width taken from
         ``hw_specs``. It prevents silent truncation and protects against
@@ -893,7 +879,6 @@ class AcquisitionEngine:
         :raises DMAError:
             If the request exceeds capacity or if the mode is unknown.
         """
-
         acq_spec = self.hw_specs["acquisitions"][adc_index]
 
         # --- 1. Retrieve Hardware FIFO Capacity from hw_specs ---
@@ -979,7 +964,7 @@ class AcquisitionEngine:
                     f"{hint}"
                 )
 
-    def _get_or_allocate_buffer(self, adc_index: int, total_words: int) -> Any:
+    def _get_or_allocate_buffer(self, adc_index: int, total_words: int) -> object:
         """Return a persistent DMA buffer for the given ADC, allocating if necessary.
 
         Performance
@@ -1000,9 +985,8 @@ class AcquisitionEngine:
         :param total_words: Required buffer length in 32-bit words.
         :type total_words: int
         :return: A PYNQ-allocated buffer suitable for DMA reception.
-        :rtype: Any
+        :rtype: object
         """
-
         existing = self._persistent_buffers.get(adc_index)
 
         if existing is not None and existing.shape[0] >= total_words:

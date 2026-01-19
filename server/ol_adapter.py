@@ -1,5 +1,6 @@
 # file: fireq-utils/server/ol_adapter.py
-"""
+"""Server-facing adapter layer for FIREQ hardware.
+
 fireq_utils.server.ol_adapter
 =====================================
 
@@ -33,11 +34,9 @@ Limitations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Literal, Optional, Tuple, TypedDict
+from typing import Literal, TypedDict
 
 import numpy as np
-
-from FIREQ_LL_API import fireq_soc
 
 from .dma_engine import AcquisitionEngine
 from .exceptions import ConfigurationError, DriverError, HardwareStateError
@@ -53,7 +52,7 @@ class Modulation(TypedDict):
     """
 
     frequency_mhz: float
-    phase: Optional[float]
+    phase: float | None
 
 
 class TriggerCommand(TypedDict):
@@ -92,7 +91,7 @@ class EnvelopeSpec(TypedDict):
     is_symmetric: bool
     i_even: bool
     q_even: bool
-    samples_iq: List[List[float]]
+    samples_iq: list[list[float]]
 
 
 # WAVE TYPES: regular waves vs virtual Z gates
@@ -145,7 +144,7 @@ class WaveEntry:
     vz_phase_rad: float = 0.0
 
     # --- compiled outcome ---
-    wdw: Optional[int] = None
+    wdw: int | None = None
 
 
 def _same_spec(a: WaveEntry, b: WaveEntry) -> bool:
@@ -178,19 +177,18 @@ def _same_spec(a: WaveEntry, b: WaveEntry) -> bool:
 
 
 def handle_error_result(
-    result: Any,
+    result: object,
     *,  # next methods MUST be specified when the function is used
     operation: str,
     driver_name: str,
     logger: logging.Logger,
     config_error: bool = False,
-    hint: Optional[str] = None,
-    error_hints: Optional[Dict[tuple, str]] = None,
-    error_exc: Optional[Dict[tuple, type]] = None,
-) -> Any:
-    """
-    Normalize FIREQ low-level driver return codes into Python exceptions.
-    ----------------
+    hint: str | None = None,
+    error_hints: dict[tuple, str] | None = None,
+    error_exc: dict[tuple, type[Exception]] | None = None,
+) -> object:
+    """Normalize FIREQ low-level driver return codes into Python exceptions.
+
     Low-level FIREQ drivers return integer error codes instead of raising
     exceptions. This function centralizes the translation logic to:
 
@@ -210,7 +208,7 @@ def handle_error_result(
     - Unknown error codes fail fast with a generic DriverError.
 
     :param result: Return value from a driver method. Negative integers indicate errors.
-    :type result: Any
+    :type result: object
     :param operation: Name of the operation/method for error reporting.
     :type operation: str
     :param driver_name: Name of the driver class.
@@ -224,9 +222,9 @@ def handle_error_result(
     :param error_hints: Mapping of (driver, op, code) to specific hint strings.
     :type error_hints: Optional[Dict[tuple, str]]
     :param error_exc: Mapping of (driver, op, code) to specific Exception classes.
-    :type error_exc: Optional[Dict[tuple, type]]
+    :type error_exc: Optional[Dict[tuple, type[Exception]]]
     :return: The original result if non-negative.
-    :rtype: Any
+    :rtype: object
     :raises ConfigurationError: If result < 0 and config_error is True.
     :raises DriverError: If result < 0 and config_error is False.
     """
@@ -300,7 +298,7 @@ class OverlayAdapter:
 
     # ERROR HINTS
     # user-friendly hints for common negative codes
-    _ERROR_HINTS: Dict[tuple, str] = {
+    _ERROR_HINTS: dict[tuple, str] = {
         ("GeneratorDriver", "add_envelope_to_envelope_memory", -3): (
             "Check: samples must be complex (I+jQ), size>=2, "
             "non-interp size multiple of NumberOfChannels, name not already used."
@@ -330,7 +328,7 @@ class OverlayAdapter:
         ),
     }
 
-    def __init__(self, ol: fireq_soc, *, logger: Optional[logging.Logger] = None):
+    def __init__(self, ol: object, *, logger: logging.Logger | None = None) -> None:
         """Initialize the High-Level Adapter.
 
         :param ol: The low-level overlay driver instance.
@@ -355,11 +353,11 @@ class OverlayAdapter:
 
         # per-generator caches
         # Create a memory of the compiled WDW. Each wdw is accessible via the wave_id as key
-        self._wave_store: Dict[int, Dict[str, WaveEntry]] = {}  # gen_index -> waves = { wave_id:str , WaveEntry]}
+        self._wave_store: dict[int, dict[str, WaveEntry]] = {}  # gen_index -> waves = { wave_id:str , WaveEntry]}
         # Create a memory of the last used experiment
-        self._last_fifo: Dict[int, List[str]] = {}  # gen_index -> last programmed FIFO: [wdw0, wdw1, ...]
+        self._last_fifo: dict[int, list[str]] = {}  # gen_index -> last programmed FIFO: [wdw0, wdw1, ...]
         # Create a memory for readout waves (one per generator)
-        self._readout_wave_store: Dict[int, WaveEntry] = {}  # gen_index -> current readout WaveEntry
+        self._readout_wave_store: dict[int, WaveEntry] = {}  # gen_index -> current readout WaveEntry
 
         # Timing for statistics (fpga_active_ms is DMA wait time proxy).
         self.last_timing_stats = {"sw_overhead_ms": 0.0, "fpga_active_ms": 0.0}
@@ -368,7 +366,7 @@ class OverlayAdapter:
     # ------------------------------------------------------------
     # Pass-through: everything not defined here goes to self.ol
     # ------------------------------------------------------------
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> object:
         """Delegate attribute access to the underlying low-level overlay driver.
 
         This method implements the Proxy pattern, allowing the adapter to transparently
@@ -381,7 +379,7 @@ class OverlayAdapter:
         :param name: The name of the attribute to retrieve.
         :type name: str
         :return: The attribute value from the low-level driver.
-        :rtype: Any
+        :rtype: object
         :raises AttributeError: If the attribute is not found in either the adapter or the underlying driver.
         """
         return getattr(self.ol, name)
@@ -391,31 +389,38 @@ class OverlayAdapter:
     # ------------------------------------------------------------
     def _call(
         self,
-        result: Any,
+        result: object,
         *,
         operation: str,
         driver_name: str,
         config_error: bool = False,
-        hint: Optional[str] = None,
-    ) -> Any:
+        hint: str | None = None,
+    ) -> object:
         """Uniform wrapper for low-level driver calls with centralized error handling.
 
         This method acts as a middleware that intercepts the integer return codes from
         the Low-Level API. It standardizes logging, injects diagnostic hints, and
         converts error codes into semantic Python exceptions.
 
-        :param result: The raw return value from the low-level driver method (typically an integer status code).  # noqa: E501
-        :type result: Any
-        :param operation: The name of the specific operation being performed (used for logging context).
+        :param result: Raw return value from the low-level driver method (typically an
+            integer status code).
+        :type result: object
+        :param operation: The name of the specific operation being performed (used for
+            logging context).
         :type operation: str
-        :param driver_name: The name of the low-level driver class (used for logging context).
+        :param driver_name: The name of the low-level driver class (used for logging
+            context).
         :type driver_name: str
-        :param config_error: Strategy flag. If True, maps failures to ``ConfigurationError`` (invalid user input). If False, maps failures to ``DriverError`` (hardware/runtime failure).  # noqa: E501
+        :param config_error: Strategy flag. If True, maps failures to
+            ``ConfigurationError`` (invalid user input). If False, maps failures to
+            ``DriverError`` (hardware/runtime failure).
         :type config_error: bool
-        :param hint: An explicit diagnostic hint to append to the error message if the call fails, overriding default lookups.  # noqa: E501
+        :param hint: An explicit diagnostic hint to append to the error message if the
+            call fails, overriding default lookups.
         :type hint: Optional[str]
-        :return: The original ``result`` passed through unchanged if it indicates success (non-negative).
-        :rtype: Any
+        :return: The original ``result`` passed through unchanged if it indicates
+            success (non-negative).
+        :rtype: object
         :raises ConfigurationError: If the result is negative and ``config_error`` is True.
         :raises DriverError: If the result is negative and ``config_error`` is False.
         """
@@ -430,8 +435,8 @@ class OverlayAdapter:
             error_exc=None,
         )
 
-    def _get_gen(self, gen_index: int):
-        """Helper to safely retrieve the low-level driver for a specific generator.
+    def _get_gen(self, gen_index: int) -> object:
+        """Retrieve the low-level driver for a specific generator.
 
         Wraps the list access to ensure that invalid indices raise a high-level
         configuration error rather than a generic Python lookup error.
@@ -439,7 +444,7 @@ class OverlayAdapter:
         :param gen_index: Index of the target generator.
         :type gen_index: int
         :return: The low-level generator driver instance.
-        :rtype: Any
+        :rtype: object
         :raises ConfigurationError: If the index is out of bounds or invalid.
         """
         try:
@@ -447,9 +452,8 @@ class OverlayAdapter:
         except Exception as e:
             raise ConfigurationError(f"Invalid gen_index={gen_index}") from e
 
-    def _get_acq(self, acq_index: int):
-        """Helper to safely retrieve the low-level driver for a specific acquisition
-        unit.
+    def _get_acq(self, acq_index: int) -> object:
+        """Retrieve the low-level driver for a specific acquisition unit.
 
         Wraps the list access to ensure that invalid indices raise a high-level
         configuration error rather than a generic Python lookup error.
@@ -457,7 +461,7 @@ class OverlayAdapter:
         :param acq_index: Index of the target acquisition unit.
         :type acq_index: int
         :return: The low-level acquisition driver instance.
-        :rtype: Any
+        :rtype: object
         :raises ConfigurationError: If the index is out of bounds or invalid.
         """
         try:
@@ -465,14 +469,14 @@ class OverlayAdapter:
         except Exception as e:
             raise ConfigurationError(f"Invalid acq_index={acq_index}") from e
 
-    def _get_trig(self):
-        """Helper to safely retrieve the low-level Trigger Generator driver.
+    def _get_trig(self) -> object:
+        """Retrieve the low-level Trigger Generator driver.
 
         Validates the existence of the trigger IP in the current overlay configuration
         before returning it.
 
         :return: The low-level trigger driver instance.
-        :rtype: Any
+        :rtype: object
         :raises HardwareStateError: If the TriggerGenerator IP is missing from the
             overlay.
         """
@@ -482,8 +486,7 @@ class OverlayAdapter:
         return t
 
     def _dac_sr_mhz(self) -> float:
-        """Retrieve the DAC sampling rate from hardware specifications and convert it to
-        MHz.
+        """Retrieve the DAC sampling rate from hardware specifications and convert it to MHz.
 
         :return: The DAC sampling rate in MHz.
         :rtype: float
@@ -491,8 +494,7 @@ class OverlayAdapter:
         return float(self.ol.hw_specs["summary"]["dac_sr_hz"]) / 1e6
 
     def _adc_sr_mhz(self) -> float:
-        """Retrieve the ADC sampling rate from hardware specifications and convert it to
-        MHz.
+        """Retrieve the ADC sampling rate from hardware specifications and convert it to MHz.
 
         :return: The ADC sampling rate in MHz.
         :rtype: float
@@ -514,12 +516,11 @@ class OverlayAdapter:
         :raises ConfigurationError: If the WDW is not found, ambiguous, or inconsistent
             with LL state.
         """
-
         gen = self._get_gen(gen_index)
-        cache: Dict[str, WaveEntry] = self._get_wave_cache(gen_index)
+        cache: dict[str, WaveEntry] = self._get_wave_cache(gen_index)
 
         # find wave_ids whose cached WDW matches (skip entries not compiled yet: wdw=None)
-        matches: List[str] = [
+        matches: list[str] = [
             wave_id for wave_id, entry in cache.items() if entry.wdw is not None and (int(entry.wdw) == int(wdw_int))
         ]
 
@@ -545,9 +546,8 @@ class OverlayAdapter:
 
         return wave_id
 
-    def _iq_float_to_cint16(self, samples_iq, sample_bits: int) -> np.ndarray:
-        """Convert user-space floating-point IQ samples into fixed-point complex int16
-        format.
+    def _iq_float_to_cint16(self, samples_iq: list[list[float]] | np.ndarray, sample_bits: int) -> np.ndarray:
+        """Convert user-space floating-point IQ samples into fixed-point complex int16 format.
 
         This helper performs the necessary quantization for the FPGA, ensuring signal
         integrity via:
@@ -567,7 +567,6 @@ class OverlayAdapter:
         :return: A numpy array of complex16 numbers ready for hardware upload.
         :rtype: np.ndarray
         """
-
         vmax = (1 << (sample_bits - 1)) - 1
 
         # Fast path for binary input (numpy float32 arrays)
@@ -614,7 +613,7 @@ class OverlayAdapter:
     # Macro command G0: helpers for cache
     # ------------------------------------------------------------
 
-    def get_wave_cache(self, gen_index: int) -> Dict[str, WaveEntry]:
+    def get_wave_cache(self, gen_index: int) -> dict[str, WaveEntry]:
         """Retrieve the High-Level wave cache for a specific generator.
 
         This method employs lazy initialization: if the cache for the requested
@@ -631,9 +630,8 @@ class OverlayAdapter:
             self._wave_store[gen_index] = cache
         return cache
 
-    def get_envelope_names(self, gen_index: int) -> List[str]:
-        """Retrieve the list of envelope names currently stored in the generator's
-        memory.
+    def get_envelope_names(self, gen_index: int) -> list[str]:
+        """Retrieve the list of envelope names currently stored in the generator's memory.
 
         This method provides read-only inspection of the Low-Level (LL) driver state,
         specifically querying the keys present in the internal "EnvelopeMemoryDict".
@@ -653,12 +651,10 @@ class OverlayAdapter:
         self,
         *,
         gen_index: int,
-        envelopes: List[EnvelopeSpec],
+        envelopes: list[EnvelopeSpec],
         auto_pad_noninterp: bool = True,
     ) -> dict:
-        """
-        Upload multiple envelopes into generator envelope memory with per-envelope
-        validation and partial failure isolation.
+        """Upload multiple envelopes into generator envelope memory with per-envelope validation.
 
         Design choices
         --------------
@@ -687,15 +683,14 @@ class OverlayAdapter:
             failed envelope names.
         :rtype: dict
         """
-
         self.logger.info(
             "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s", gen_index, len(envelopes), auto_pad_noninterp
         )
 
         gen = self._get_gen(gen_index)
-        loaded: List[str] = []
-        skipped: List[str] = []
-        failed: List[dict] = []
+        loaded: list[str] = []
+        skipped: list[str] = []
+        failed: list[dict] = []
 
         env_cache = getattr(gen, "EnvelopeMemoryDict", {})
 
@@ -771,9 +766,8 @@ class OverlayAdapter:
     # ------------------------------------------------------------
     # Macro command G2: compile_waves
     # ------------------------------------------------------------
-    def compile_waves(self, *, gen_index: int, waves: List[dict], replace: bool) -> dict:
-        """Compile high-level wave definitions into hardware Wave Definition Words
-        (WDW).
+    def compile_waves(self, *, gen_index: int, waves: list[dict], replace: bool) -> dict:
+        """Compile high-level wave definitions into hardware Wave Definition Words (WDW).
 
         Handles 'env' (Envelope) and 'vz' (Virtual-Z) wave types. Supports caching to
         skip re-compilation of identical specifications.
@@ -798,7 +792,7 @@ class OverlayAdapter:
 
         gen = self._get_gen(gen_index)
         out, replaced, skipped, failed = [], [], [], []
-        cache: Dict[str, WaveEntry] = self.get_wave_cache(gen_index)
+        cache: dict[str, WaveEntry] = self.get_wave_cache(gen_index)
 
         for w in waves:
             try:
@@ -1067,7 +1061,7 @@ class OverlayAdapter:
             "WDW": hex(wdw),
         }
 
-    def get_readout_wave_cache(self, gen_index: int) -> Optional[WaveEntry]:
+    def get_readout_wave_cache(self, gen_index: int) -> WaveEntry | None:
         """Return the WaveEntry currently configured for readout, if any.
 
         :param gen_index: Index of the target generator.
@@ -1084,11 +1078,10 @@ class OverlayAdapter:
         self,
         *,
         gen_index: int,
-        wave_id_list: List[str],
+        wave_id_list: list[str],
         start_index: int = 1,
     ) -> dict:
-        """
-        Program the generator FIFO with a sequence of wave_ids.
+        """Program the generator FIFO with a sequence of wave_ids.
 
         This method enforces strict preconditions before facing hardware:
         - FIFO capacity bounds,
@@ -1115,7 +1108,6 @@ class OverlayAdapter:
         :raises ConfigurationError: If FIFO overflow occurs, wave IDs are missing
             from cache/hardware, or patching is attempted on an incomplete cache.
         """
-
         self.logger.info("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
         self.logger.debug("program_drive_sequence: wave_id_list=%s", wave_id_list)
 
@@ -1277,8 +1269,7 @@ class OverlayAdapter:
         preserve_wave_specs: bool = True,
         clear_last_fifo: bool = True,
     ) -> dict:
-        """Reset the generator envelope memory and synchronize the High-Level wave
-        cache.
+        """Reset the generator envelope memory and synchronize the High-Level wave cache.
 
         Since compiled waves depend on specific envelopes, clearing the envelope memory
         requires invalidating the compiled Wave Definition Words (WDW).
@@ -1348,9 +1339,8 @@ class OverlayAdapter:
     # ------------------------------------------------------------
     # Macro command G6: Generator Modulation setup
     # ------------------------------------------------------------
-    def generator_modulation(self, gen_index: int, label: str, gen_mod: Modulation):
-        """Configure the Direct Digital Synthesis (DDS) modulation parameters for a
-        specific generator.
+    def generator_modulation(self, gen_index: int, label: str, gen_mod: Modulation) -> dict:
+        """Configure the Direct Digital Synthesis (DDS) modulation parameters.
 
         This method handles both the digital frequency synthesis configuration and the
         analog-domain Mix-Mode settings (Nyquist zone selection) based on the target frequency.
@@ -1365,7 +1355,6 @@ class OverlayAdapter:
         :rtype: dict
         :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
         """
-
         self.logger.info(
             "generator_modulation: gen=%d label=%s frequency=%f phase (if readout )=%s",
             gen_index,
@@ -1421,7 +1410,7 @@ class OverlayAdapter:
     # ------------------------------------------------------------
     # Macro command G7: Generator Channel "listening" to trigger
     # ------------------------------------------------------------
-    def gen_trigger2listen(self, gen_index, trig: TriggerCommand):
+    def gen_trigger2listen(self, gen_index: int, trig: TriggerCommand) -> dict:
         """Configure which trigger channel the generator should listen to.
 
         :param gen_index: Index of the target generator.
@@ -1463,7 +1452,7 @@ class OverlayAdapter:
         *,
         gen_index: int,
         source: Literal["fifo", "lfsr"],
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> dict:
         """Select the source for the drive wave sequence.
 
@@ -1562,13 +1551,15 @@ class OverlayAdapter:
     def tg_program_delays(
         self,
         *,
-        drive: Optional[dict] = None,
-        readout: Optional[dict] = None,
+        drive: dict | None = None,
+        readout: dict | None = None,
         drive_start_index: int = 1,
     ) -> dict:
-        """Program the timing delays for drive and readout triggers. For each programmed
-        drive channel, entries from ``drive_start_index + len(entries)`` to the FIFO end
-        are cleared. This means partial patching does not preserve any existing tail.
+        """Program the timing delays for drive and readout triggers.
+
+        For each programmed drive channel, entries from
+        ``drive_start_index + len(entries)`` to the FIFO end are cleared. This means
+        partial patching does not preserve any existing tail.
 
         :param drive: Dictionary mapping channel indices to lists of (delay, value)
             pairs.
@@ -1678,7 +1669,7 @@ class OverlayAdapter:
     # Macro command A1: Acquisition IP setup
     # ------------------------------------------------------------
 
-    def acquisition_modulation(self, acq_index: int, acq_mod: Modulation):
+    def acquisition_modulation(self, acq_index: int, acq_mod: Modulation) -> dict:
         """Configure the DDS modulation parameters for an acquisition unit.
 
         :param acq_index: Index of the acquisition unit.
@@ -1728,9 +1719,8 @@ class OverlayAdapter:
             "phase": acq_mod["phase"],
         }
 
-    def acquisition_timing(self, acq_index, tof: int, duration: int):
-        """Configure the timing parameters (Time of Flight and Duration) for an
-        acquisition unit.
+    def acquisition_timing(self, acq_index: int, tof: int, duration: int) -> dict:
+        """Configure the timing parameters (Time of Flight and Duration).
 
         :param acq_index: Index of the acquisition unit.
         :type acq_index: int
@@ -1764,7 +1754,8 @@ class OverlayAdapter:
             "duration": duration,
         }
 
-    def acq_trigger2listen(self, acq_index, trig: TriggerCommand):
+    def acq_trigger2listen(self, acq_index: int, trig: TriggerCommand) -> dict:
+        """Configure which trigger channel the acquisition should listen to."""
         self.logger.info("acq_trigger2listen: acq=%d channel=%s", acq_index, trig["channel"])
         acq = self._get_acq(acq_index)
 
@@ -1794,12 +1785,12 @@ class OverlayAdapter:
     def run_multi_acquisition(
         self,
         *,
-        adc_indices: List[int],
+        adc_indices: list[int],
         mode: Literal["raw", "decimated", "accumulated"],
         shots: int,
         samp_per_shot: int,
-        timeout: Optional[float] = 1.0,
-    ) -> Dict[int, np.ndarray]:
+        timeout: float | None = 1.0,
+    ) -> dict[int, np.ndarray]:
         """Execute a multi-ADC acquisition with automatic hardware chunking.
 
         If the requested number of shots exceeds hardware repetition capacity (maximum
@@ -1815,7 +1806,6 @@ class OverlayAdapter:
         This separation is intentional to support performance analysis
         and experimental reproducibility studies.
         """
-
         # Start total routine timer for performance analysis
         t_start_routine = time.perf_counter()
         hw_time_accumulator = 0.0
@@ -1838,7 +1828,7 @@ class OverlayAdapter:
             )
 
         # Variable to store the consolidated result from either path
-        final_result: Dict[int, np.ndarray] = {}
+        final_result: dict[int, np.ndarray] = {}
 
         # --- Case 1: Single Hardware Acquisition ---
         # The requested shots fit into a single hardware buffer execution.
@@ -1889,12 +1879,12 @@ class OverlayAdapter:
     def _run_single_hw_acquisition(
         self,
         *,
-        adc_indices: List[int],
+        adc_indices: list[int],
         mode: Literal["raw", "decimated", "accumulated"],
         shots: int,
         samp_per_shot: int,
-        timeout: Optional[float] = 1.0,
-    ) -> Tuple[Dict[int, np.ndarray], float]:
+        timeout: float | None = 1.0,
+    ) -> tuple[dict[int, np.ndarray], float]:
         """Execute a single hardware acquisition cycle.
 
         This method assumes that:
@@ -1918,7 +1908,6 @@ class OverlayAdapter:
         :return: (acquired data for this chunk, DMA wait time in seconds).
         :rtype: Tuple[Dict[int, np.ndarray], float]
         """
-
         results = {}
         hw_wait_s = 0.0
         self.tg_set_shots(shots)
@@ -1965,7 +1954,7 @@ class OverlayAdapter:
 
         return results, hw_wait_s
 
-    def prepare_sweep(self, mode: str, adc_indices: List[int]) -> None:
+    def prepare_sweep(self, mode: str, adc_indices: list[int]) -> None:
         """Prepare acquisition IPs and DMA engine for sweep-optimized execution.
 
         This configuration locks the acquisition hardware into the specified mode to
@@ -1976,7 +1965,6 @@ class OverlayAdapter:
         :param adc_indices: List of active ADC indices involved in the sweep.
         :type adc_indices: List[int]
         """
-
         # Pre-config acquisition IPs
         for adc_i in adc_indices:
             acq = self._get_acq(adc_i)
@@ -1993,6 +1981,5 @@ class OverlayAdapter:
         This method must be called at the end of a sweep sequence to ensure the DMA
         engine correctly exits the optimized state.
         """
-
         self.dma_engine.end_sweep()
         self._sweep_prepared = False

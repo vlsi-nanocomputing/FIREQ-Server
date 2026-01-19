@@ -175,7 +175,7 @@ def test_malformed_json_handling(server_ctx):
     sock.sendall(len(msg).to_bytes(4, "big") + msg)
     _ = sock.recv(1024)
 
-    bad_json = '{"cmd": "ping", "session_id": '.encode("utf-8")
+    bad_json = b'{"cmd": "ping", "session_id": '
     sock.sendall(len(bad_json).to_bytes(4, "big") + bad_json)
 
     time.sleep(0.1)
@@ -200,7 +200,7 @@ def test_large_payload_protection(server_ctx):
     try:
         sock.settimeout(1.0)
         _ = sock.recv(1024)
-    except (ConnectionResetError, socket.timeout, ConnectionAbortedError):
+    except (TimeoutError, ConnectionResetError, ConnectionAbortedError):
         pass  # Expected behavior
     finally:
         sock.close()

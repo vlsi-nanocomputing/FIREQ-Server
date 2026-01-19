@@ -5,7 +5,13 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server.message_handler import MessageHandler
+from server.message_handler import (
+    ExperimentResult,
+    MessageHandler,
+    SweepPointResult,
+    find_variable_paths,
+    substitute_variables,
+)
 from server.ol_adapter import OverlayAdapter
 
 # Attempt to import Mock Hardware; fallback to local import if the file is adjacent
@@ -16,7 +22,7 @@ except ImportError:
 
 
 @pytest.fixture
-def stack():
+def stack() -> object:
     """Provides a MessageHandler connected to MockOverlay via OverlayAdapter.
 
     This stack mocks the DMA engine to bypass hardware buffer calculations that are not
@@ -24,7 +30,7 @@ def stack():
     """
 
     class HandlerStack:
-        def __init__(self):
+        def __init__(self) -> None:
             # 1. Create Mock Hardware
             self.ol = MockOverlay()
 
@@ -37,7 +43,14 @@ def stack():
             self.adapter.dma_engine.get_max_shots.return_value = 999999
 
             # Setup valid DMA buffer return
-            def retrieve_side_effect(buffer, mode, shots, samp_per_shot, adc_index, timeout):
+            def retrieve_side_effect(
+                buffer: object,
+                mode: object,
+                shots: int,
+                samp_per_shot: int,
+                adc_index: int,
+                timeout: object,
+            ) -> np.ndarray:
                 return np.zeros((shots, samp_per_shot))
 
             self.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
@@ -53,7 +66,7 @@ def stack():
 # =============================================================================
 
 
-def test_run_experiment_flow(stack):
+def test_run_experiment_flow(stack: object) -> None:
     """Test the _run_acquisition orchestrator."""
     config = {
         "acquisitions": [{"acq_index": 0, "output_type": "decimated", "duration": 256}],
@@ -77,7 +90,7 @@ def test_run_experiment_flow(stack):
     assert "Acquisition" in log_content or "complete" in log_content
 
 
-def test_run_sweep_optimized(stack):
+def test_run_sweep_optimized(stack: object) -> None:
     """Test the optimized sweep loop."""
     msg = {
         "sweep_id": "test_sweep",
@@ -105,10 +118,9 @@ def test_run_sweep_optimized(stack):
 
 
 class TestRobustness:
-    """Advanced test suite covering edge cases, partial configurations, and error
-    resilience."""
+    """Advanced test suite covering edge cases and error resilience."""
 
-    def test_input_sanity_validation(self, stack):
+    def test_input_sanity_validation(self, stack: object) -> None:
         """Verify that physically impossible values are rejected before hitting hardware
         drivers.
 
@@ -136,7 +148,7 @@ class TestRobustness:
         assert not result.ok
         assert "Duration must be positive" in result.error
 
-    def test_partial_config_caching(self, stack):
+    def test_partial_config_caching(self, stack: object) -> None:
         """Verify that partial configurations do NOT trigger unnecessary upload/compile
         steps."""
         # 1. Configuration WITHOUT 'envelopes' or 'waves'
@@ -164,7 +176,7 @@ class TestRobustness:
         # Ensure hardware setup proceeded (Functional check)
         stack.adapter.generator_modulation.assert_called()
 
-    def test_fail_fast_on_compilation_error(self, stack):
+    def test_fail_fast_on_compilation_error(self, stack: object) -> None:
         """Verify the 'Fail-Fast' mechanism during the preparation stage."""
         config = {
             "waves": {"0": [{"wave_id": "w1"}]},
@@ -189,11 +201,11 @@ class TestRobustness:
         # CRITICAL: The hardware setup must be skipped
         stack.adapter.generator_modulation.assert_not_called()
 
-    def test_status_handler_resilience(self, stack):
+    def test_status_handler_resilience(self, stack: object) -> None:
         """Verify that StatusHandler does not crash if a single generator fails."""
 
         # MOCK THE ADAPTER METHOD to inject a Side Effect (Exception)
-        def side_effect(gen_index):
+        def side_effect(gen_index: int) -> list[str]:
             if gen_index == 1:
                 raise RuntimeError("FPGA timeout")
             return ["env1", "env2"]
@@ -216,9 +228,8 @@ class TestRobustness:
         assert statuses[1]["ok"] is False
         assert "FPGA timeout" in statuses[1]["error"]
 
-    def test_reset_preserve_specs_flag(self, stack):
-        """Verify that the reset handler correctly propagates the 'preserve_specs'
-        flag."""
+    def test_reset_preserve_specs_flag(self, stack: object) -> None:
+        """Verify reset handler propagates the preserve_specs flag."""
         # MOCK THE ADAPTER METHOD to verify arguments
         stack.adapter.reset_wave_memory = MagicMock(return_value={})
 
@@ -228,12 +239,13 @@ class TestRobustness:
         # Verify adapter call
         stack.adapter.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
 
-    def test_deep_variable_substitution(self, stack):
+    def test_deep_variable_substitution(self, stack: object) -> None:
         """Verify recursive variable substitution."""
-        from server.message_handler import find_variable_paths, substitute_variables
-
         base_config = {
-            "sequence": [{"op": "play", "args": {"freq": "$f1", "amp": 0.5}}, {"op": "wait", "args": {"time": "$t1"}}]
+            "sequence": [
+                {"op": "play", "args": {"freq": "$f1", "amp": 0.5}},
+                {"op": "wait", "args": {"time": "$t1"}},
+            ]
         }
         variables = {"f1", "t1"}
 
@@ -248,7 +260,7 @@ class TestRobustness:
         assert new_config["sequence"][0]["args"]["freq"] == 123.5
         assert base_config["sequence"][0]["args"]["freq"] == "$f1"
 
-    def test_sweep_interruption(self, stack):
+    def test_sweep_interruption(self, stack: object) -> None:
         """Verify that a running sweep can be aborted via the stop_event."""
         # 1. Setup a multi-point sweep
         msg = {
@@ -263,7 +275,7 @@ class TestRobustness:
         # 3. Define a side effect to simulate user interruption
         mock_on_point = MagicMock()
 
-        def on_point_side_effect(result):
+        def on_point_side_effect(result: SweepPointResult) -> None:
             # After processing the second point (index 1), signal stop
             if result.point_index == 1:
                 stop_evt.set()
@@ -290,7 +302,7 @@ class TestRobustness:
         # Ensure hardware was released
         stack.adapter.end_sweep.assert_called_once()
 
-    def test_sweep_integer_casting_edge_cases(self, stack):
+    def test_sweep_integer_casting_edge_cases(self, stack: object) -> None:
         """Verify strict type casting for discrete hardware parameters."""
         # Config sweeping a discrete parameter (nyquist_zone) with FLOAT values
         msg = {
@@ -316,9 +328,8 @@ class TestRobustness:
             assert isinstance(zone_arg, int), f"Nyquist zone {zone_arg} was not cast to int!"
             assert not isinstance(zone_arg, float)
 
-    def test_acquisition_timeout_handling(self, stack):
-        """Verify system stability when acquisition times out (Hardware/Driver
-        failure)."""
+    def test_acquisition_timeout_handling(self, stack: object) -> None:
+        """Verify system stability when acquisition times out."""
         config = {"acquisitions": [{"acq_index": 0, "duration": 100}], "timeout": 1.0}
 
         # 1. Simulate a Timeout Exception from the driver
@@ -337,7 +348,7 @@ class TestRobustness:
         assert result.config_log is not None
         assert any("acq 0" in entry for entry in result.config_log)
 
-    def test_zipped_sweep_topology(self, stack):
+    def test_zipped_sweep_topology(self, stack: object) -> None:
         """Verify 'zipped' sweep mode behavior (Diagonal vs Cartesian).
 
         **Rationale:** Standard sweeps are Cartesian (all combinations). 'Zipped' sweeps
@@ -384,7 +395,7 @@ class TestRobustness:
         vars_p3 = calls[2][0][0].variables
         assert vars_p3["f"] == 30.0 and vars_p3["g"] == 0.3
 
-    def test_trigger_delay_propagation(self, stack):
+    def test_trigger_delay_propagation(self, stack: object) -> None:
         """Verify that trigger parameters are correctly propagated to the adapter.
 
         **Rationale:** Trigger timing is complex. The MessageHandler receives high-level
@@ -421,7 +432,7 @@ class TestRobustness:
             drive_start_index=10,
         )
 
-    def test_invalid_hardware_index_handling(self, stack):
+    def test_invalid_hardware_index_handling(self, stack: object) -> None:
         """Verify behavior when user requests a non-existent generator index.
 
         **Rationale:** If the hardware has 2 generators (indices 0, 1) and the user
@@ -444,7 +455,7 @@ class TestRobustness:
         # Verify it didn't crash and returned an object
         assert isinstance(result.error, str)
 
-    def test_config_log_completeness(self, stack):
+    def test_config_log_completeness(self, stack: object) -> None:
         """Verify that the execution log captures key actions for audit.
 
         **Rationale:** In scientific experiments, data without metadata is useless. The
@@ -474,7 +485,7 @@ class TestRobustness:
         assert "gen 0 drive frequency: 50.0 MHz" in log_text
         assert "acq 0 listening to trigger channel 1" in log_text
 
-    def test_sweep_string_substitution(self, stack):
+    def test_sweep_string_substitution(self, stack: object) -> None:
         """Verify that string sweep variables are rejected by numeric casting."""
         # Scenario: Sweeping the envelope name referenced by a wave definition
         msg = {
@@ -493,7 +504,7 @@ class TestRobustness:
         with pytest.raises(ValueError):
             stack.handler.run_sweep(msg, MagicMock())
 
-    def test_empty_payload_behavior(self, stack):
+    def test_empty_payload_behavior(self, stack: object) -> None:
         """Verify system stability when receiving an empty configuration.
 
         **Rationale:** This serves as a 'Null Operation' test. If a client sends an
@@ -520,7 +531,7 @@ class TestRobustness:
         stack.adapter.generator_modulation.assert_not_called()
         stack.adapter.acquisition_timing.assert_not_called()
 
-    def test_readout_wave_upload_flow(self, stack):
+    def test_readout_wave_upload_flow(self, stack: object) -> None:
         """Verify the dedicated path for uploading readout waveforms.
 
         **Rationale:**
@@ -556,10 +567,8 @@ class TestRobustness:
 # =============================================================================
 
 
-def test_experiment_result_binary_metadata():
+def test_experiment_result_binary_metadata() -> None:
     """Test ExperimentResult.to_metadata_dict() generates correct metadata."""
-    from server.message_handler import ExperimentResult
-
     # Create test data with different dtypes and shapes
     data = {0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64), 1: np.array([[5 + 6j, 7 + 8j]], dtype=np.complex128)}
     result = ExperimentResult(ok=True, data=data, config_log=["test"])
@@ -581,10 +590,8 @@ def test_experiment_result_binary_metadata():
     assert np.array_equal(binary[1], data[1])
 
 
-def test_experiment_result_empty_data():
+def test_experiment_result_empty_data() -> None:
     """Test ExperimentResult with empty data."""
-    from server.message_handler import ExperimentResult
-
     result = ExperimentResult(ok=False, error="Test error")
 
     meta = result.to_metadata_dict()
@@ -595,10 +602,8 @@ def test_experiment_result_empty_data():
     assert result.get_binary_data() == {}
 
 
-def test_sweep_point_result_binary_metadata():
+def test_sweep_point_result_binary_metadata() -> None:
     """Test SweepPointResult.to_metadata_dict() for binary protocol."""
-    from server.message_handler import SweepPointResult
-
     data = {0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64)}
     result = SweepPointResult(point_index=5, n_total=10, variables={"freq": 5.5, "gain": 0.8}, data=data)
 
@@ -617,10 +622,8 @@ def test_sweep_point_result_binary_metadata():
     assert np.array_equal(binary[0], data[0])
 
 
-def test_binary_metadata_preserves_array_properties():
+def test_binary_metadata_preserves_array_properties() -> None:
     """Test that metadata preserves all necessary array properties."""
-    from server.message_handler import ExperimentResult
-
     # Test with large multi-dimensional array
     data = {0: np.random.rand(100, 512).astype(np.complex64) + 1j * np.random.rand(100, 512).astype(np.complex64)}
     result = ExperimentResult(ok=True, data=data)
@@ -644,7 +647,7 @@ def test_binary_metadata_preserves_array_properties():
 # =============================================================================
 
 
-def test_envelope_handler_binary_input(stack):
+def test_envelope_handler_binary_input(stack: object) -> None:
     """Test EnvelopeHandler with binary numpy input (new protocol 2.1)."""
     # Create binary envelope data (float32 I/Q pairs)
     samples = np.array([[0.5, 0.3], [0.6, 0.4], [0.7, 0.5]], dtype=np.float32)
@@ -673,7 +676,7 @@ def test_envelope_handler_binary_input(stack):
     assert result.error is None
 
 
-def test_envelope_handler_binary_multiple_generators(stack):
+def test_envelope_handler_binary_multiple_generators(stack: object) -> None:
     """Test binary envelope upload with multiple generators."""
     # Create binary data for multiple generators
     samples_gen0 = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
@@ -712,7 +715,7 @@ def test_envelope_handler_binary_multiple_generators(stack):
     assert result.error is None
 
 
-def test_envelope_handler_binary_multiple_envelopes_per_generator(stack):
+def test_envelope_handler_binary_multiple_envelopes_per_generator(stack: object) -> None:
     """Test binary upload with multiple envelopes for one generator."""
     # Create binary data for multiple envelopes on same generator
     samples_env0 = np.array([[0.1, 0.2]], dtype=np.float32)
@@ -749,7 +752,7 @@ def test_envelope_handler_binary_multiple_envelopes_per_generator(stack):
     assert result.error is None
 
 
-def test_envelope_handler_binary_large_samples(stack):
+def test_envelope_handler_binary_large_samples(stack: object) -> None:
     """Test binary envelope upload with large sample count."""
     # Create 1000-sample envelope to simulate real-world usage
     num_samples = 1000

@@ -1,3 +1,5 @@
+"""Public API exports for the FIREQ low-level drivers."""
+
 from .acquisition_driver import AcquisitionDriver
 from .fireq_soc import FIREQSoC, load_fireq
 from .generator_driver import GeneratorDriver

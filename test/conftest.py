@@ -6,6 +6,8 @@ top-level (global scope) to ensure that hardware dependencies (pynq, xrfdc)
 are mocked BEFORE pytest imports any application code during test collection.
 """
 
+from __future__ import annotations
+
 import os
 import sys
 from unittest.mock import MagicMock
@@ -30,24 +32,29 @@ if project_root not in sys.path:
 class MockPynqBuffer(np.ndarray):
     """Simulates a PYNQ contiguous memory buffer."""
 
-    def __new__(cls, shape, dtype=np.uint32):
+    def __new__(cls, shape: object, dtype: object = np.uint32) -> MockPynqBuffer:
+        """Create a new mock buffer instance."""
         obj = super().__new__(cls, shape, dtype=dtype)
         obj.physical_address = 0x10000000
         obj.device_address = 0x10000000
         return obj
 
-    def __array_finalize__(self, obj):
+    def __array_finalize__(self, obj: object | None) -> None:
+        """Finalize array creation for numpy subclassing."""
         if obj is None:
             return
         self.physical_address = getattr(obj, "physical_address", 0x10000000)
 
-    def freebuffer(self):
+    def freebuffer(self) -> None:
+        """No-op freebuffer for mock."""
         pass
 
-    def invalidate(self):
+    def invalidate(self) -> None:
+        """No-op invalidate for mock."""
         pass
 
-    def flush(self):
+    def flush(self) -> None:
+        """No-op flush for mock."""
         pass
 
 
@@ -74,15 +81,15 @@ sys.modules["FIREQ_LL_API.acquistion_driver"] = MagicMock()
 sys.modules["FIREQ_LL_API.generator_driver"] = MagicMock()
 sys.modules["FIREQ_LL_API.trigger_generator_driver"] = MagicMock()
 
+import pynq  # noqa: E402
+
 # -------------------------------------------------------------------------
 # 4. SHARED FIXTURES
 # -------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session", autouse=True)
-def verify_mocks_loaded():
+def verify_mocks_loaded() -> None:
     """Optional: verifies mocks are active during test execution."""
-    import pynq
-
     assert isinstance(pynq, MagicMock) or isinstance(pynq.allocate, object)
     yield

@@ -1,8 +1,7 @@
-import os
+"""Entry point for the FIREQ API CLI."""
 
-import xrfclk
-import xrfdc
-from pynq import PL, Overlay
+import os
+import sys
 
 from FIREQ_LL_API.OverlayDriver import FIREQ_SoC
 
@@ -11,7 +10,8 @@ BASE_PATH = "/home/xilinx/jupyter_notebooks/"
 
 
 # Defining main function
-def main():
+def main() -> None:
+    """Prompt for an overlay and load it into the FIREQ SoC."""
     print("### FIREQ API interface ###\n")
 
     # get overlay path
@@ -25,11 +25,11 @@ def main():
     # check existence of overlay
     if not os.path.exists(ol_filepath):
         print(f"# Error: Overlay invalid filepath '{ol_filepath}'")
-        exit(-1)
+        sys.exit(-1)
 
     # get overlay
     print("# Loading the overlay")
-    ol = FIREQ_SoC(ol_filepath)
+    FIREQ_SoC(ol_filepath)
 
 
 if __name__ == "__main__":

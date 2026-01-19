@@ -19,10 +19,10 @@ parameters actually changing, to speed up execution.
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import product
 from threading import Event
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -44,7 +44,7 @@ class HardwareStatusResult:
     - When ``ok`` is False, ``error`` contains a human-readable failure reason and other
     fields may be partial defaults.
 
-    Notes
+    Notes:
     -----
     The payload is intentionally JSON-friendly: it is designed to be sent over a network
     OR logged without carrying heavy binary buffers.
@@ -52,11 +52,11 @@ class HardwareStatusResult:
 
     ok: bool
     gen_index: int
-    envelopes: List[str]
+    envelopes: list[str]
     waves_count: int
-    readout_wave: Optional[dict] = None
-    hw_summary: Optional[dict] = None
-    error: Optional[str] = None
+    readout_wave: dict | None = None
+    hw_summary: dict | None = None
+    error: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -94,7 +94,7 @@ class ResetResult:
     gen_index: int
     action: str
     details: dict
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -121,8 +121,8 @@ class EnvelopeResult:
     """
 
     ok: bool
-    result: Dict[int, Dict[str, List[str]]]  # {gen_idx: {loaded, skipped, failed}}
-    error: Optional[str] = None
+    result: dict[int, dict[str, list[str]]]  # {gen_idx: {loaded, skipped, failed}}
+    error: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -144,8 +144,8 @@ class WaveResult:
     """
 
     ok: bool
-    payload: Dict[int, Dict[str, List[str]]]  # {gen_idx: {waves, replaced, skipped, failed}}
-    error: Optional[str] = None
+    payload: dict[int, dict[str, list[str]]]  # {gen_idx: {waves, replaced, skipped, failed}}
+    error: str | None = None
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization.
@@ -170,9 +170,9 @@ class ExperimentResult:
     """
 
     ok: bool
-    data: Optional[Dict[int, np.ndarray]] = None
-    error: Optional[str] = None
-    config_log: Optional[List[str]] = None
+    data: dict[int, np.ndarray] | None = None
+    error: str | None = None
+    config_log: list[str] | None = None
 
     def to_dict(self) -> dict:
         """Convert result to dictionary, formatting NumPy arrays for JSON.
@@ -216,7 +216,7 @@ class ExperimentResult:
             d["config_log"] = self.config_log
         return d
 
-    def get_binary_data(self) -> Dict[int, np.ndarray]:
+    def get_binary_data(self) -> dict[int, np.ndarray]:
         """Return raw numpy arrays for binary transmission.
 
         :return: Dictionary mapping ADC index to numpy array.
@@ -237,10 +237,11 @@ class SweepPointResult:
 
     point_index: int
     n_total: int
-    variables: Dict[str, Any]
-    data: Dict[int, np.ndarray]
+    variables: dict[str, object]
+    data: dict[int, np.ndarray]
 
     def to_dict(self) -> dict:
+        """Convert sweep point data to a JSON-friendly dictionary."""
         d = {"point_index": self.point_index, "n_total": self.n_total, "variables": self.variables, "data": {}}
         for adc_idx, arr in self.data.items():
             if arr is not None:
@@ -259,7 +260,7 @@ class SweepPointResult:
                 d["adc_metadata"][adc_idx] = {"dtype": str(arr.dtype), "shape": list(arr.shape)}
         return d
 
-    def get_binary_data(self) -> Dict[int, np.ndarray]:
+    def get_binary_data(self) -> dict[int, np.ndarray]:
         """Return raw numpy arrays for binary transmission.
 
         :return: Dictionary mapping ADC index to numpy array.
@@ -281,9 +282,10 @@ class SweepStatus:
     sweep_id: str
     n_points: int
     n_completed: int
-    error: Optional[str] = None
+    error: str | None = None
 
     def to_dict(self) -> dict:
+        """Convert sweep status to a dictionary."""
         return {
             "ok": self.ok,
             "sweep_id": self.sweep_id,
@@ -298,7 +300,7 @@ class SweepStatus:
 # ====================================================
 
 
-def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[str, Set[str]]:
+def find_variable_paths(obj: object, var_names: set[str], path: str = "") -> dict[str, set[str]]:
     """Discover where sweep variables are used inside a nested config structure.
 
     A "variable use" is detected when a string equals ``"$<name>"`` where ``name`` is
@@ -316,7 +318,7 @@ def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[s
     the hardware blocks impacted by the variables, instead of re-running the full setup.
 
     :param obj: Arbitrary nested structure (dict/list/scalars) representing the base config.
-    :type obj: Any
+    :type obj: object
     :param var_names: Variable names without the ``$`` prefix.
     :type var_names: set[str]
     :param path: Internal recursion state (do not set manually).
@@ -324,8 +326,7 @@ def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[s
     :return: Map from variable name to the set of config paths where it appears.
     :rtype: dict[str, set[str]]
     """
-
-    out: Dict[str, Set[str]] = {v: set() for v in var_names}
+    out: dict[str, set[str]] = {v: set() for v in var_names}
 
     if isinstance(obj, dict):
         for key, value in obj.items():
@@ -354,9 +355,8 @@ def find_variable_paths(obj: Any, var_names: Set[str], path: str = "") -> Dict[s
     return out
 
 
-def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
-    """Classify whether generators/acquisitions/trigger require reconfiguration in a
-    sweep.
+def classify_variable_paths(variable_paths: set[str]) -> dict[str, bool]:
+    """Classify whether generators/acquisitions/trigger require reconfiguration in a sweep.
 
     The returned dict is used to decide whether the sweep loop can use a selective setup
     for subsequent points, or whether a full reconfiguration is needed.
@@ -366,7 +366,6 @@ def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
     :return: Flags indicating which subsystems are affected by the sweep variables.
     :rtype: dict[str, bool]
     """
-
     return {
         "generator": any(p.startswith("generators") for p in variable_paths),
         "acquisition": any(p.startswith("acquisitions") for p in variable_paths),
@@ -375,7 +374,7 @@ def classify_variable_paths(variable_paths: Set[str]) -> Dict[str, bool]:
     }
 
 
-def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
+def substitute_variables(config: dict, point: dict[str, object]) -> dict:
     """Create a point-specific config by replacing variable placeholders.
 
     This replaces any string leaf equal to ``"$VAR"`` with ``point["VAR"]``.
@@ -389,12 +388,12 @@ def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
     :param config: Base experiment configuration containing ``"$VAR"`` placeholders.
     :type config: dict
     :param point: Concrete variable assignment for one sweep point.
-    :type point: dict[str, Any]
+    :type point: dict[str, object]
     :return: New config dict with placeholders replaced (original ``config`` unchanged).
     :rtype: dict
     """
 
-    def substitute(obj):
+    def substitute(obj: object) -> object:
         if isinstance(obj, dict):
             return {k: substitute(v) for k, v in obj.items()}
         elif isinstance(obj, list):
@@ -412,8 +411,8 @@ def substitute_variables(config: dict, point: Dict[str, Any]) -> dict:
 
 
 def generate_sweep_points(
-    variables: List[dict], mode: str = "cartesian", var_cast: Optional[Dict[str, str]] = None
-) -> List[Dict[str, Any]]:
+    variables: list[dict], mode: str = "cartesian", var_cast: dict[str, str] | None = None
+) -> list[dict[str, object]]:
     """Generate the list of sweep points from variable specifications.
 
     Supported variable formats
@@ -433,7 +432,7 @@ def generate_sweep_points(
     - ``cartesian``: full Cartesian product of all variable values.
     - ``zipped``: point-wise zip; all variables must produce the same number of values.
 
-    Example
+    Example:
     Given two variables to sweep, said x with points [1, 2, 3] and y with [a, b, c].
     - "Cartesian": sweep all the 9 "xy" possible configurations :
         [(1,a) , (1, b), (1,c),
@@ -452,14 +451,13 @@ def generate_sweep_points(
     :rtype: list[dict[str, Any]]
     :raises ValueError: If ``mode`` is unknown or zipped lengths are inconsistent.
     """
-
     if not variables:
         return [{}]
 
     var_cast = var_cast or {}
 
     var_names = [v["name"] for v in variables]
-    var_values: List[List[Any]] = []
+    var_values: list[list[object]] = []
 
     for v in variables:
         name = v["name"]
@@ -499,9 +497,9 @@ def generate_sweep_points(
     # cartesian explores the full combinatorial space; zipped enforces aligned dimensions.
     # Use both because they map to distinct experimental intents (grid search vs coordinated scan).
     if mode == "cartesian":
-        return [dict(zip(var_names, combo)) for combo in product(*var_values)]
+        return [dict(zip(var_names, combo, strict=False)) for combo in product(*var_values)]
     elif mode == "zipped":
-        return [dict(zip(var_names, values)) for values in zip(*var_values)]
+        return [dict(zip(var_names, values, strict=False)) for values in zip(*var_values, strict=False)]
     else:
         raise ValueError(f"Unknown sweep mode: {mode}")
 
@@ -522,7 +520,8 @@ class StatusHandler:
     connections many times).
     """
 
-    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+    def __init__(self, adapter: object, logger: logging.Logger | None = None) -> None:
+        """Initialize the status handler with an adapter."""
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
         # Cache hardware summary: expected immutable at runtime and frequently reused
@@ -536,13 +535,15 @@ class StatusHandler:
 
     @property
     def num_generators(self) -> int:
+        """Return the number of generators reported by the hardware summary."""
         return self._hw_summary.get("num_generators", 0)
 
     @property
     def num_acquisitions(self) -> int:
+        """Return the number of acquisitions reported by the hardware summary."""
         return self._hw_summary.get("num_acquisitions", 0)
 
-    def get_all_generators_status(self) -> List[dict]:
+    def get_all_generators_status(self) -> list[dict]:
         """Get status for ALL generators in one call.
 
         Useful for 'status' command without manual iteration.
@@ -594,7 +595,7 @@ class ResetHandler:
     and for reviewability.
     """
 
-    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+    def __init__(self, adapter: object, logger: logging.Logger | None = None) -> None:
         """Initialize the ResetHandler.
 
         :param adapter: OverlayAdapter instance.
@@ -639,7 +640,7 @@ class ResetHandler:
         except Exception as e:
             return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
 
-    def reset_all_generators(self, preserve_wave_specs: bool = False) -> List[ResetResult]:
+    def reset_all_generators(self, preserve_wave_specs: bool = False) -> list[ResetResult]:
         """Reset waves and envelopes for ALL generators.
 
         Returns list of results (one per generator).
@@ -663,7 +664,7 @@ class EnvelopeHandler:
     by name, minimizing I/O and latency.
     """
 
-    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+    def __init__(self, adapter: object, logger: logging.Logger | None = None) -> None:
         """Initialize the EnvelopeHandler.
 
         :param adapter: OverlayAdapter instance.
@@ -672,7 +673,7 @@ class EnvelopeHandler:
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
 
-    def upload(self, config: dict, envelope_data: Optional[Dict[Tuple[int, int], np.ndarray]] = None) -> EnvelopeResult:
+    def upload(self, config: dict, envelope_data: dict[tuple[int, int], np.ndarray] | None = None) -> EnvelopeResult:
         """Process the 'envelopes' section of the configuration.
 
         :param config: Dictionary containing envelope specifications (metadata).
@@ -683,7 +684,7 @@ class EnvelopeHandler:
         :return: Detailed result of the upload process.
         :rtype: EnvelopeResult
         """
-        result: Dict[int, Dict[str, List[str]]] = {}
+        result: dict[int, dict[str, list[str]]] = {}
 
         try:
             envelopes_cfg = config.get("envelopes", {})
@@ -747,7 +748,7 @@ class WaveHandler:
     clear per-generator diagnostics.
     """
 
-    def __init__(self, adapter, logger: Optional[logging.Logger] = None):
+    def __init__(self, adapter: object, logger: logging.Logger | None = None) -> None:
         """Initialize the WaveHandler.
 
         :param adapter: OverlayAdapter instance.
@@ -764,7 +765,7 @@ class WaveHandler:
         :return: Detailed result of the compilation.
         :rtype: WaveResult
         """
-        payload: Dict[int, Dict[str, List[str]]] = {}
+        payload: dict[int, dict[str, list[str]]] = {}
 
         try:
             waves_cfg = config.get("waves", {})
@@ -860,7 +861,7 @@ class MessageHandler:
     TRIGGER_KEYS = frozenset(["shots", "shot_duration", "drive", "readout", "drive_start_index"])
     TRIGGER_SPEC_KEYS = frozenset(["delay"])
 
-    def __init__(self, adapter, *, logger: Optional[logging.Logger] = None):
+    def __init__(self, adapter: object, *, logger: logging.Logger | None = None) -> None:
         """Initialize the orchestrator and its specialized sub-handlers.
 
         Sub-handlers are built once so they can reuse cached adapter information.
@@ -871,7 +872,6 @@ class MessageHandler:
             tracing.
         :type logger: logging.Logger | None
         """
-
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
 
@@ -881,7 +881,7 @@ class MessageHandler:
         self.env_h = EnvelopeHandler(adapter, self.logger)
         self.wave_h = WaveHandler(adapter, self.logger)
 
-    def _validate_keys(self, obj: dict, allowed: Set[str], ctx: str) -> None:
+    def _validate_keys(self, obj: dict, allowed: set[str], ctx: str) -> None:
         if not isinstance(obj, dict):
             raise ValueError(f"{ctx} must be a dict")
         unexpected = set(obj.keys()) - allowed
@@ -996,7 +996,6 @@ class MessageHandler:
         :return: ExperimentResult with acquired data on success, or error info on failure.
         :rtype: ExperimentResult
         """
-
         # Intentionally collect a concise, human-readable config_log instead of
         # dumping full configs.
         # This supports reproducibility and debugging without logging large buffers or
@@ -1044,8 +1043,8 @@ class MessageHandler:
         self,
         msg: dict,
         on_point: Callable[[SweepPointResult], None],
-        stop_event: Optional[Event] = None,
-        on_plan: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+        stop_event: Event | None = None,
+        on_plan: Callable[[list[dict[str, object]]], None] | None = None,
     ) -> SweepStatus:
         """Execute a multi-point sweep with an optimized "fast path".
 
@@ -1074,7 +1073,6 @@ class MessageHandler:
         :rtype: SweepStatus
         :raises ValueError: If variable casting is ambiguous (touches both int and float fields).
         """
-
         sweep_id = msg.get("sweep_id", "unnamed")
         has_base = "base" in msg
         self._validate_sweep_message(msg, allow_inline_config=not has_base)
@@ -1095,7 +1093,7 @@ class MessageHandler:
         var_to_paths = find_variable_paths(base_config, var_names)
 
         # 2) Flatten for classify_variable_paths (which requires a set)
-        variable_paths: Set[str] = set()
+        variable_paths: set[str] = set()
         for ps in var_to_paths.values():
             variable_paths.update(ps)
         setup_needed = classify_variable_paths(variable_paths)
@@ -1106,7 +1104,7 @@ class MessageHandler:
         acq_paths = {p for p in variable_paths if p.startswith("acquisitions")}
         trig_paths = {p for p in variable_paths if p.startswith("trigger")}
 
-        var_cast: Dict[str, str] = {}
+        var_cast: dict[str, str] = {}
         for name, paths in var_to_paths.items():
             if not paths:
                 self.logger.warning(f"Sweep variable '{name}' not used in base config")
@@ -1283,7 +1281,7 @@ class MessageHandler:
     # INTERNAL SETUP METHODS
     # =========================================================================
 
-    def _setup_generator(self, gen_cfg: dict, log: Optional[list] = None):
+    def _setup_generator(self, gen_cfg: dict, log: list | None = None) -> None:
         """Configure a single generator from a config dictionary.
 
         This method applies generator-level configuration in a stable order:
@@ -1297,7 +1295,6 @@ class MessageHandler:
         :param log: Optional list used to append human-readable configuration actions.
         :type log: list | None
         """
-
         if "gen_index" not in gen_cfg:
             raise KeyError("Generator config missing required key 'gen_index'")
         gen_index = gen_cfg["gen_index"]
@@ -1355,7 +1352,7 @@ class MessageHandler:
                 if log is not None:
                     log.append(f"gen {gen_index} readout wave uploaded")
 
-    def _setup_acquisition(self, acq_cfg: dict, log: Optional[list] = None):
+    def _setup_acquisition(self, acq_cfg: dict, log: list | None = None) -> None:
         """Configure a single acquisition block from a config dictionary.
 
         Acquisition is treated as independent from readout: an acquisition IP may be used for
@@ -1390,8 +1387,8 @@ class MessageHandler:
             if log is not None:
                 log.append(f"acq {acq_index} timing set: tof={tof}")
 
-    def _setup_generator_selective(self, gen_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """Selective generator reconfiguration for sweep fast-path.
+    def _setup_generator_selective(self, gen_cfg: dict, variable_paths: set[str], log: list | None = None) -> None:
+        """Reconfigure generator settings for sweep fast-path.
 
         Only the fields affected by ``variable_paths`` are re-applied. This reduces overhead
         compared to a full generator setup at every sweep point.
@@ -1411,7 +1408,6 @@ class MessageHandler:
         :param log: Optional list used to append human-readable configuration actions.
         :type log: list | None
         """
-
         if "gen_index" not in gen_cfg:
             raise KeyError("Generator config missing required key 'gen_index'")
         gen_index = gen_cfg["gen_index"]
@@ -1477,8 +1473,8 @@ class MessageHandler:
             if any(".readout.wave" in p for p in variable_paths) and "wave" in readout:
                 self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
 
-    def _setup_acquisition_selective(self, acq_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """Selective acquisition reconfiguration for sweep fast-path.
+    def _setup_acquisition_selective(self, acq_cfg: dict, variable_paths: set[str], log: list | None = None) -> None:
+        """Reconfigure acquisition settings for sweep fast-path.
 
         Re-apply only acquisition parameters that are variable-driven (e.g., delay/duration/shots),
         assuming routing/topology remains unchanged across points.
@@ -1525,7 +1521,7 @@ class MessageHandler:
             tof = int(acq_cfg.get("tof", 0))
             self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
 
-    def _setup_trigger(self, trigger_cfg: dict, log: Optional[list] = None):
+    def _setup_trigger(self, trigger_cfg: dict, log: list | None = None) -> None:
         """Configure trigger routing and timing.
 
         Trigger configuration is performed after generators and acquisitions so that all
@@ -1559,8 +1555,8 @@ class MessageHandler:
                 else:
                     log.append(f"trigger delays programmed for {shots} shots")
 
-    def _setup_trigger_selective(self, trigger_cfg: dict, variable_paths: Set[str], log: Optional[list] = None):
-        """Selective trigger reconfiguration for sweep fast-path.
+    def _setup_trigger_selective(self, trigger_cfg: dict, variable_paths: set[str], log: list | None = None) -> None:
+        """Reconfigure trigger settings for sweep fast-path.
 
         Only re-apply trigger fields that are variable-driven to avoid reprogramming
         drive FIFOs when not needed.
@@ -1608,7 +1604,7 @@ class MessageHandler:
             if log is not None:
                 log.append("trigger delays programmed (selective)")
 
-    def _run_acquisition(self, config: dict, log: Optional[list] = None) -> Dict[int, np.ndarray]:
+    def _run_acquisition(self, config: dict, log: list | None = None) -> dict[int, np.ndarray]:
         """Run the acquisition sequence and return captured samples.
 
         This is the "data plane" step: it is expected to produce large numerical buffers and
@@ -1621,7 +1617,6 @@ class MessageHandler:
         :return: Map ``adc_index -> numpy array`` of acquired samples.
         :rtype: dict[int, numpy.ndarray]
         """
-
         acquisitions = config.get("acquisitions", [])
         if not acquisitions:
             if log is not None:
@@ -1650,7 +1645,7 @@ class MessageHandler:
             log.append(f"Acquisition complete on ADCs: {adc_indices}")
         return results
 
-    def _get_adc_indices(self, config: dict) -> List[int]:
+    def _get_adc_indices(self, config: dict) -> list[int]:
         """Extract the ADC indices involved in the current experiment.
 
         This helper is used by sweep preparation to pre-configure the acquisition
@@ -1662,7 +1657,6 @@ class MessageHandler:
         :return: List of ADC indices to be captured.
         :rtype: list[int]
         """
-
         if "acquisitions" not in config:
             raise KeyError("Experiment config missing required key 'acquisitions'")
         acquisitions = config["acquisitions"]
@@ -1681,7 +1675,6 @@ class MessageHandler:
         :return: Acquisition mode identifier understood by the adapter.
         :rtype: str
         """
-
         acquisitions = config.get("acquisitions", [])
         if not acquisitions:
             return "decimated"

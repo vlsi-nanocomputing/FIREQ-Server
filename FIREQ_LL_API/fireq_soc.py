@@ -1,6 +1,7 @@
+"""Low-level FIREQ SoC overlay support and discovery helpers."""
+
 import os
 import re
-from typing import Dict, Tuple
 
 import xrfclk
 from pynq import PL, Overlay
@@ -11,7 +12,7 @@ from .acquisition_driver import AcquisitionDriver
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
-__all__ = ["FIREQSoC"]
+__all__ = ["FIREQSoC", "load_fireq"]
 
 
 class FIREQSoC(Overlay):
@@ -32,7 +33,7 @@ class FIREQSoC(Overlay):
         bitfile_name: str,
         ignore_version: bool = False,
         init_clocks: bool = True,
-    ):
+    ) -> None:
         """Initialize the FIREQ SoC overlay.
 
         :param bitfile_name: Path to the .bit file
@@ -63,9 +64,9 @@ class FIREQSoC(Overlay):
         self._generation_ips: list[GeneratorDriver] = []
         self._acquisition_ips: list[AcquisitionDriver] = []
         self._trigger_ip: list[TriggerGeneratorDriver] = []
-        self._GEN_RF_MAP: Dict[int, Dict[str, Tuple[int, int]]] = {}
-        self._ACQ_RF_MAP: Dict[int, Tuple[int, int]] = {}
-        self._cached_nyquist_zone: Dict[tuple, int] = {}
+        self._GEN_RF_MAP: dict[int, dict[str, tuple[int, int]]] = {}
+        self._ACQ_RF_MAP: dict[int, tuple[int, int]] = {}
+        self._cached_nyquist_zone: dict[tuple, int] = {}
 
         # 5) Low-level discovery (bind AXI + classify IPs)
         self._rf = getattr(self, "usp_rf_data_converter_0", None)
@@ -154,8 +155,7 @@ class FIREQSoC(Overlay):
                 self._trigger_ip.append(ip_object)
 
     def _map_rf_topology(self) -> None:
-        """Derive the physical RF connections (Tile/Block) for Generators and
-        Acquisitions.
+        """Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
 
         Traverses the AXI-Stream connectivity graph to populate:
 
@@ -178,7 +178,7 @@ class FIREQSoC(Overlay):
 
             conn = self._fireq_parser.get_connectivity(gen_xml, all_modules)
 
-            def find_rfdc_sink(node_dict):
+            def find_rfdc_sink(node_dict: dict[str, object]) -> tuple[str, str] | None:
                 if node_dict["NODE"] == rfdc_name:
                     return node_dict["BUS_M/S"][1], node_dict["BUS_M/S"][0]
                 for child in node_dict.get("CHILDREN", []):
@@ -212,7 +212,9 @@ class FIREQSoC(Overlay):
         if rfdc_xml:
             conn_rfdc = self._fireq_parser.get_connectivity(rfdc_xml, all_modules)
 
-            def trace_rfdc_source(node_dict, source_port_name, at_root=True):
+            def trace_rfdc_source(
+                node_dict: dict[str, object], source_port_name: str, at_root: bool = True
+            ) -> int | None:
                 if at_root and node_dict["NODE"] == rfdc_name:
                     for child in node_dict["CHILDREN"]:
                         if child["BUS_M/S"][0] == source_port_name:
@@ -233,7 +235,7 @@ class FIREQSoC(Overlay):
 
             rfdc_interfaces = self._fireq_parser.get_bus_interfaces(rfdc_xml)
 
-            for bus_name, attribs in rfdc_interfaces.items():
+            for _bus_name, attribs in rfdc_interfaces.items():
                 if attribs["TYPE"] in ["MASTER", "INITIATOR"]:
                     port_name = attribs["NAME"]
                     # ADC uses mXY_axis (master ports)
@@ -251,8 +253,7 @@ class FIREQSoC(Overlay):
                             self._ACQ_RF_MAP[acq_idx] = (tile, block)
 
     def _get_fifo_depth(self, *, acq_inst: str, mode: str) -> int:
-        """
-        FIFO depth extraction based on HWH structure:
+        """FIFO depth extraction based on HWH structure.
 
         axisAcquisitionIP_X (m00_axis or m01_axis)
             -> axis_register_slice (S_AXIS shares BUSNAME)
@@ -739,7 +740,7 @@ class FIREQSoC(Overlay):
         }
 
     @property
-    def generators(self):
+    def generators(self) -> list[GeneratorDriver]:
         """List of GeneratorDriver instances.
 
         :return: The list of available generator drivers
@@ -748,7 +749,7 @@ class FIREQSoC(Overlay):
         return list(self._generation_ips)
 
     @property
-    def acquisitions(self):
+    def acquisitions(self) -> list[AcquisitionDriver]:
         """List of AcquisitionDriver instances.
 
         :return: The list of available acquisition drivers
@@ -757,9 +758,8 @@ class FIREQSoC(Overlay):
         return list(self._acquisition_ips)
 
     @property
-    def trigger(self):
-        """
-        Convenience shortcut: TriggerGeneratorDriver, if any.
+    def trigger(self) -> TriggerGeneratorDriver:
+        """Convenience shortcut: TriggerGeneratorDriver, if any.
 
         :return: The main trigger generator driver
         :rtype: TriggerGeneratorDriver
@@ -769,7 +769,7 @@ class FIREQSoC(Overlay):
     # Infra IPs
 
     @property
-    def rf(self):
+    def rf(self) -> object | None:
         """RF-DC hierarchy (usp_rf_data_converter_0).
 
         :return: The PYNQ RF-DC object or None if not present
@@ -778,7 +778,7 @@ class FIREQSoC(Overlay):
         return self._rf
 
     @property
-    def axis_switch(self):
+    def axis_switch(self) -> object | None:
         """AXI-Stream switch (axis_switch_0), if present.
 
         :return: The AXI Stream Switch object or None
@@ -787,7 +787,7 @@ class FIREQSoC(Overlay):
         return self._axis_switch
 
     @property
-    def dma(self):
+    def dma(self) -> object | None:
         """AXI DMA (axi_dma_0), if present.
 
         :return: The DMA object or None
@@ -823,7 +823,7 @@ class FIREQSoC(Overlay):
 
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:
-    """Helper function to create and initialize a FIREQSoC instance.
+    """Create and initialize a FIREQSoC instance.
 
     :param bitfile_name: Path to the bitfile to load
     :type bitfile_name: str

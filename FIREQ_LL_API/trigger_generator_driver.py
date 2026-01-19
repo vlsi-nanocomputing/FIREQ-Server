@@ -1,3 +1,5 @@
+"""Low-level driver for the FIREQ trigger generator IP."""
+
 from ._utils import _FIREQDriver
 
 __all__ = ["TriggerGeneratorDriver"]
@@ -11,7 +13,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
     bindto = ["user.org:user:axisTriggerGeneratorIP:1.0"]
 
-    def __init__(self, description: dict):
+    def __init__(self, description: dict[str, object]) -> None:
         """Initialize the TriggerGeneratorDriver.
 
         :param description: Dictionary containing IP parameters and configuration
@@ -44,11 +46,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._manual_trigger_pos = 31
 
     def print_description(self) -> None:
-        """Print the description of the trigger generator IP.
-
-        :return: None
-        :rtype: None
-        """
+        """Print the description of the trigger generator IP."""
         print(f"trigger_channels: {self.trigger_channels}")
         print(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
         print(f"fifo_channel_depth: {self.channel_fifo_depth}")
@@ -61,8 +59,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :type base_address: int
         :param axi_depth: Depth of the AXI interface in bytes
         :type axi_depth: int
-        :return: None
-        :rtype: None
         """
         super().init_axi_full_interface(base_address, axi_depth)
 
@@ -73,8 +69,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :type base_address: int
         :param axi_depth: Depth of the AXI interface in bytes
         :type axi_depth: int
-        :return: None
-        :rtype: None
         """
         super().init_axi_lite_interface(base_address, axi_depth)
         # delete the mmio object created by PYNQ
@@ -85,8 +79,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
         :param duration: Duration in clock cycles
         :type duration: int
-        :return: None
-        :rtype: None
         """
         # write duration LOW
         self._axi_lite_interface_mmio.write(self._experiment_dur_l * 4, duration & 0xFFFFFFFF)
@@ -98,8 +90,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
         :param value: Number of shots (must be between 1 and max_hw_repetitions)
         :type value: int
-        :return: None
-        :rtype: None
         :raises ValueError: If value is outside the valid range
         """
         if value < 1 or value > self.max_hw_repetitions:
@@ -108,11 +98,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
     def start_experiment(self) -> None:
-        """Start the generation of triggers.
-
-        :return: None
-        :rtype: None
-        """
+        """Start the generation of triggers."""
         self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
 
     def is_done(self) -> bool:
@@ -138,8 +124,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :type delay: int
         :param generate_trigger: Generates a trigger if set to 1
         :type generate_trigger: int
-        :return: None
-        :rtype: None
         :raises ValueError: If channel, index, or delay is outside valid range
         """
         if channel < 1 or channel > self.trigger_channels:
@@ -162,8 +146,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :type delay: int
         :param channel: Channel number (1 to trigger_channels)
         :type channel: int
-        :return: None
-        :rtype: None
         :raises ValueError: If channel is outside valid range
         """
         if channel < 1 or channel > self.trigger_channels:
