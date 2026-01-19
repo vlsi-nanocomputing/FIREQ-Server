@@ -23,6 +23,17 @@ venv/
 env/
 .env
 
+# --- Testing & Code Quality Caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- IDE & Editors ---
+.vscode/
+
 # --- Data from Jupyter Notebooks ---
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
