@@ -17,4 +17,3 @@ repos:
     rev: v0.14.11
     hooks:
       - id: ruff
-        args: ["check"]

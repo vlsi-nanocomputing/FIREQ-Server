@@ -3,7 +3,15 @@ from typing import Any, TextIO
 import numpy as np
 from pynq import MMIO, DefaultIP
 
-__all__ = ["_FIREQDriver", "_DebugMMIO", "_get_bit", "_get_bits", "_set_bit", "_set_bits", "_compute_pinc_poff"]
+__all__ = [
+    "_FIREQDriver",
+    "_DebugMMIO",
+    "_get_bit",
+    "_get_bits",
+    "_set_bit",
+    "_set_bits",
+    "_compute_pinc_poff",
+]
 
 
 class _FIREQDriver(DefaultIP):

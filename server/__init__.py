@@ -32,7 +32,13 @@ from .message_handler import (
 )
 
 # Import OverlayAdapter class and related data structures
-from .ol_adapter import EnvelopeSpec, Modulation, OverlayAdapter, TriggerCommand, WaveEntry
+from .ol_adapter import (
+    EnvelopeSpec,
+    Modulation,
+    OverlayAdapter,
+    TriggerCommand,
+    WaveEntry,
+)
 
 # Import TCP Server
 from .tcp_server import FIREQServer

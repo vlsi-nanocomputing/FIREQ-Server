@@ -348,7 +348,10 @@ class OverlayAdapter:
             raise HardwareStateError("DMA or AXI-Stream switch missing in overlay")
         # The DMA engine is constructed once as a long-lived resource.
         self.dma_engine = AcquisitionEngine(
-            self.ol.dma, self.ol.axis_switch, logger=self.logger, hw_specs=self.ol.hw_specs
+            self.ol.dma,
+            self.ol.axis_switch,
+            logger=self.logger,
+            hw_specs=self.ol.hw_specs,
         )
 
         # per-generator caches
@@ -362,6 +365,8 @@ class OverlayAdapter:
         # Timing for statistics (fpga_active_ms is DMA wait time proxy).
         self.last_timing_stats = {"sw_overhead_ms": 0.0, "fpga_active_ms": 0.0}
         self._sweep_prepared = False
+        # Track acquisition trigger channels for diagnostics.
+        self._acq_trigger_channel: dict[int, int] = {}
 
     # ------------------------------------------------------------
     # Pass-through: everything not defined here goes to self.ol
@@ -684,7 +689,10 @@ class OverlayAdapter:
         :rtype: dict
         """
         self.logger.info(
-            "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s", gen_index, len(envelopes), auto_pad_noninterp
+            "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s",
+            gen_index,
+            len(envelopes),
+            auto_pad_noninterp,
         )
 
         gen = self._get_gen(gen_index)
@@ -704,7 +712,10 @@ class OverlayAdapter:
                     raise ConfigurationError("Envelope Name forbidden : '_' is for reserved name")
 
                 if name in env_cache:
-                    self.logger.debug("upload_envelopes: skip '%s' (already in EnvelopeMemoryDict)", name)
+                    self.logger.debug(
+                        "upload_envelopes: skip '%s' (already in EnvelopeMemoryDict)",
+                        name,
+                    )
                     skipped.append(name)
                     continue
 
@@ -761,7 +772,12 @@ class OverlayAdapter:
             len(skipped),
             len(failed),
         )
-        return {"gen_index": int(gen_index), "loaded": loaded, "skipped": skipped, "failed": failed}
+        return {
+            "gen_index": int(gen_index),
+            "loaded": loaded,
+            "skipped": skipped,
+            "failed": failed,
+        }
 
     # ------------------------------------------------------------
     # Macro command G2: compile_waves
@@ -870,7 +886,10 @@ class OverlayAdapter:
                     new_entry.wdw = old_entry.wdw
                     cache[wave_id] = new_entry
                     out.append({"wave_id": wave_id, "WDW": hex(new_entry.wdw)})
-                    self.logger.debug("compile_waves: wave_id '%s' already present (same spec) -> skipped", wave_id)
+                    self.logger.debug(
+                        "compile_waves: wave_id '%s' already present (same spec) -> skipped",
+                        wave_id,
+                    )
                     continue
 
                 # --- Replacement
@@ -1003,7 +1022,11 @@ class OverlayAdapter:
             new_entry.wdw = old_entry.wdw
             self._readout_wave_store[gen_index] = new_entry
 
-            self.logger.info("upload_readout_wave: skipped gen=%d (same spec, WDW=0x%X)", gen_index, new_entry.wdw)
+            self.logger.info(
+                "upload_readout_wave: skipped gen=%d (same spec, WDW=0x%X)",
+                gen_index,
+                new_entry.wdw,
+            )
             return {
                 "gen_index": gen_index,
                 "status": "skipped",
@@ -1026,7 +1049,11 @@ class OverlayAdapter:
         # --- COMPILE WDW
         wdw = self._call(
             gen.create_wave_definition_word(
-                new_entry.envelope, new_entry.duration, new_entry.gain, new_entry.switch_iq, new_entry.keep_last
+                new_entry.envelope,
+                new_entry.duration,
+                new_entry.gain,
+                new_entry.switch_iq,
+                new_entry.keep_last,
             ),
             operation="create_wave_definition_word",
             driver_name="GeneratorDriver",
@@ -1163,7 +1190,11 @@ class OverlayAdapter:
 
         self._last_fifo[int(gen_index)] = new_fifo
 
-        self.logger.info("program_drive_sequence: done gen=%d fifo_len=%d", gen_index, len(wave_id_list))
+        self.logger.info(
+            "program_drive_sequence: done gen=%d fifo_len=%d",
+            gen_index,
+            len(wave_id_list),
+        )
         return {"gen_index": int(gen_index), "fifo": self._last_fifo[int(gen_index)]}
 
     # ------------------------------------------------------------
@@ -1203,7 +1234,10 @@ class OverlayAdapter:
         :rtype: dict
         """
         self.logger.info(
-            "reset_wave_memory: gen=%d preserve_specs=%s clear_last_fifo=%s", gen_index, preserve_specs, clear_last_fifo
+            "reset_wave_memory: gen=%d preserve_specs=%s clear_last_fifo=%s",
+            gen_index,
+            preserve_specs,
+            clear_last_fifo,
         )
 
         gen = self._get_gen(gen_index)
@@ -1382,7 +1416,10 @@ class OverlayAdapter:
 
             if label == "drive":
                 self._call(
-                    gen.set_drive_dds_parameters(frequency=gen_mod["frequency_mhz"], dac_samplerate=self._dac_sr_mhz()),
+                    gen.set_drive_dds_parameters(
+                        frequency=gen_mod["frequency_mhz"],
+                        dac_samplerate=self._dac_sr_mhz(),
+                    ),
                     operation="set_drive_dds_parameters",
                     driver_name="GeneratorDriver",
                     config_error=True,
@@ -1391,7 +1428,9 @@ class OverlayAdapter:
             else:
                 self._call(
                     gen.set_readout_dds_parameters(
-                        frequency=gen_mod["frequency_mhz"], phase=gen_mod["phase"], dac_samplerate=self._dac_sr_mhz()
+                        frequency=gen_mod["frequency_mhz"],
+                        phase=gen_mod["phase"],
+                        dac_samplerate=self._dac_sr_mhz(),
                     ),
                     operation="set_readout_dds_parameters",
                     driver_name="GeneratorDriver",
@@ -1420,7 +1459,12 @@ class OverlayAdapter:
         :return: The applied trigger configuration.
         :rtype: dict
         """
-        self.logger.info("gen_trigger2listen: gen=%d ttype=%s channel=%s", gen_index, trig["ttype"], trig["channel"])
+        self.logger.info(
+            "gen_trigger2listen: gen=%d ttype=%s channel=%s",
+            gen_index,
+            trig["ttype"],
+            trig["channel"],
+        )
         gen = self._get_gen(gen_index)
 
         self._call(
@@ -1434,7 +1478,10 @@ class OverlayAdapter:
             self.logger.info("Generator %d is deaf to any trigger!", gen_index)
         else:
             self.logger.info(
-                "Generator %d listens to %s_trigger_word channel %d", gen_index, trig["ttype"], trig["channel"]
+                "Generator %d listens to %s_trigger_word channel %d",
+                gen_index,
+                trig["ttype"],
+                trig["channel"],
             )
 
         return {
@@ -1560,6 +1607,8 @@ class OverlayAdapter:
         For each programmed drive channel, entries from
         ``drive_start_index + len(entries)`` to the FIFO end are cleared. This means
         partial patching does not preserve any existing tail.
+        Delays smaller than 5 clock cycles are clamped to 5 to avoid underflow
+        on trigger/acquisition timing.
 
         :param drive: Dictionary mapping channel indices to lists of (delay, value)
             pairs.
@@ -1594,7 +1643,7 @@ class OverlayAdapter:
             ch = int(ch_key)
             if not (isinstance(spec, dict) and "delay" in spec):
                 raise ConfigurationError(f"readout[{ch}] must be dict with key 'delay'")
-            ro_delay = int(spec["delay"])
+            ro_delay = max(5, int(spec["delay"]))
 
             self._call(
                 t.set_readout_delay(ro_delay, ch),
@@ -1626,7 +1675,7 @@ class OverlayAdapter:
                     raise ConfigurationError(f"drive[{ch}] entry #{k} must be (delay, gen_bit), got: {pair}")
 
                 delay, gen = pair
-                delay_i = int(delay)
+                delay_i = max(5, int(delay))
                 gen_i = 1 if int(gen) else 0
 
                 fifo_index = start_idx + k  # LL index is 1-based
@@ -1706,7 +1755,9 @@ class OverlayAdapter:
         # Direct callers should provide a numeric phase value.
         self._call(
             acq.set_acquisition_dds_parameters(
-                frequency=acq_mod["frequency_mhz"], phase=acq_mod["phase"], adc_samplerate=self._adc_sr_mhz()
+                frequency=acq_mod["frequency_mhz"],
+                phase=acq_mod["phase"],
+                adc_samplerate=self._adc_sr_mhz(),
             ),
             operation="set_acquisition_dds_parameters",
             driver_name="AcquisitionDriver",
@@ -1770,8 +1821,12 @@ class OverlayAdapter:
             self.logger.info("Acquisition %d is deaf to any trigger!", acq_index)
         else:
             self.logger.info(
-                "Generator %d listens to %s_trigger_word channel %d", acq_index, trig["ttype"], trig["channel"]
+                "Generator %d listens to %s_trigger_word channel %d",
+                acq_index,
+                trig["ttype"],
+                trig["channel"],
             )
+        self._acq_trigger_channel[int(acq_index)] = int(trig["channel"])
 
         return {
             "acq_index": acq_index,
@@ -1835,7 +1890,11 @@ class OverlayAdapter:
         if shots <= max_hw_shots:
 
             final_result, hw_wait_s = self._run_single_hw_acquisition(
-                adc_indices=adc_indices, mode=mode, shots=shots, samp_per_shot=samp_per_shot, timeout=timeout
+                adc_indices=adc_indices,
+                mode=mode,
+                shots=shots,
+                samp_per_shot=samp_per_shot,
+                timeout=timeout,
             )
             hw_time_accumulator += hw_wait_s
 
@@ -1850,7 +1909,11 @@ class OverlayAdapter:
                 hw_shots = min(max_hw_shots, remaining)
 
                 data, hw_wait_s = self._run_single_hw_acquisition(
-                    adc_indices=adc_indices, mode=mode, shots=hw_shots, samp_per_shot=samp_per_shot, timeout=timeout
+                    adc_indices=adc_indices,
+                    mode=mode,
+                    shots=hw_shots,
+                    samp_per_shot=samp_per_shot,
+                    timeout=timeout,
                 )
                 hw_time_accumulator += hw_wait_s
 
@@ -1910,6 +1973,14 @@ class OverlayAdapter:
         """
         results = {}
         hw_wait_s = 0.0
+        self.logger.info(
+            "run_single_hw_acquisition: mode=%s shots=%d samp/shot=%d adcs=%s timeout=%s",
+            mode,
+            shots,
+            samp_per_shot,
+            adc_indices,
+            timeout,
+        )
         self.tg_set_shots(shots)
 
         # Pre-config ADCs
@@ -1921,15 +1992,29 @@ class OverlayAdapter:
             elif mode == "raw":
                 ctrl = acq.AxiLiteInterfaceMMIO.read(acq.ctrl * 4)
                 acq.AxiLiteInterfaceMMIO.write(acq.ctrl * 4, ctrl)
+            ch = getattr(self, "_acq_trigger_channel", {}).get(int(adc_i))
+            self.logger.info(
+                "Acq debug: adc=%d mode=%s shots=%d samp/shot=%d trig_ch=%s",
+                adc_i,
+                mode,
+                shots,
+                samp_per_shot,
+                "unset" if ch is None else ch,
+            )
 
         # First ADC: arm before trigger
         first_adc = adc_indices[0]
         first_buffer = self.dma_engine.arm_acquisition(
-            samp_per_shot=samp_per_shot, shots_per_exp=shots, mode=mode, adc_index=first_adc
+            samp_per_shot=samp_per_shot,
+            shots_per_exp=shots,
+            mode=mode,
+            adc_index=first_adc,
         )
 
         # Trigger
+        t_trig = time.perf_counter()
         self.trigger_experiment()
+        self.logger.info("trigger_experiment issued at t=%.6f", t_trig)
 
         # Retrieve first ADC
         results[first_adc] = self.dma_engine.retrieve_acquisition(
@@ -1945,10 +2030,18 @@ class OverlayAdapter:
         # Remaining ADCs
         for adc_i in adc_indices[1:]:
             buffer = self.dma_engine.arm_acquisition(
-                samp_per_shot=samp_per_shot, shots_per_exp=shots, mode=mode, adc_index=adc_i
+                samp_per_shot=samp_per_shot,
+                shots_per_exp=shots,
+                mode=mode,
+                adc_index=adc_i,
             )
             results[adc_i] = self.dma_engine.retrieve_acquisition(
-                buffer=buffer, mode=mode, shots=shots, samp_per_shot=samp_per_shot, adc_index=adc_i, timeout=timeout
+                buffer=buffer,
+                mode=mode,
+                shots=shots,
+                samp_per_shot=samp_per_shot,
+                adc_index=adc_i,
+                timeout=timeout,
             )
             hw_wait_s += self.dma_engine.last_dma_wait_s
 

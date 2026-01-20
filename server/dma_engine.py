@@ -133,6 +133,7 @@ class AcquisitionEngine:
         # sweep mode flags
         self._sweep_mode = None
         self._sweep_prepared = False
+        self._reset_on_next_arm = False
         # Last successful DMA wait duration (seconds). Set to 0.0 on entry.
         self.last_dma_wait_s = 0.0
 
@@ -307,6 +308,11 @@ class AcquisitionEngine:
         :raises DMAError:
             On invalid sizes, invalid mode, or inability to start DMA transfer.
         """
+        if self._reset_on_next_arm:
+            self.logger.warning("Resetting DMA before first post-sweep acquisition.")
+            self._hard_reset()
+            self._reset_on_next_arm = False
+
         # "Fast path "is correct if the caller keeps mode and sizing invariants stable
         # across iterations.
         if self._sweep_prepared and self._sweep_mode == mode:
@@ -469,11 +475,11 @@ class AcquisitionEngine:
         )
 
         # 2. DMA state check
-        # DMA may report a non-running/non-idle state when halted or after
-        # an error. Starting a transfer in that state is undefined; actively
-        # reset avoids failures and producing misleading partial data.
-        if not self.dma.recvchannel.running and not self.dma.recvchannel.idle:
-            self.logger.warning("DMA in halted/error state. Forcing hard reset.")
+        # DMA may report a non-idle state after a previous run (or an error).
+        # Starting a new transfer while not idle is undefined; actively reset
+        # to avoid timeouts and partial data.
+        if not self.dma.recvchannel.idle:
+            self.logger.warning("DMA not idle before arm. Forcing hard reset.")
             self._hard_reset()
 
         # 3. Switch routing
@@ -529,6 +535,7 @@ class AcquisitionEngine:
         """Disable sweep mode and return to conservative validation behavior."""
         self._sweep_prepared = False
         self._sweep_mode = None
+        self._reset_on_next_arm = True
 
     def _arm_acquisition_fast(
         self,
@@ -668,10 +675,11 @@ class AcquisitionEngine:
         if not self.switch:
             return
 
-        # Port mapping is a *bitstream-level contract*. If the switch
-        # topology changes, this mapping must be updated together with
-        # hw_specs.
-        base_port = int(adc_index) * 2
+        # Port mapping is a *bitstream-level contract*. Hardcoded swap for this bitstream:
+        # acq0 -> base port 2 (raw=2, dec/acc=3), acq1 -> base port 0 (raw=0, dec/acc=1).
+        adc_idx = int(adc_index)
+        hard_map = {0: 2, 1: 0}
+        base_port = hard_map.get(adc_idx, adc_idx * 2)
         target_port = base_port + (0 if raw_mode else 1)
 
         self.logger.info(f"Routing AXI switch: adc={adc_index}, raw_mode={raw_mode} -> port={target_port}")

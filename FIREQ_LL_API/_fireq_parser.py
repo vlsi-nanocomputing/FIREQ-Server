@@ -97,7 +97,11 @@ class FireqParser:
         # get the name for the master module
         master_module_name = master_module.attrib["INSTANCE"]
         # create the return dictionary
-        connectivity_graph = {"NODE": master_module_name, "BUS_M/S": (None, None), "CHILDREN": []}
+        connectivity_graph = {
+            "NODE": master_module_name,
+            "BUS_M/S": (None, None),
+            "CHILDREN": [],
+        }
         # get the bus interfaces for this module
         master_bus_interfaces = self.get_bus_interfaces(master_module)
         # iterate over the bus interfaces

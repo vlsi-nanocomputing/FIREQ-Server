@@ -62,6 +62,10 @@ def ctx() -> AdapterContext:
     mock_acq = mock_ol.acquisitions[0]
     mock_acq.set_acquisition_dds_parameters = MagicMock(return_value=0)
 
+    # Set trigger channels so acquisitions are considered "active" (channel > 0)
+    for acq in mock_ol.acquisitions:
+        acq.current_channel = 1
+
     adapter = OverlayAdapter(mock_ol)
     # Mock DMA engine for chunking tests
     adapter.dma_engine = MagicMock()
@@ -390,7 +394,10 @@ def test_sweep_lifecycle(ctx: AdapterContext) -> None:
     adc_list = [0]
 
     # 1. Preparation
-    ctx.adapter.prepare_sweep(mode="decimated", adc_indices=adc_list)
+    ctx.adapter.prepare_sweep(
+        mode="decimated",
+        adc_indices=adc_list,
+    )
 
     # Assert driver call
     ctx.acq.set_decimated_output_type.assert_called_with("decimated")
@@ -453,7 +460,10 @@ def test_acquisition_single_shot_overflow(ctx: AdapterContext) -> None:
 
     with pytest.raises(ConfigurationError) as exc:
         ctx.adapter.run_multi_acquisition(
-            adc_indices=[0], mode="raw", shots=1, samp_per_shot=999999  # Huge single shot
+            adc_indices=[0],
+            mode="raw",
+            shots=1,
+            samp_per_shot=999999,  # Huge single shot
         )
 
     assert "Impossible configuration" in str(exc.value)

@@ -23,24 +23,24 @@ class AcquisitionDriver(_FIREQDriver):
         """
         super().__init__(description=description)
         # maximum acquisition duration in clock cycles
-        self._duration_width = int(description["parameters"]["DurationWidth"])
-        self._maximum_duration = pow(2, self._duration_width)
+        self.duration_width = int(description["parameters"]["DurationWidth"])
+        self.maximum_duration = pow(2, self.duration_width)
         # size of the samples in bits
-        self._sample_size = int(description["parameters"]["SampleSize"])
+        self.sample_size = int(description["parameters"]["SampleSize"])
         # parallelism of the acquisition in number of samples
-        self._log_number_of_channels = int(description["parameters"]["LogNsamplesClock"])
-        self._number_of_channels = pow(2, self._log_number_of_channels)
+        self.log_number_of_channels = int(description["parameters"]["LogNsamplesClock"])
+        self.number_of_channels = pow(2, self.log_number_of_channels)
         # depth of the phase increment and offset in bits
-        self._phase_depth = int(description["parameters"]["PhaseDepth"])
+        self.phase_depth = int(description["parameters"]["PhaseDepth"])
         # number of triggers on the input trigger channel
-        self._trigger_channels = int(description["parameters"]["TriggerWordWidth"])
+        self.trigger_channels = int(description["parameters"]["TriggerWordWidth"])
         # maximum time of flight delay in clock cycles
-        self._time_of_flight_width = int(description["parameters"]["TimeOfFlightCounterWidth"])
-        self._time_of_flight_max = pow(2, self._time_of_flight_width)
+        self.time_of_flight_width = int(description["parameters"]["TimeOfFlightCounterWidth"])
+        self.time_of_flight_max = pow(2, self.time_of_flight_width)
         # not decimated output width in bits
-        self._non_decimated_output_width = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
+        self.non_decimated_output_width = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
         # decimated output width in bits
-        self._decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
+        self.decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
 
         # Register offset definitions
         self._ctrl = 0
@@ -55,20 +55,20 @@ class AcquisitionDriver(_FIREQDriver):
 
     def print_description(self) -> None:
         """Print the driver configuration parameters to stdout."""
-        print("maximum_duration: " + str(self._maximum_duration) + ", maximum duration of acquisition in clock cycles")
-        print("sample_size: " + str(self._sample_size) + ", width of samples (bits)")
+        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of acquisition in clock cycles")
+        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
         print(
             "number_of_channels: "
-            + str(self._number_of_channels)
+            + str(self.number_of_channels)
             + ", parallelism of the acquisition (samples/clock cycle)"
         )
-        print("phase_depth: " + str(self._phase_depth) + ", width of phases (bits)")
+        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
         print(
             "trigger_channels: "
-            + str(self._trigger_channels)
+            + str(self.trigger_channels)
             + ", number of trigger channels for readout and drive (bits)"
         )
-        print("time_of_flight_width: " + str(self._time_of_flight_width) + ", width of the time of flight timer (bits)")
+        print("time_of_flight_width: " + str(self.time_of_flight_width) + ", width of the time of flight timer (bits)")
 
     def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface for register access.
@@ -99,13 +99,13 @@ class AcquisitionDriver(_FIREQDriver):
             raise ValueError("Frequency must be non-negative")
 
         # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, adc_samplerate, self._phase_depth)
+        phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, adc_samplerate, self.phase_depth)
 
         # this masking is due to the fact that the frequency of the dac is double.
         # this prevents the ADC from going out of phase wrt the generator which means
         # that the readout channels will always be at a constant phase
-        pinc = phase_parameters[0] & (2**self._phase_depth - 2)
-        poff = phase_parameters[1] & (2**self._phase_depth - 2)
+        pinc = phase_parameters[0] & (2**self.phase_depth - 2)
+        poff = phase_parameters[1] & (2**self.phase_depth - 2)
 
         # write registers
         self._set_readout_pinc_poff(pinc, poff)
@@ -149,11 +149,11 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         :raises ValueError: If duration is out of valid range
         """
-        if duration < 1 or duration > self._maximum_duration:
-            raise ValueError(f"Acquisition duration must be between 1 and {self._maximum_duration}")
+        if duration < 1 or duration > self.maximum_duration:
+            raise ValueError(f"Acquisition duration must be between 1 and {self.maximum_duration}")
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, self._trigger_channels, self._duration_width, duration - 1)
+        control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         return 0
 
@@ -166,12 +166,12 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         :raises ValueError: If channel is out of valid range
         """
-        if channel < 0 or channel > self._trigger_channels:
-            raise ValueError(f"Channel must be between 0 and {self._trigger_channels}")
+        if channel < 0 or channel > self.trigger_channels:
+            raise ValueError(f"Channel must be between 0 and {self.trigger_channels}")
 
         channel_mask = (1 << channel) >> 1
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, 0, self._trigger_channels, channel_mask)
+        control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         return 0
 
@@ -184,14 +184,14 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         :raises ValueError: If time_of_flight is out of valid range
         """
-        if time_of_flight < 1 or time_of_flight > self._time_of_flight_max:
-            raise ValueError(f"Time of flight must be between 1 and {self._time_of_flight_max}")
+        if time_of_flight < 1 or time_of_flight > self.time_of_flight_max:
+            raise ValueError(f"Time of flight must be between 1 and {self.time_of_flight_max}")
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(
             control_register,
-            self._trigger_channels + self._duration_width,
-            self._time_of_flight_width,
+            self.trigger_channels + self.duration_width,
+            self.time_of_flight_width,
             time_of_flight - 1,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
@@ -216,7 +216,9 @@ class AcquisitionDriver(_FIREQDriver):
             raise ValueError("Invalid output_type. Allowed values are 'decimated' and 'accumulated'")
 
         updated_control = _set_bit(
-            self._axi_lite_interface_mmio.read(self._ctrl), self._accumulate_select_pos, output_mode_bit
+            self._axi_lite_interface_mmio.read(self._ctrl * 4),
+            self._accumulate_select_pos,
+            output_mode_bit,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
         return 0

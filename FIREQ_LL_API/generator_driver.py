@@ -171,7 +171,10 @@ class GeneratorDriver(_FIREQDriver):
         self.envelope_memory_dict_reserved_names = []
 
         # set the memory free space in the envelope memory dictionary
-        self.envelope_memory_dict["_FREESPACE"] = {"start": 0, "depth": self.channel_sample_memory_depth}
+        self.envelope_memory_dict["_FREESPACE"] = {
+            "start": 0,
+            "depth": self.channel_sample_memory_depth,
+        }
         self.envelope_memory_dict_reserved_names.append("_FREESPACE")
         # set an entry for rectangular waves
         self.envelope_memory_dict["_RECTANGULAR"] = {
@@ -285,7 +288,9 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         control_register = _set_bit(
-            value=self._axi_lite_interface_mmio.read(self.ctrl * 4), pos=self.source_pos, setvalue=source
+            value=self._axi_lite_interface_mmio.read(self.ctrl * 4),
+            pos=self.source_pos,
+            setvalue=source,
         )
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
         return 0
@@ -429,7 +434,9 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         control_register = _set_bit(
-            self._axi_lite_interface_mmio.read(self.ctrl * 4), pos=self.man_trig_sel, setvalue=selector
+            self._axi_lite_interface_mmio.read(self.ctrl * 4),
+            pos=self.man_trig_sel,
+            setvalue=selector,
         )
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
         return 0
@@ -521,7 +528,13 @@ class GeneratorDriver(_FIREQDriver):
         :param envelope_name: name to attach to envelope description
         :type envelope_name: string
         """
-        new_dict_item = {"is_interp": 0, "size": 0, "is_sym": 0, "i_even": 0, "q_even": 0}
+        new_dict_item = {
+            "is_interp": 0,
+            "size": 0,
+            "is_sym": 0,
+            "i_even": 0,
+            "q_even": 0,
+        }
 
         # check inputs
         if envelope_name in self.envelope_memory_dict.keys():
@@ -597,7 +610,12 @@ class GeneratorDriver(_FIREQDriver):
         return 0
 
     def create_wave_definition_word(
-        self, envelope_name: str, duration: int, gain: float, switch_iq: bool, keep_last: bool = False
+        self,
+        envelope_name: str,
+        duration: int,
+        gain: float,
+        switch_iq: bool,
+        keep_last: bool = False,
     ) -> int:
         """Generate a wave definition word using cached envelopes.
 
@@ -808,7 +826,8 @@ class GeneratorDriver(_FIREQDriver):
         # write to wave memory
         for i in range(4):
             self._axi_full_interface_mmio.write(
-                (self.total_sample_memory_segment_depth + i * 4 + address), (wave_definition >> (i * 32)) & 0xFFFFFFFF
+                (self.total_sample_memory_segment_depth + i * 4 + address),
+                (wave_definition >> (i * 32)) & 0xFFFFFFFF,
             )
 
         # write to wave memory cache
@@ -907,7 +926,8 @@ class GeneratorDriver(_FIREQDriver):
         # write to wave memory (same address)
         for i in range(4):
             self._axi_full_interface_mmio.write(
-                (self.total_sample_memory_segment_depth + i * 4 + address), (wave_definition >> (i * 32)) & 0xFFFFFFFF
+                (self.total_sample_memory_segment_depth + i * 4 + address),
+                (wave_definition >> (i * 32)) & 0xFFFFFFFF,
             )
 
         # update dictionary key if rename requested

@@ -69,7 +69,7 @@ def stack() -> object:
 def test_run_experiment_flow(stack: object) -> None:
     """Test the _run_acquisition orchestrator."""
     config = {
-        "acquisitions": [{"acq_index": 0, "output_type": "decimated", "duration": 256}],
+        "acquisitions": [{"acq_index": 0, "output_type": "decimated", "duration": 256, "channel": 1}],
         "trigger": {"shots": 10},
         "timeout": 5.0,
     }
@@ -78,10 +78,16 @@ def test_run_experiment_flow(stack: object) -> None:
     # Mock the arming phase to return a dummy buffer object
     stack.adapter.dma_engine.arm_acquisition.return_value = "dummy_buffer"
 
+    # Pre-set the acquisition's trigger channel so it's considered "active"
+    # (normally _setup_acquisition would do this, but we're testing _run_acquisition directly)
+    stack.ol.acquisitions[0].current_channel = 1
+    stack.ol.acquisitions[1].current_channel = 1
+
     # Run the internal method
     results = stack.handler._run_acquisition(config, log)
 
     # Check results
+    # Note: acq_index maps directly to adc_index with identity mapping.
     assert 0 in results
     assert results[0].shape == (10, 256)
 
@@ -265,7 +271,11 @@ class TestRobustness:
         # 1. Setup a multi-point sweep
         msg = {
             "sweep_id": "long_run",
-            "base": {"generators": [], "acquisitions": [{"acq_index": 0, "duration": 10}], "trigger": {}},
+            "base": {
+                "generators": [],
+                "acquisitions": [{"acq_index": 0, "duration": 10}],
+                "trigger": {},
+            },
             "variables": [{"name": "x", "values": [1, 2, 3, 4, 5]}],
         }
 
@@ -330,7 +340,10 @@ class TestRobustness:
 
     def test_acquisition_timeout_handling(self, stack: object) -> None:
         """Verify system stability when acquisition times out."""
-        config = {"acquisitions": [{"acq_index": 0, "duration": 100}], "timeout": 1.0}
+        config = {
+            "acquisitions": [{"acq_index": 0, "duration": 100, "channel": 1}],
+            "timeout": 1.0,
+        }
 
         # 1. Simulate a Timeout Exception from the driver
         # Monkey patch run_multi_acquisition
@@ -364,7 +377,10 @@ class TestRobustness:
                 "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$f"}}],
                 "acquisitions": [{"acq_index": 0, "frequency_mhz": "$g", "duration": 10}],
             },
-            "variables": [{"name": "f", "values": [10.0, 20.0, 30.0]}, {"name": "g", "values": [0.1, 0.2, 0.3]}],
+            "variables": [
+                {"name": "f", "values": [10.0, 20.0, 30.0]},
+                {"name": "g", "values": [0.1, 0.2, 0.3]},
+            ],
         }
 
         # We want to verify the generated points.
@@ -542,7 +558,13 @@ class TestRobustness:
         """
         config = {
             "generators": [
-                {"gen_index": 0, "readout": {"frequency_mhz": 50.0, "wave": {"type": "const", "length": 100}}}
+                {
+                    "gen_index": 0,
+                    "readout": {
+                        "frequency_mhz": 50.0,
+                        "wave": {"type": "const", "length": 100},
+                    },
+                }
             ]
         }
 
@@ -570,7 +592,10 @@ class TestRobustness:
 def test_experiment_result_binary_metadata() -> None:
     """Test ExperimentResult.to_metadata_dict() generates correct metadata."""
     # Create test data with different dtypes and shapes
-    data = {0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64), 1: np.array([[5 + 6j, 7 + 8j]], dtype=np.complex128)}
+    data = {
+        0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64),
+        1: np.array([[5 + 6j, 7 + 8j]], dtype=np.complex128),
+    }
     result = ExperimentResult(ok=True, data=data, config_log=["test"])
 
     # Test metadata generation
@@ -682,7 +707,10 @@ def test_envelope_handler_binary_multiple_generators(stack: object) -> None:
     samples_gen0 = np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32)
     samples_gen1 = np.array([[0.5, 0.6], [0.7, 0.8]], dtype=np.float32)
 
-    envelope_data = {(0, 0): samples_gen0, (1, 0): samples_gen1}  # gen 0, env 0  # gen 1, env 0
+    envelope_data = {
+        (0, 0): samples_gen0,
+        (1, 0): samples_gen1,
+    }  # gen 0, env 0  # gen 1, env 0
 
     config = {
         "envelopes": {
@@ -715,13 +743,18 @@ def test_envelope_handler_binary_multiple_generators(stack: object) -> None:
     assert result.error is None
 
 
-def test_envelope_handler_binary_multiple_envelopes_per_generator(stack: object) -> None:
+def test_envelope_handler_binary_multiple_envelopes_per_generator(
+    stack: object,
+) -> None:
     """Test binary upload with multiple envelopes for one generator."""
     # Create binary data for multiple envelopes on same generator
     samples_env0 = np.array([[0.1, 0.2]], dtype=np.float32)
     samples_env1 = np.array([[0.3, 0.4], [0.5, 0.6]], dtype=np.float32)
 
-    envelope_data = {(0, 0): samples_env0, (0, 1): samples_env1}  # gen 0, env 0  # gen 0, env 1
+    envelope_data = {
+        (0, 0): samples_env0,
+        (0, 1): samples_env1,
+    }  # gen 0, env 0  # gen 0, env 1
 
     config = {
         "envelopes": {
@@ -779,3 +812,6 @@ def test_envelope_handler_binary_large_samples(stack: object) -> None:
 
     assert result.ok
     assert result.error is None
+
+
+# =============================================================================

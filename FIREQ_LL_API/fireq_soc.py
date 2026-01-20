@@ -4,6 +4,7 @@ import os
 import re
 
 import xrfclk
+import xrfdc  # noqa: F401
 from pynq import PL, Overlay
 
 from ._fireq_parser import FireqParser
@@ -69,9 +70,9 @@ class FIREQSoC(Overlay):
         self._cached_nyquist_zone: dict[tuple, int] = {}
 
         # 5) Low-level discovery (bind AXI + classify IPs)
-        self._rf = getattr(self, "usp_rf_data_converter_0", None)
-        self._axis_switch = getattr(self, "axis_switch_0", None)
-        self._dma = getattr(self, "axi_dma_0", None)
+        self._rf = self.usp_rf_data_converter_0
+        self._axis_switch = self.axis_switch_0
+        self._dma = self.axi_dma_0
 
         self._discover_fireq_ips()
 
@@ -213,7 +214,9 @@ class FIREQSoC(Overlay):
             conn_rfdc = self._fireq_parser.get_connectivity(rfdc_xml, all_modules)
 
             def trace_rfdc_source(
-                node_dict: dict[str, object], source_port_name: str, at_root: bool = True
+                node_dict: dict[str, object],
+                source_port_name: str,
+                at_root: bool = True,
             ) -> int | None:
                 if at_root and node_dict["NODE"] == rfdc_name:
                     for child in node_dict["CHILDREN"]:
@@ -544,14 +547,14 @@ class FIREQSoC(Overlay):
             "adc_parallelism_set": adc_parallelism_set,
             "dac_parallelism_set": dac_parallelism_set,
             # the following are set only if uniform across all IPs
-            "adc_parallelism": adc_parallelism_set[0] if len(adc_parallelism_set) == 1 else None,
-            "dac_parallelism": dac_parallelism_set[0] if len(dac_parallelism_set) == 1 else None,
+            "adc_parallelism": (adc_parallelism_set[0] if len(adc_parallelism_set) == 1 else None),
+            "dac_parallelism": (dac_parallelism_set[0] if len(dac_parallelism_set) == 1 else None),
             # Trigger summary
             # if more than one trigger generator IP, the list is aware and maximum timing is not forced to be uniform
             "trigger_channels_set": trigger_channels_set,
-            "trigger_channels": trigger_channels_set[0] if len(trigger_channels_set) == 1 else None,
-            "max_hw_repetitions_min": min(max_hw_reps_list) if max_hw_reps_list else None,
-            "experiment_timer_max_min": min(exp_timer_max_list) if exp_timer_max_list else None,
+            "trigger_channels": (trigger_channels_set[0] if len(trigger_channels_set) == 1 else None),
+            "max_hw_repetitions_min": (min(max_hw_reps_list) if max_hw_reps_list else None),
+            "experiment_timer_max_min": (min(exp_timer_max_list) if exp_timer_max_list else None),
         }
 
         specs = {

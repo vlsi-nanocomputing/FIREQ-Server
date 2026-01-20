@@ -130,7 +130,11 @@ class EnvelopeResult:
         :return: Dict representation of the upload result.
         :rtype: dict
         """
-        return {"ok": self.ok, "result": {str(k): v for k, v in self.result.items()}, "error": self.error}
+        return {
+            "ok": self.ok,
+            "result": {str(k): v for k, v in self.result.items()},
+            "error": self.error,
+        }
 
 
 @dataclass
@@ -153,7 +157,11 @@ class WaveResult:
         :return: Dict representation of the compilation result.
         :rtype: dict
         """
-        return {"ok": self.ok, "payload": {str(k): v for k, v in self.payload.items()}, "error": self.error}
+        return {
+            "ok": self.ok,
+            "payload": {str(k): v for k, v in self.payload.items()},
+            "error": self.error,
+        }
 
 
 @dataclass
@@ -185,7 +193,10 @@ class ExperimentResult:
             d["data"] = {}
             for adc_idx, arr in self.data.items():
                 if arr is not None:
-                    d["data"][adc_idx] = {"I": np.real(arr).tolist(), "Q": np.imag(arr).tolist()}
+                    d["data"][adc_idx] = {
+                        "I": np.real(arr).tolist(),
+                        "Q": np.imag(arr).tolist(),
+                    }
         if self.error:
             d["error"] = self.error
         if self.config_log:
@@ -195,10 +206,6 @@ class ExperimentResult:
     def to_metadata_dict(self) -> dict:
         """Generate metadata dictionary for binary transmission protocol.
 
-        Instead of converting arrays to lists, this method generates minimal metadata
-        describing the arrays (dtype and shape only), allowing the client to reconstruct
-        arrays from binary frames.
-
         :return: Dict with metadata for binary reconstruction.
         :rtype: dict
         """
@@ -207,7 +214,10 @@ class ExperimentResult:
             d["adc_metadata"] = {}
             for adc_idx, arr in self.data.items():
                 if arr is not None:
-                    d["adc_metadata"][adc_idx] = {"dtype": str(arr.dtype), "shape": list(arr.shape)}
+                    d["adc_metadata"][adc_idx] = {
+                        "dtype": str(arr.dtype),
+                        "shape": list(arr.shape),
+                    }
         else:
             d["adc_metadata"] = {}
         if self.error:
@@ -242,10 +252,18 @@ class SweepPointResult:
 
     def to_dict(self) -> dict:
         """Convert sweep point data to a JSON-friendly dictionary."""
-        d = {"point_index": self.point_index, "n_total": self.n_total, "variables": self.variables, "data": {}}
+        d = {
+            "point_index": self.point_index,
+            "n_total": self.n_total,
+            "variables": self.variables,
+            "data": {},
+        }
         for adc_idx, arr in self.data.items():
             if arr is not None:
-                d["data"][adc_idx] = {"I": np.real(arr).tolist(), "Q": np.imag(arr).tolist()}
+                d["data"][adc_idx] = {
+                    "I": np.real(arr).tolist(),
+                    "Q": np.imag(arr).tolist(),
+                }
         return d
 
     def to_metadata_dict(self) -> dict:
@@ -254,10 +272,18 @@ class SweepPointResult:
         :return: Dict with sweep point info and array metadata.
         :rtype: dict
         """
-        d = {"point_index": self.point_index, "n_total": self.n_total, "variables": self.variables, "adc_metadata": {}}
+        d = {
+            "point_index": self.point_index,
+            "n_total": self.n_total,
+            "variables": self.variables,
+            "adc_metadata": {},
+        }
         for adc_idx, arr in self.data.items():
             if arr is not None:
-                d["adc_metadata"][adc_idx] = {"dtype": str(arr.dtype), "shape": list(arr.shape)}
+                d["adc_metadata"][adc_idx] = {
+                    "dtype": str(arr.dtype),
+                    "shape": list(arr.shape),
+                }
         return d
 
     def get_binary_data(self) -> dict[int, np.ndarray]:
@@ -411,7 +437,9 @@ def substitute_variables(config: dict, point: dict[str, object]) -> dict:
 
 
 def generate_sweep_points(
-    variables: list[dict], mode: str = "cartesian", var_cast: dict[str, str] | None = None
+    variables: list[dict],
+    mode: str = "cartesian",
+    var_cast: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     """Generate the list of sweep points from variable specifications.
 
@@ -624,7 +652,13 @@ class ResetHandler:
             )
             return ResetResult(ok=True, gen_index=gen_index, action="wave_reset", details=res)
         except Exception as e:
-            return ResetResult(ok=False, gen_index=gen_index, action="wave_reset", details={}, error=str(e))
+            return ResetResult(
+                ok=False,
+                gen_index=gen_index,
+                action="wave_reset",
+                details={},
+                error=str(e),
+            )
 
     def reset_envelopes(self, gen_index: int) -> ResetResult:
         """Reset envelope memory for a generator.
@@ -638,7 +672,13 @@ class ResetHandler:
             res = self.adapter.reset_envelopes(gen_index=gen_index)
             return ResetResult(ok=True, gen_index=gen_index, action="envelope_reset", details=res)
         except Exception as e:
-            return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
+            return ResetResult(
+                ok=False,
+                gen_index=gen_index,
+                action="envelope_reset",
+                details={},
+                error=str(e),
+            )
 
     def reset_all_generators(self, preserve_wave_specs: bool = False) -> list[ResetResult]:
         """Reset waves and envelopes for ALL generators.
@@ -651,7 +691,13 @@ class ResetHandler:
         for gen_idx in range(num_gens):
             wave_res = self.reset_waves(gen_idx, preserve_specs=preserve_wave_specs)
             env_res = self.reset_envelopes(gen_idx)
-            results.append({"gen_index": gen_idx, "waves": wave_res.to_dict(), "envelopes": env_res.to_dict()})
+            results.append(
+                {
+                    "gen_index": gen_idx,
+                    "waves": wave_res.to_dict(),
+                    "envelopes": env_res.to_dict(),
+                }
+            )
 
         return results
 
@@ -673,7 +719,11 @@ class EnvelopeHandler:
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
 
-    def upload(self, config: dict, envelope_data: dict[tuple[int, int], np.ndarray] | None = None) -> EnvelopeResult:
+    def upload(
+        self,
+        config: dict,
+        envelope_data: dict[tuple[int, int], np.ndarray] | None = None,
+    ) -> EnvelopeResult:
         """Process the 'envelopes' section of the configuration.
 
         :param config: Dictionary containing envelope specifications (metadata).
@@ -709,7 +759,11 @@ class EnvelopeHandler:
                             f"on gen {gen_index} (env_idx={env_idx})."
                         )
                         self.logger.error(error_msg)
-                        result[gen_index] = {"loaded": [], "skipped": [], "failed": [error_msg]}
+                        result[gen_index] = {
+                            "loaded": [],
+                            "skipped": [],
+                            "failed": [error_msg],
+                        }
                         return EnvelopeResult(ok=False, result=result, error=error_msg)
 
                     envelopes_with_samples.append(envelope)
@@ -717,11 +771,17 @@ class EnvelopeHandler:
                 # Upload is separated from compilation so
                 # large envelope buffers are transferred at most once per session.
                 res = self.adapter.upload_envelopes(
-                    gen_index=gen_index, envelopes=envelopes_with_samples, auto_pad_noninterp=True
+                    gen_index=gen_index,
+                    envelopes=envelopes_with_samples,
+                    auto_pad_noninterp=True,
                 )
 
                 # Build per-generator result
-                gen_result = {"loaded": res.get("loaded", []), "skipped": res.get("skipped", []), "failed": []}
+                gen_result = {
+                    "loaded": res.get("loaded", []),
+                    "skipped": res.get("skipped", []),
+                    "failed": [],
+                }
 
                 if res.get("failed"):
                     gen_result["failed"] = [f"{f['name']}: {f['error']}" for f in res["failed"]]
@@ -853,10 +913,28 @@ class MessageHandler:
     WAVE_ENV_KEYS = frozenset(["wave_id", "kind", "envelope", "duration", "gain", "switch_iq", "keep_last"])
     WAVE_VZ_KEYS = frozenset(["wave_id", "kind", "vz_phase_rad"])
     GENERATOR_KEYS = frozenset(["gen_index", "drive", "readout"])
-    DRIVE_KEYS = frozenset(["frequency_mhz", "phase", "nyquist_zone", "channel", "fifo", "fifo_start_index"])
+    DRIVE_KEYS = frozenset(
+        [
+            "frequency_mhz",
+            "phase",
+            "nyquist_zone",
+            "channel",
+            "fifo",
+            "fifo_start_index",
+        ]
+    )
     READOUT_KEYS = frozenset(["frequency_mhz", "phase", "nyquist_zone", "channel", "wave"])
     ACQUISITION_KEYS = frozenset(
-        ["acq_index", "acquisition", "frequency_mhz", "phase", "channel", "duration", "tof", "output_type"]
+        [
+            "acq_index",
+            "acquisition",
+            "frequency_mhz",
+            "phase",
+            "channel",
+            "duration",
+            "tof",
+            "output_type",
+        ]
     )
     TRIGGER_KEYS = frozenset(["shots", "shot_duration", "drive", "readout", "drive_start_index"])
     TRIGGER_SPEC_KEYS = frozenset(["delay"])
@@ -880,6 +958,25 @@ class MessageHandler:
         self.reset_h = ResetHandler(adapter, self.logger)
         self.env_h = EnvelopeHandler(adapter, self.logger)
         self.wave_h = WaveHandler(adapter, self.logger)
+
+        # Mapping from acq_index to DMA adc_index.
+        # Keep identity here; DMA routing is hardcoded in the engine for this bitstream.
+        self.acq_to_adc_mapping: dict[int, int] | None = None
+
+    def _map_acq_to_adc(self, acq_index: int) -> int:
+        """Map acquisition IP index to DMA ADC index.
+
+        For firmware with shared DMA and AXI switch, the mapping may be inverted.
+        If no mapping is configured, returns the acq_index unchanged (identity mapping).
+
+        :param acq_index: Acquisition IP index from config.
+        :type acq_index: int
+        :return: Corresponding DMA ADC index.
+        :rtype: int
+        """
+        if self.acq_to_adc_mapping is None:
+            return acq_index
+        return self.acq_to_adc_mapping.get(acq_index, acq_index)
 
     def _validate_keys(self, obj: dict, allowed: set[str], ctx: str) -> None:
         if not isinstance(obj, dict):
@@ -935,7 +1032,11 @@ class MessageHandler:
                     self._validate_keys(drive, set(self.DRIVE_KEYS), f"config.generators[{i}].drive")
                 readout = gen_cfg.get("readout")
                 if readout is not None:
-                    self._validate_keys(readout, set(self.READOUT_KEYS), f"config.generators[{i}].readout")
+                    self._validate_keys(
+                        readout,
+                        set(self.READOUT_KEYS),
+                        f"config.generators[{i}].readout",
+                    )
 
         acquisitions_cfg = config.get("acquisitions")
         if acquisitions_cfg is not None:
@@ -954,7 +1055,11 @@ class MessageHandler:
                 if not isinstance(mapping, dict):
                     raise ValueError(f"config.trigger.{key} must be a dict")
                 for ch_key, spec in mapping.items():
-                    self._validate_keys(spec, set(self.TRIGGER_SPEC_KEYS), f"config.trigger.{key}[{ch_key}]")
+                    self._validate_keys(
+                        spec,
+                        set(self.TRIGGER_SPEC_KEYS),
+                        f"config.trigger.{key}[{ch_key}]",
+                    )
 
     def _validate_sweep_message(self, msg: dict, allow_inline_config: bool) -> None:
         if not isinstance(msg, dict):
@@ -1024,13 +1129,16 @@ class MessageHandler:
             for gen_cfg in config.get("generators", []):
                 self._setup_generator(gen_cfg, log)
 
+            self._disable_all_acquisitions(log)
             for acq_cfg in config.get("acquisitions", []):
                 self._setup_acquisition(acq_cfg, log)
+            self._disable_unused_acquisitions(config, log)
 
             trigger_cfg = config.get("trigger", {})
             self._setup_trigger(trigger_cfg, log)
 
             # 3. run the experiment and acquire data
+            self._reset_dma_before_run()
             data = self._run_acquisition(config, log)
 
             return ExperimentResult(ok=True, data=data, config_log=log)
@@ -1190,11 +1298,14 @@ class MessageHandler:
 
             for gen_cfg in first_config.get("generators", []):
                 self._setup_generator(gen_cfg, log)
+            self._disable_all_acquisitions(log)
             for acq_cfg in first_config.get("acquisitions", []):
                 self._setup_acquisition(acq_cfg, log)
+            self._disable_unused_acquisitions(first_config, log)
             self._setup_trigger(first_config.get("trigger", {}), log)
 
             # Run first experiment with full validation
+            self._reset_dma_before_run()
             data = self._run_acquisition(first_config, log)
             try:
                 on_point(SweepPointResult(0, n_points, points[0], data))
@@ -1311,7 +1422,10 @@ class MessageHandler:
                 self.adapter.generator_modulation(
                     gen_index,
                     "drive",
-                    {"frequency_mhz": float(drive["frequency_mhz"]), "phase": float(drive.get("phase", 0.0))},
+                    {
+                        "frequency_mhz": float(drive["frequency_mhz"]),
+                        "phase": float(drive.get("phase", 0.0)),
+                    },
                 )
                 if log is not None:
                     log.append(f"gen {gen_index} drive frequency: {drive['frequency_mhz']} MHz")
@@ -1326,7 +1440,9 @@ class MessageHandler:
             # independent from RF parameter setup.
             if "fifo" in drive:
                 self.adapter.program_drive_sequence(
-                    gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
+                    gen_index=gen_index,
+                    wave_id_list=drive["fifo"],
+                    start_index=drive.get("fifo_start_index", 1),
                 )
                 if log is not None:
                     log.append(f"gen {gen_index} drive sequence programmed")
@@ -1338,7 +1454,10 @@ class MessageHandler:
                 self.adapter.generator_modulation(
                     gen_index,
                     "readout",
-                    {"frequency_mhz": float(readout["frequency_mhz"]), "phase": float(readout.get("phase", 0.0))},
+                    {
+                        "frequency_mhz": float(readout["frequency_mhz"]),
+                        "phase": float(readout.get("phase", 0.0)),
+                    },
                 )
 
             if "nyquist_zone" in readout:
@@ -1371,7 +1490,11 @@ class MessageHandler:
         # 1. Setup modulation (DDS and automatic Nyquist zone)
         if "frequency_mhz" in acq_cfg:
             self.adapter.acquisition_modulation(
-                acq_index, {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": float(acq_cfg.get("phase", 0.0))}
+                acq_index,
+                {
+                    "frequency_mhz": float(acq_cfg["frequency_mhz"]),
+                    "phase": float(acq_cfg.get("phase", 0.0)),
+                },
             )
 
         # 2. Setup Trigger Channel (Fixed: now passing a dict instead of int)
@@ -1386,6 +1509,45 @@ class MessageHandler:
             self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
             if log is not None:
                 log.append(f"acq {acq_index} timing set: tof={tof}")
+
+    def _disable_unused_acquisitions(self, config: dict, log: list | None = None) -> None:
+        """Disable trigger listening on acquisition IPs not used by the config.
+
+        This avoids stale trigger routing when switching between experiments that
+        use different acquisition sets.
+
+        :param config: Experiment configuration with acquisition list.
+        :type config: dict
+        :param log: Optional list used to append human-readable actions.
+        :type log: list | None
+        :return: None
+        :rtype: None
+        """
+        total = self.status_h.num_acquisitions
+        if total <= 0:
+            return
+        used = {int(acq.get("acq_index", i)) for i, acq in enumerate(config.get("acquisitions", []))}
+        for acq_index in range(total):
+            if acq_index not in used:
+                self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": 0})
+                if log is not None:
+                    log.append(f"acq {acq_index} disabled (trigger channel 0)")
+
+    def _disable_all_acquisitions(self, log: list | None = None) -> None:
+        """Disable trigger listening on all acquisition IPs.
+
+        :param log: Optional list used to append human-readable actions.
+        :type log: list | None
+        :return: None
+        :rtype: None
+        """
+        total = self.status_h.num_acquisitions
+        if total <= 0:
+            return
+        for acq_index in range(total):
+            self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": 0})
+            if log is not None:
+                log.append(f"acq {acq_index} disabled (trigger channel 0)")
 
     def _setup_generator_selective(self, gen_cfg: dict, variable_paths: set[str], log: list | None = None) -> None:
         """Reconfigure generator settings for sweep fast-path.
@@ -1444,7 +1606,10 @@ class MessageHandler:
                 self.adapter.generator_modulation(
                     gen_index,
                     "drive",
-                    {"frequency_mhz": float(drive["frequency_mhz"]), "phase": float(drive.get("phase", 0.0))},
+                    {
+                        "frequency_mhz": float(drive["frequency_mhz"]),
+                        "phase": float(drive.get("phase", 0.0)),
+                    },
                 )
             if any(p.endswith(".drive.nyquist_zone") for p in variable_paths) and "nyquist_zone" in drive:
                 self.adapter.set_nyquist_zone(gen_index, "drive", int(drive["nyquist_zone"]))
@@ -1455,7 +1620,9 @@ class MessageHandler:
                 and "fifo" in drive
             ):
                 self.adapter.program_drive_sequence(
-                    gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
+                    gen_index=gen_index,
+                    wave_id_list=drive["fifo"],
+                    start_index=drive.get("fifo_start_index", 1),
                 )
 
         readout = gen_cfg.get("readout")
@@ -1464,7 +1631,10 @@ class MessageHandler:
                 self.adapter.generator_modulation(
                     gen_index,
                     "readout",
-                    {"frequency_mhz": float(readout["frequency_mhz"]), "phase": float(readout.get("phase", 0.0))},
+                    {
+                        "frequency_mhz": float(readout["frequency_mhz"]),
+                        "phase": float(readout.get("phase", 0.0)),
+                    },
                 )
             if any(p.endswith(".readout.nyquist_zone") for p in variable_paths) and "nyquist_zone" in readout:
                 self.adapter.set_nyquist_zone(gen_index, "readout", int(readout["nyquist_zone"]))
@@ -1507,7 +1677,8 @@ class MessageHandler:
         if needs_mod:
             phase = float(acq_cfg.get("phase", 0.0))
             self.adapter.acquisition_modulation(
-                acq_index, {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": phase}
+                acq_index,
+                {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": phase},
             )
         if any(p.endswith(".channel") for p in variable_paths) and "channel" in acq_cfg:
             self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": int(acq_cfg["channel"])})
@@ -1554,6 +1725,20 @@ class MessageHandler:
                     log.append("trigger delays programmed")
                 else:
                     log.append(f"trigger delays programmed for {shots} shots")
+
+    def _reset_dma_before_run(self) -> None:
+        """Perform a minimal DMA reset before a new run/sweep point.
+
+        :return: None
+        :rtype: None
+        """
+        try:
+            dma_engine = getattr(self.adapter, "dma_engine", None)
+            if dma_engine is not None and hasattr(dma_engine, "abort"):
+                self.logger.info("Resetting DMA before acquisition run.")
+                dma_engine.abort()
+        except Exception as e:
+            self.logger.warning(f"DMA reset before run failed: {e}")
 
     def _setup_trigger_selective(self, trigger_cfg: dict, variable_paths: set[str], log: list | None = None) -> None:
         """Reconfigure trigger settings for sweep fast-path.
@@ -1626,7 +1811,10 @@ class MessageHandler:
         trigger_cfg = config.get("trigger", {})
 
         # Acquisition mode/ADC selection is derived from config.
-        adc_indices = [acq.get("acq_index", acq.get("acquisition", i)) for i, acq in enumerate(acquisitions)]
+        # Apply mapping from acq_index to DMA adc_index (may be inverted for AXI switch firmware).
+        adc_indices = [
+            self._map_acq_to_adc(acq.get("acq_index", acq.get("acquisition", i))) for i, acq in enumerate(acquisitions)
+        ]
         if not adc_indices:
             adc_indices = [0]
 
@@ -1662,7 +1850,7 @@ class MessageHandler:
         acquisitions = config["acquisitions"]
         if not acquisitions:
             raise ValueError("Experiment config requires at least one acquisition")
-        return [acq.get("acq_index", i) for i, acq in enumerate(acquisitions)]
+        return [self._map_acq_to_adc(acq.get("acq_index", i)) for i, acq in enumerate(acquisitions)]
 
     def _get_acq_mode(self, config: dict) -> str:
         """Determine the acquisition mode requested by the experiment.

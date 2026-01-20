@@ -116,13 +116,20 @@ class FIREQServer:
         auth_token: str = "fireq",
         logger: logging.Logger | None = None,
     ) -> None:
-        """Inizializza il server.
+        """Server initialization.
 
         :param handler: MessageHandler instance
+        :type handler: MessageHandler
         :param host: bind address
+        :type host: str
         :param port: TCP port
+        :type port: int
         :param auth_token: simple authentication token
+        :type auth_token: str
         :param logger: Logger instance
+        :type logger: logging.Logger | None
+        :return: None
+        :rtype: None
         """
         self.handler = handler
         self.host = host
@@ -172,6 +179,9 @@ class FIREQServer:
 
         The server stops when :meth:`stop` is called or when the main loop is
         unblocked with a "None" flag.
+
+        :return: None
+        :rtype: None
         """
         # self._running : global run flag shared by all loops (accept/recv/send/main).
         # Single source of truth for shutdown conditions :
@@ -198,6 +208,9 @@ class FIREQServer:
         - sets the stop event (to abort any running sweep),
         - unblocks the main loop,
         - closes server/client sockets if present.
+
+        :return: None
+        :rtype: None
         """
         self.logger.info("Stopping server...")
 
@@ -244,6 +257,9 @@ class FIREQServer:
 
         The loop exits when it receives ``None`` from ``queue_in`` or when
         ``self._running`` becomes False.
+
+        :return: None
+        :rtype: None
         """
         self.logger.info("Main loop started, waiting for commands...")
 
@@ -285,10 +301,21 @@ class FIREQServer:
         -----
         Command ``abort`` is handled directly in the receiver loop (network thread)
         to be immediate; it bypasses ``queue_in``.
+
+        :param msg: Parsed command dictionary from the client.
+        :type msg: dict
+        :return: None
+        :rtype: None
         """
 
         def ensure_dict(res: object) -> dict | object:
-            """Convert handler results to dict if they expose ``to_dict()``."""
+            """Convert handler results to dict if they expose ``to_dict()``.
+
+            :param res: Handler result object.
+            :type res: object
+            :return: Converted dictionary or the original object.
+            :rtype: dict | object
+            """
             return res.to_dict() if hasattr(res, "to_dict") else res
 
         cmd = msg.get("cmd", "")
@@ -345,10 +372,16 @@ class FIREQServer:
 
                 # Enqueue both metadata and binary data
                 self.queue_out.put(
-                    {"type": "metadata_with_binary", "metadata": metadata, "binary_data": result.get_binary_data()}
+                    {
+                        "type": "metadata_with_binary",
+                        "metadata": metadata,
+                        "binary_data": result.get_binary_data(),
+                    }
                 )
 
             elif cmd == "run_sweep":
+                self._pre_sweep_cleanup()
+
                 sweep_id = msg.get("sweep_id", "unnamed")
 
                 # ============================================================
@@ -373,11 +406,22 @@ class FIREQServer:
                 sweep_points_plan: list[dict[str, Any]] = []
 
                 def on_plan(points: list[dict[str, Any]]) -> None:
+                    """Capture sweep plan metadata for header emission.
+
+                    :param points: Sweep plan points with variable values.
+                    :type points: list[dict[str, Any]]
+                    :return: None
+                    :rtype: None
+                    """
                     sweep_points_plan.clear()
                     sweep_points_plan.extend(points)
 
                 def flush_binary_batch() -> None:
-                    """Send accumulated sweep points as binary-only batch."""
+                    """Send accumulated sweep points as binary-only batch.
+
+                    :return: None
+                    :rtype: None
+                    """
                     if not binary_buffer:
                         return
 
@@ -396,7 +440,13 @@ class FIREQServer:
                     batch_index[0] += 1
 
                 def on_point(r: SweepPointResult) -> None:
-                    """Handle each sweep point callback."""
+                    """Handle each sweep point callback.
+
+                    :param r: Sweep point result payload.
+                    :type r: SweepPointResult
+                    :return: None
+                    :rtype: None
+                    """
                     point_payload = r.to_metadata_dict()
 
                     # --- [TIMING] Inject per-point timing stats ---
@@ -427,7 +477,10 @@ class FIREQServer:
                     binary_buffer.append(bin_data)
                     timing_stats = point_payload.get("debug_timing", {})
                     timing_buffer.append(
-                        (float(timing_stats.get("fpga_active_ms", 0.0)), float(timing_stats.get("sw_overhead_ms", 0.0)))
+                        (
+                            float(timing_stats.get("fpga_active_ms", 0.0)),
+                            float(timing_stats.get("sw_overhead_ms", 0.0)),
+                        )
                     )
                     if len(binary_buffer) >= batch_size:
                         flush_binary_batch()
@@ -456,7 +509,14 @@ class FIREQServer:
                 status_payload["debug_timing"]["total_server_time_ms"] = total_sweep_duration_ms
 
                 # Send final status
-                self.queue_out.put({"type": "sweep_status", "cmd": cmd, "session_id": session_id, **status_payload})
+                self.queue_out.put(
+                    {
+                        "type": "sweep_status",
+                        "cmd": cmd,
+                        "session_id": session_id,
+                        **status_payload,
+                    }
+                )
 
             elif cmd == "ping":
                 self.queue_out.put({"ok": True, "cmd": "pong", "session_id": session_id})
@@ -488,11 +548,23 @@ class FIREQServer:
             elif cmd == "reset_all":
                 preserve_wave_specs = msg.get("preserve_wave_specs", False)
                 results = self.handler.reset_h.reset_all_generators(preserve_wave_specs)
-                self.queue_out.put({"ok": True, "cmd": cmd, "session_id": session_id, "results": results})
+                self.queue_out.put(
+                    {
+                        "ok": True,
+                        "cmd": cmd,
+                        "session_id": session_id,
+                        "results": results,
+                    }
+                )
 
             else:
                 self.queue_out.put(
-                    {"ok": False, "cmd": cmd, "session_id": session_id, "error": f"Unknown command: {cmd}"}
+                    {
+                        "ok": False,
+                        "cmd": cmd,
+                        "session_id": session_id,
+                        "error": f"Unknown command: {cmd}",
+                    }
                 )
 
         except Exception as e:
@@ -513,6 +585,9 @@ class FIREQServer:
         4) Return to accept to wait for a new connection.
 
         The server supports a single concurrent client connection.
+
+        :return: None
+        :rtype: None
         """
         # Create server socket
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # TCP
@@ -581,6 +656,11 @@ class FIREQServer:
         2) Start the sender thread.
         3) Run the receiver loop (blocking) in the current thread.
         4) Cleanup and return to accept loop.
+
+        :param client_socket: Connected client socket.
+        :type client_socket: socket.socket
+        :return: None
+        :rtype: None
         """
         self._client_socket = client_socket
         self._authenticated = False
@@ -643,6 +723,10 @@ class FIREQServer:
             with self.queue_out.mutex:
                 self.queue_out.queue.clear()
 
+            # Best-effort hardware cleanup to avoid stale state across sessions.
+            # This avoids overlay resets while ensuring DMA/acq paths are sane.
+            self._cleanup_hardware_session()
+
             # Close socket
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
@@ -660,6 +744,42 @@ class FIREQServer:
             self._authenticated = False
             self.logger.info("Client disconnected, ready for new connection")
 
+    def _cleanup_hardware_session(self) -> None:
+        """Best-effort cleanup to avoid stale DMA/acquisition state across sessions.
+
+        :return: None
+        :rtype: None
+        """
+        try:
+            if hasattr(self.handler.adapter, "end_sweep"):
+                self.handler.adapter.end_sweep()
+        except Exception as e:
+            self.logger.warning(f"Cleanup: end_sweep failed: {e}")
+
+        try:
+            if hasattr(self.handler, "_disable_all_acquisitions"):
+                self.handler._disable_all_acquisitions()
+        except Exception as e:
+            self.logger.warning(f"Cleanup: disable acquisitions failed: {e}")
+
+    def _pre_sweep_cleanup(self) -> None:
+        """Best-effort cleanup before a sweep to avoid stale DMA/acquisition state.
+
+        :return: None
+        :rtype: None
+        """
+        try:
+            if hasattr(self.handler.adapter, "end_sweep"):
+                self.handler.adapter.end_sweep()
+        except Exception as e:
+            self.logger.warning(f"Pre-sweep: end_sweep failed: {e}")
+
+        try:
+            if hasattr(self.handler, "_disable_all_acquisitions"):
+                self.handler._disable_all_acquisitions()
+        except Exception as e:
+            self.logger.warning(f"Pre-sweep: disable acquisitions failed: {e}")
+
     def _receiver_loop(self, sock: socket.socket) -> None:
         """Receive client messages and enqueue commands for execution.
 
@@ -667,6 +787,11 @@ class FIREQServer:
         -----
         The ``abort`` command is handled immediately by setting ``_stop_event`` and
         sending an acknowledgement, bypassing the main execution queue.
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :return: None
+        :rtype: None
         """
         while self._running:
             try:
@@ -733,6 +858,9 @@ class FIREQServer:
 
         Uses binary transmission mode for all data acquisitions.
         Exits when it receives ``None`` or when the client disconnects.
+
+        :return: None
+        :rtype: None
         """
         while self._running:
             try:
@@ -805,7 +933,11 @@ class FIREQServer:
     # =========================================================================
 
     def _build_handshake_info(self) -> dict:
-        """Build the server -> client handshake message."""
+        """Build the server -> client handshake message.
+
+        :return: Handshake payload dictionary.
+        :rtype: dict
+        """
         return {
             "type": "handshake",
             "protocol_version": "0.1",
@@ -826,6 +958,11 @@ class FIREQServer:
         -------
         bool
             True if authenticated successfully, False otherwise.
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :return: True if authentication succeeds, False otherwise.
+        :rtype: bool
         """
         # Authentication model (minimal):
         # - Shared token sent by the client during handshake.
@@ -893,6 +1030,9 @@ class FIREQServer:
 
         This uses the handler reset subsystem to clear envelope/wave caches for all
         generators (preserving nothing by default) and then enqueues a logout response.
+
+        :return: None
+        :rtype: None
         """
         self.logger.info("Logout requested, resetting caches...")
 
@@ -917,7 +1057,11 @@ class FIREQServer:
             # Enqueue response for the sender thread (do not write to socket here).
             # Keeping all socket writes in the sender thread avoids interleaving and simplifies the "teardown" step.
             self.queue_out.put(
-                {"ok": True, "cmd": "logout", "message": f"Logout successful, {len(results)} generator(s) reset"}
+                {
+                    "ok": True,
+                    "cmd": "logout",
+                    "message": f"Logout successful, {len(results)} generator(s) reset",
+                }
             )
         except Exception as e:
             self.logger.exception("Logout failed")
@@ -947,6 +1091,11 @@ class FIREQServer:
         Notes:
         -----
         A hard cap is applied to protect against unexpectedly large payloads.
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :return: Parsed JSON dictionary or None on disconnect/error.
+        :rtype: dict | None
         """
         try:
             # TCP is a byte stream (no message boundaries).Thus protocol messages are framed as:
@@ -985,7 +1134,17 @@ class FIREQServer:
             return None
 
     def _send_message(self, sock: socket.socket, msg: dict, include_timing: bool = False) -> None:
-        """Send one length-prefixed JSON message."""
+        """Send one length-prefixed JSON message.
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :param msg: Message payload to send.
+        :type msg: dict
+        :param include_timing: Whether to add encoding timing metadata.
+        :type include_timing: bool
+        :return: None
+        :rtype: None
+        """
         payload = json.dumps(msg).encode("utf-8")
         if include_timing and isinstance(msg, dict):
             debug_timing = msg.get("debug_timing")
@@ -1013,9 +1172,14 @@ class FIREQServer:
         [4 bytes: data length (uint32 big-endian)]
         [N bytes: raw numpy data via .tobytes()]
 
-        :param sock: Connected socket
-        :param adc_index: ADC/acquisition index
-        :param data: Complex numpy array to transmit
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :param adc_index: ADC/acquisition index.
+        :type adc_index: int
+        :param data: Complex numpy array to transmit.
+        :type data: np.ndarray
+        :return: None
+        :rtype: None
         """
         # Serialize numpy array to bytes
         data_bytes = data.tobytes()
@@ -1031,7 +1195,17 @@ class FIREQServer:
         )
 
     def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
-        """Send a fixed-size timing trailer (2x float32, big-endian)."""
+        """Send a fixed-size timing trailer (2x float32, big-endian).
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :param hw_ms: FPGA active time in milliseconds.
+        :type hw_ms: float
+        :param sw_ms: Software overhead time in milliseconds.
+        :type sw_ms: float
+        :return: None
+        :rtype: None
+        """
         payload = struct.pack(">ff", float(hw_ms), float(sw_ms))
         sock.sendall(payload)
 
@@ -1044,9 +1218,12 @@ class FIREQServer:
         [4 bytes: sample count (uint32 big-endian)]
         [N × 8 bytes: float32 I/Q pairs]
 
-        :param sock: Connected socket
-        :param total_count: Total number of envelopes to receive
-        :return: Dict mapping (gen_idx, env_idx) to float32 I/Q array (shape: N×2)
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :param total_count: Total number of envelopes to receive.
+        :type total_count: int
+        :return: Dict mapping (gen_idx, env_idx) to float32 I/Q array.
+        :rtype: dict[tuple[int, int], np.ndarray]
         """
         envelope_data = {}
 
@@ -1079,6 +1256,13 @@ class FIREQServer:
 
         Returns None if the connection is closed before the requested number of bytes is
         received.
+
+        :param sock: Connected socket.
+        :type sock: socket.socket
+        :param n: Number of bytes to receive.
+        :type n: int
+        :return: Bytes received or None on disconnect.
+        :rtype: bytes | None
         """
         data = b""
 

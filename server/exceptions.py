@@ -123,7 +123,12 @@ class FrequencyError(ConfigurationError):
         ...     print(f"Valid ranges: {e.valid_ranges}")
     """
 
-    def __init__(self, freq_mhz: float, reason: str, valid_ranges: list[tuple[float, float]] | None = None) -> None:
+    def __init__(
+        self,
+        freq_mhz: float,
+        reason: str,
+        valid_ranges: list[tuple[float, float]] | None = None,
+    ) -> None:
         """Initialize a FrequencyError with optional valid ranges."""
         self.freq_mhz = freq_mhz
         self.valid_ranges = valid_ranges or []
@@ -193,7 +198,12 @@ class HardwareResourceError(FireqHardwareError):
         resource_id: Identifier of the resource
     """
 
-    def __init__(self, message: str, resource_type: str | None = None, resource_id: object | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        resource_type: str | None = None,
+        resource_id: object | None = None,
+    ) -> None:
         """Initialize a HardwareResourceError with resource metadata."""
         super().__init__(message)
         self.resource_type = resource_type

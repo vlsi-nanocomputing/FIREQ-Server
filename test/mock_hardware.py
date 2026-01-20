@@ -63,6 +63,10 @@ class MockGeneratorDriver:
         self.sample_size = 16
         self.number_of_channels = 16
         self.max_waveform_duration = 65536
+        # Track trigger channel settings for verification
+        self.trigger_channel_calls: list[dict[str, Any]] = []
+        self.current_drive_channel: int = 0
+        self.current_readout_channel: int = 0
 
     def add_envelope_to_envelope_memory(
         self,
@@ -74,7 +78,10 @@ class MockGeneratorDriver:
         name: str,
     ) -> int:
         """Add an envelope definition to the mock memory."""
-        self.envelope_memory_dict[name] = {"size": len(samples), "type": "interp" if for_interp else "std"}
+        self.envelope_memory_dict[name] = {
+            "size": len(samples),
+            "type": "interp" if for_interp else "std",
+        }
         return 0
 
     def create_wave_definition_word(self, env_name: str, *args: object) -> int:
@@ -142,8 +149,13 @@ class MockGeneratorDriver:
         """Mock setting LFSR seed."""
         return 0
 
-    def set_trigger_channel(self, channel: int, ttype: int) -> int:
+    def set_trigger_channel(self, channel: int, ttype: str) -> int:
         """Mock setting trigger channel."""
+        self.trigger_channel_calls.append({"channel": channel, "ttype": ttype})
+        if ttype == "drive":
+            self.current_drive_channel = channel
+        elif ttype == "readout":
+            self.current_readout_channel = channel
         return 0
 
 
@@ -155,6 +167,9 @@ class MockAcquisitionDriver:
         self.idx = idx
         self.ctrl = 0
         self.AxiLiteInterfaceMMIO = MagicMock()
+        # Track trigger channel settings for verification
+        self.trigger_channel_calls: list[dict[str, Any]] = []
+        self.current_channel: int = 0
 
     def set_acquisition_dds_parameters(self, frequency: float, phase: float, adc_samplerate: float) -> int:
         """Mock setting acquisition DDS parameters."""
@@ -174,7 +189,13 @@ class MockAcquisitionDriver:
 
     def set_trigger_channel(self, channel: int) -> int:
         """Mock setting trigger channel."""
+        self.trigger_channel_calls.append({"channel": channel})
+        self.current_channel = channel
         return 0
+
+    def get_trigger_channel(self) -> int:
+        """Mock getting trigger channel."""
+        return self.current_channel
 
 
 class MockTriggerDriver:

@@ -222,7 +222,9 @@ def test_broken_pipe_during_sweep(client, server_ctx):
     gen_idx = 0
     server_ctx.adapter.ol.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
     server_ctx.adapter.compile_waves(
-        gen_index=gen_idx, waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}], replace=True
+        gen_index=gen_idx,
+        waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}],
+        replace=True,
     )
 
     # 2. Mock acquisition to be slow
@@ -245,7 +247,12 @@ def test_broken_pipe_during_sweep(client, server_ctx):
             "cmd": "run_sweep",
             "sweep_id": "crash_test",
             "base": {
-                "generators": [{"gen_index": 0, "drive": {"fifo": ["w1"], "frequency_mhz": "$freq"}}],
+                "generators": [
+                    {
+                        "gen_index": 0,
+                        "drive": {"fifo": ["w1"], "frequency_mhz": "$freq"},
+                    }
+                ],
                 "acquisitions": [{"acq_index": 0, "duration": 100}],
                 "trigger": {"shots": 10},
             },
