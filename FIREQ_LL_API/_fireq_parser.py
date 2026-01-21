@@ -1,13 +1,13 @@
 import xml.etree.ElementTree as ET
 
-__all__ = ['FIREQ_parser']
+__all__ = ['FIREQParser']
 
 # stings found in .hwh file that define a module as a master for a certain axi connection
 MASTER_TYPE_LIST = ['MASTER', 'INITIATOR']
 # names of ips that are considered to be transparent to a master slave connection for our purposes
 PASS_THROUGH_MODULES = ['xilinx.com:ip:axis_dwidth_converter:', 'xilinx.com:ip:axis_data_fifo:', 'xilinx.com:ip:axis_register_slice:', 'xilinx.com:ip:axis_switch:']
 
-class FIREQ_parser:
+class FIREQParser:
     """
     FIREQ parser class, used to parse the .hwh file to retrive module connectivity and memory mappings.
     """
@@ -20,13 +20,13 @@ class FIREQ_parser:
         :type hwh_file: str
         """
         # set .hwh file path
-        self._FilePath = hwh_file
+        self._hwh_file_path = hwh_file
         # generate a tree from file (xml)
-        self._Tree = ET.parse(hwh_file)
+        self._xml_tree = ET.parse(hwh_file)
         # get the tree root
-        self._Root = self._Tree.getroot()
+        self._xml_root = self._xml_tree.getroot()
         # find all modules (IPs) in the design
-        self._Modules = self._Root.find('MODULES')
+        self._Modules = self._xml_root.find('MODULES')
 
     def get_module(self, module_name : str):
         """
@@ -127,7 +127,7 @@ class FIREQ_parser:
         """
         address_mapping_dict = {}
         # find the zynq
-        for module in self._Root.findall("./MODULES//MEMORYMAP/.."):
+        for module in self._xml_root.findall("./MODULES//MEMORYMAP/.."):
             if module.attrib['VLNV'].startswith('xilinx.com:ip:zynq_ultra_ps_e:'):
                 # get all memrange children
                 for memory_range in module.findall("./MEMORYMAP/MEMRANGE"):

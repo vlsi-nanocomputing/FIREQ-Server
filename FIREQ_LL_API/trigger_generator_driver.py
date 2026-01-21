@@ -13,7 +13,11 @@ class TriggerGeneratorDriver(_FIREQDriver):
     bindto = ['user.org:user:axisTriggerGeneratorIP:1.0']
 
     def __init__(self, description):
-
+        """
+        Sets class attributes that depend on IP parametrization.
+        
+        :param description: Dictionary that is passed by PYNQ when initializing the IP.
+        """
         super().__init__(description= description)
         # parse the number of channels of the trigger generator
         self.trigger_channels = int(description['parameters']['TriggerWordWidth'])
@@ -63,9 +67,9 @@ class TriggerGeneratorDriver(_FIREQDriver):
         """
 
         # write inc LOW
-        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
+        self.axi_lite_interface_mmio.write(self.experiment_dur_l*4, duration & 0xFFFFFFFF)
         # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write(self.experiment_dur_h*4, duration >> 32)
+        self.axi_lite_interface_mmio.write(self.experiment_dur_h*4, duration >> 32)
 
     def set_number_of_shots(self, value):
         """
@@ -78,13 +82,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error: the numer of shots " + str(value) + " is outside of range 1 to " + str(self.max_hw_repetitions))
             return
 
-        self.AxiLiteInterfaceMMIO.write(self.shots_num_l*4,int(value - 1))
+        self.axi_lite_interface_mmio.write(self.shots_num_l*4,int(value - 1))
 
     def start_experiment(self):
         """
         Start the generation of triggers
         """
-        self.AxiLiteInterfaceMMIO.write(0,1 << self.manual_trigger_pos)
+        self.axi_lite_interface_mmio.write(0,1 << self.manual_trigger_pos)
 
     def is_done(self):
         """
@@ -93,7 +97,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :return: 1 if the experiment is finished, 0 if still running
         :rtype: Literal[1, 0]
         """
-        control_register = self.AxiLiteInterfaceMMIO.read(0)
+        control_register = self.axi_lite_interface_mmio.read(0)
         if ((control_register & 0x40000000) == 0x40000000):
             return 1
         else:
@@ -127,7 +131,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         
         real_delay = (delay - 1) | (generate_trigger << 31)
         real_address = (channel - 1)*self.channel_fifo_depth + index - 1
-        self.AxiFullInterfaceMMIO.write(real_address*4, int(real_delay))
+        self.axi_full_interface_mmio.write(real_address*4, int(real_delay))
         return 0
     
     def set_readout_delay(self,delay : int,channel : int):
@@ -141,6 +145,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
             print("error, channel selection out of range")
             return -3
         # write inc LOW
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_l + (channel - 1)*2)*4, delay & 0xFFFFFFFF)
+        self.axi_lite_interface_mmio.write((self.readout_delay_l + (channel - 1)*2)*4, delay & 0xFFFFFFFF)
         # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write((self.readout_delay_h + (channel - 1)*2)*4, delay >> 32)
+        self.axi_lite_interface_mmio.write((self.readout_delay_h + (channel - 1)*2)*4, delay >> 32)

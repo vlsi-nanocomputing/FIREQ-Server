@@ -6,7 +6,7 @@ fireq_utils.server.ol_adapter
 Purpose
 -------
 This module implements a *server-facing adapter layer* on top of the low-level
-FIREQ hardware drivers exposed by `FIREQ_LL_API.overlay_driver.FIREQ_SoC`.
+FIREQ hardware drivers exposed by `FIREQ_LL_API.overlay_driver.FIREQSoC`.
 
 It applies the Adapter pattern to:
 - expose an API for experiment execution,
@@ -34,7 +34,7 @@ import logging
 from typing import Any, Dict, List, Optional, Literal, TypedDict, Tuple
 import numpy as np
 from dataclasses import dataclass
-from FIREQ_LL_API import FIREQ_SoC
+from FIREQ_LL_API import FIREQSoC
 from .dma_engine import AcquisitionEngine
 from .exceptions import ConfigurationError, DriverError, HardwareStateError
 import time
@@ -249,7 +249,7 @@ class OverlayAdapter:
     """
     High-level adapter for FIREQ hardware control.
 
-    This class provides a "server" interface on top of FIREQ_SoC,
+    This class provides a "server" interface on top of FIREQSoC,
     bundling together multiple low-level driver calls into coherent macro-operations.
 
     Responsibilities
@@ -303,12 +303,12 @@ class OverlayAdapter:
             "Check: readout channel range, delay non-negative and within HW limits.",
     }
 
-    def __init__(self, ol: FIREQ_SoC, *, logger: Optional[logging.Logger] = None):
+    def __init__(self, ol: FIREQSoC, *, logger: Optional[logging.Logger] = None):
         """
         Initialize the High-Level Adapter.
 
         :param ol: The low-level overlay driver instance.
-        :type ol: FIREQ_SoC
+        :type ol: FIREQSoC
         :param logger: Optional logger instance for telemetry. If None, a default logger is created.
         :type logger: Optional[logging.Logger]
         """
@@ -352,7 +352,7 @@ class OverlayAdapter:
         Delegate attribute access to the underlying low-level overlay driver.
 
         This method implements the Proxy pattern, allowing the adapter to transparently
-        expose the full API of the wrapped ``FIREQ_SoC`` instance. Any attribute or method
+        expose the full API of the wrapped ``FIREQSoC`` instance. Any attribute or method
         not explicitly defined in this adapter is automatically forwarded to the hardware driver.
 
         Therefore, the "expert" user can directly use the underlying driver methods. The only purpose
@@ -1893,8 +1893,8 @@ class OverlayAdapter:
                 if not self._sweep_prepared:
                     acq.set_decimated_output_type(mode)
             elif mode == "raw":
-                ctrl = acq.AxiLiteInterfaceMMIO.read(acq.ctrl * 4)
-                acq.AxiLiteInterfaceMMIO.write(acq.ctrl * 4, ctrl)
+                ctrl = acq.axi_lite_interface_mmio.read(acq.ctrl * 4)
+                acq.axi_lite_interface_mmio.write(acq.ctrl * 4, ctrl)
         
         # First ADC: arm before trigger
         first_adc = adc_indices[0]

@@ -5,7 +5,7 @@ import xrfdc
 
 import os
 
-from FIREQ_LL_API.OverlayDriver import FIREQ_SoC
+from FIREQ_LL_API.fireq_soc import FIREQSoC
 
 # Path to the base directory where the overlay files are stored
 BASE_PATH = "/home/xilinx/jupyter_notebooks/"
@@ -21,16 +21,16 @@ def main():
     if not ol_filename:
         ol_filename = "overlay.bit"
 
-    ol_filepath = BASE_PATH + ol_folder + '/' + ol_filename
+    ol_hwh_file_path = BASE_PATH + ol_folder + '/' + ol_filename
 
     # check existence of overlay
-    if not os.path.exists(ol_filepath):
-        print(f"# Error: Overlay invalid filepath '{ol_filepath}'")
+    if not os.path.exists(ol_hwh_file_path):
+        print(f"# Error: Overlay invalid filepath '{ol_hwh_file_path}'")
         exit(-1)
 
     # get overlay
     print("# Loading the overlay")
-    ol = FIREQ_SoC(ol_filepath)
+    ol = FIREQSoC(ol_hwh_file_path)
 
 
 if __name__=="__main__":

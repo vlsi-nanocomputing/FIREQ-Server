@@ -94,7 +94,7 @@ class MockAcquisitionDriver:
     def __init__(self, idx: int):
         self.idx = idx
         self.ctrl = 0
-        self.AxiLiteInterfaceMMIO = MagicMock()
+        self.axi_lite_interface_mmio = MagicMock()
 
     def set_acquisition_dds_parameters(self, frequency, phase, adc_samplerate): return 0
     def set_acquisition_duration(self, dur): return 0

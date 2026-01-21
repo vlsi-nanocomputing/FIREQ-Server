@@ -4,23 +4,23 @@ import xrfclk
 import os
 from typing import Dict, Tuple
 import re
-from ._fireq_parser import FIREQ_parser
+from ._fireq_parser import FIREQParser
 from ._utils import _FIREQDriver
 from .acquisition_driver import AcquisitionDriver
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
-__all__ = ["FIREQ_SoC"]
+__all__ = ["FIREQSoC"]
 
 
-class FIREQ_SoC(Overlay):
+class FIREQSoC(Overlay):
     """
     Low-level representation of the FIREQ SoC.
 
     Responsibilities:
     - Load the bitfile.
     - Initialise RF clocks (optional).
-    - Use FIREQ_parser on the HWH to:
+    - Use FIREQParser on the HWH to:
         * Bind AXI full/lite interfaces for FIREQ IPs.
         * Build lists of Generator/Acquisition/Trigger IPs.
     - Discover infrastructure IPs (RF-DC, AXI switch, DMA).
@@ -41,8 +41,8 @@ class FIREQ_SoC(Overlay):
             raise RuntimeError(f"FIREQ: error during overlay creation: {e}") from e
         
         # 2) HWH + parser
-        self._FIREQ_hwh_file = os.path.splitext(self.bitfile_name)[0] + ".hwh"
-        self._FIREQ_parser = FIREQ_parser(self._FIREQ_hwh_file)
+        self._fireq_hwh_filepath = os.path.splitext(self.bitfile_name)[0] + ".hwh"
+        self._fireq_parser = FIREQParser(self._fireq_hwh_filepath)
 
         # 3) RF clocks initialisation
         if init_clocks:
@@ -52,8 +52,8 @@ class FIREQ_SoC(Overlay):
         self._generation_ips = []  # type: list[GeneratorDriver]
         self._acquistion_ips = []     # type: list[AcquisitionDriver]
         self._trigger_ip = []     # type: list[TriggerGeneratorDriver]
-        self._GEN_RF_MAP: Dict[int, Dict[str, Tuple[int, int]]] = {} 
-        self._ACQ_RF_MAP: Dict[int, Tuple[int, int]] = {}
+        self._gen_rf_map: Dict[int, Dict[str, Tuple[int, int]]] = {} 
+        self._acq_rf_map: Dict[int, Tuple[int, int]] = {}
         self._cached_nyquist_zone: Dict[tuple, int] = {} 
 
         # 5) Low-level discovery (bind AXI + classify IPs)
@@ -67,11 +67,11 @@ class FIREQ_SoC(Overlay):
             self._map_rf_topology()
         # Basic resource sanity check
         if not self._generation_ips:
-            raise RuntimeError("FIREQ_SoC: no Generator IPs found in overlay.")
+            raise RuntimeError("FIREQSoC: no Generator IPs found in overlay.")
         if not self._acquistion_ips:
-            raise RuntimeError("FIREQ_SoC: no Acquisition IPs found in overlay.")
+            raise RuntimeError("FIREQSoC: no Acquisition IPs found in overlay.")
         if not self._trigger_ip:
-            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")      
+            raise RuntimeError("FIREQSoC: no TriggerGenerator IP found in overlay.")      
     
         # 6) Hardware specs (clock validation, sample rates etc.)
         self.num_generators = len(self._generation_ips)
@@ -101,11 +101,11 @@ class FIREQ_SoC(Overlay):
     # ------------------------------------------------------------------
     def _discover_fireq_ips(self) -> None:
         """
-        Use FIREQ_parser.GetAddressMapping() to:
+        Use FIREQParser.GetAddressMapping() to:
         - Bind AXI interfaces on FIREQ IPs.
         - Populate IP lists: _generation_ips, _readout_ips, _trigger_ip.
         """
-        mmap = self._FIREQ_parser.get_address_mapping()
+        mmap = self._fireq_parser.get_address_mapping()
 
         for ip_name, maps in mmap.items():
             if not hasattr(self, ip_name):
@@ -141,7 +141,7 @@ class FIREQ_SoC(Overlay):
         Derive the physical RF connections (Tile/Block) for Generators and Acquisitions
         by traversing the AXI-Stream connectivity graph.
         """
-        all_modules = list(self._FIREQ_parser._Modules) 
+        all_modules = list(self._fireq_parser._Modules) 
         rfdc_name = "usp_rf_data_converter_0" 
 
         # ---------------------------------------------------------------------
@@ -153,9 +153,9 @@ class FIREQ_SoC(Overlay):
                 continue
 
             gen_instance_name = gen_fullpath.split('/')[0]
-            gen_xml = self._FIREQ_parser.get_module(gen_instance_name)
+            gen_xml = self._fireq_parser.get_module(gen_instance_name)
 
-            conn = self._FIREQ_parser.get_connectivity(gen_xml, all_modules)
+            conn = self._fireq_parser.get_connectivity(gen_xml, all_modules)
 
             def find_rfdc_sink(node_dict):
                 if node_dict['NODE'] == rfdc_name:
@@ -179,22 +179,22 @@ class FIREQ_SoC(Overlay):
 
                     label = "drive" if "m0" in gen_port_alias or "drive" in gen_port_alias else "readout"
 
-                    if idx not in self._GEN_RF_MAP: 
-                        self._GEN_RF_MAP[idx] = {}
-                    self._GEN_RF_MAP[idx][label] = (tile, block)
+                    if idx not in self._gen_rf_map: 
+                        self._gen_rf_map[idx] = {}
+                    self._gen_rf_map[idx][label] = (tile, block)
 
         # ---------------------------------------------------------------------
         # 2. Map Acquisitions (ADC Path)
         # ---------------------------------------------------------------------
-        rfdc_xml = self._FIREQ_parser.get_module(rfdc_name)
+        rfdc_xml = self._fireq_parser.get_module(rfdc_name)
         if rfdc_xml:
-            conn_rfdc = self._FIREQ_parser.get_connectivity(rfdc_xml, all_modules)
+            conn_rfdc = self._fireq_parser.get_connectivity(rfdc_xml, all_modules)
 
-            def trace_rfdc_source(node_dict, source_port_name, at_root=True):
-                if at_root and node_dict['NODE'] == rfdc_name:
+            def trace_rfdc_source(node_dict, source_port_name, at_xml_root=True):
+                if at_xml_root and node_dict['NODE'] == rfdc_name:
                     for child in node_dict['CHILDREN']:
                         if child['BUS_M/S'][0] == source_port_name:
-                            return trace_rfdc_source(child, source_port_name, at_root=False)
+                            return trace_rfdc_source(child, source_port_name, at_xml_root=False)
                     return None
 
                 curr_name = node_dict['NODE']
@@ -204,12 +204,12 @@ class FIREQ_SoC(Overlay):
                         return idx
 
                 for child in node_dict.get('CHILDREN', []):
-                    res = trace_rfdc_source(child, source_port_name, at_root=False)
+                    res = trace_rfdc_source(child, source_port_name, at_xml_root=False)
                     if res is not None:
                         return res
                 return None
 
-            rfdc_interfaces = self._FIREQ_parser.get_bus_interfaces(rfdc_xml)
+            rfdc_interfaces = self._fireq_parser.get_bus_interfaces(rfdc_xml)
 
             for bus_name, attribs in rfdc_interfaces.items():
                 if attribs['TYPE'] in ['MASTER', 'INITIATOR']:
@@ -226,7 +226,7 @@ class FIREQ_SoC(Overlay):
                         acq_idx = trace_rfdc_source(conn_rfdc, port_name)
 
                         if acq_idx is not None:
-                            self._ACQ_RF_MAP[acq_idx] = (tile, block)
+                            self._acq_rf_map[acq_idx] = (tile, block)
 
 
     
@@ -253,11 +253,11 @@ class FIREQ_SoC(Overlay):
         port_name = mode_to_port[mode]
 
         # 2) Get Acq module XML and its BUSNAME for that port
-        acq_mod = self._FIREQ_parser.get_module(acq_inst)
+        acq_mod = self._fireq_parser.get_module(acq_inst)
         if acq_mod is None:
             return -1
 
-        acq_busifs = self._FIREQ_parser.get_bus_interfaces(acq_mod)  # dict: busname -> attribs
+        acq_busifs = self._fireq_parser.get_bus_interfaces(acq_mod)  # dict: busname -> attribs
         start_busname = None
         for busname, a in acq_busifs.items():
             if a.get("NAME") == port_name:
@@ -269,13 +269,13 @@ class FIREQ_SoC(Overlay):
         # 3) Find the register slice whose S_AXIS shares that BUSNAME
         regslice_inst = None
         regslice_mod = None
-        for m in self._FIREQ_parser._Modules:
+        for m in self._fireq_parser._Modules:
             inst = m.attrib.get("INSTANCE", "")
             vlnv = (m.attrib.get("VLNV", "") or "").lower()
             if "axis_register_slice" not in vlnv:
                 continue
 
-            busifs = self._FIREQ_parser.get_bus_interfaces(m)
+            busifs = self._fireq_parser.get_bus_interfaces(m)
             # we want the S_AXIS endpoint bound to the same BUSNAME
             for busname, a in busifs.items():
                 if busname == start_busname and a.get("NAME") == "S_AXIS":
@@ -289,7 +289,7 @@ class FIREQ_SoC(Overlay):
             return -1
 
         # 4) From that register slice, take its M_AXIS BUSNAME
-        regslice_busifs = self._FIREQ_parser.get_bus_interfaces(regslice_mod)
+        regslice_busifs = self._fireq_parser.get_bus_interfaces(regslice_mod)
         next_busname = None
         for busname, a in regslice_busifs.items():
             if a.get("NAME") == "M_AXIS":
@@ -300,13 +300,13 @@ class FIREQ_SoC(Overlay):
 
         # 5) Find the axis_data_fifo whose S_AXIS shares next_busname
         fifo_inst = None
-        for m in self._FIREQ_parser._Modules:
+        for m in self._fireq_parser._Modules:
             inst = m.attrib.get("INSTANCE", "")
             vlnv = (m.attrib.get("VLNV", "") or "").lower()
             if "axis_data_fifo" not in vlnv:
                 continue
 
-            busifs = self._FIREQ_parser.get_bus_interfaces(m)
+            busifs = self._fireq_parser.get_bus_interfaces(m)
             for busname, a in busifs.items():
                 if busname == next_busname and a.get("NAME") == "S_AXIS":
                     fifo_inst = inst
@@ -319,8 +319,8 @@ class FIREQ_SoC(Overlay):
 
         # 6) Read FIFO depth parameter (Vivado sometimes uses FIFO_DEPTH or C_FIFO_DEPTH)
         depth = (
-            self._FIREQ_parser.get_parameter(fifo_inst, "FIFO_DEPTH")
-            or self._FIREQ_parser.get_parameter(fifo_inst, "C_FIFO_DEPTH")
+            self._fireq_parser.get_parameter(fifo_inst, "FIFO_DEPTH")
+            or self._fireq_parser.get_parameter(fifo_inst, "C_FIFO_DEPTH")
         )
         try:
             return int(depth)
@@ -354,7 +354,7 @@ class FIREQ_SoC(Overlay):
         rf = self._rf
         if rf is None:
             raise RuntimeError(
-                "FIREQ_SoC: no RF Data Converter hierarchy found "
+                "FIREQSoC: no RF Data Converter hierarchy found "
                 "(usp_rf_data_converter_0 is missing)."
             )
 
@@ -372,7 +372,7 @@ class FIREQ_SoC(Overlay):
                     found_dac_sr = sr
                 elif abs(sr - found_dac_sr) > 1e3:  # tolleranza 1 kHz
                     raise RuntimeError(
-                        f"FIREQ_SoC: DAC Clock mismatch! "
+                        f"FIREQSoC: DAC Clock mismatch! "
                         f"Tile {i} has {sr} Hz vs {found_dac_sr} Hz."
                     )
 
@@ -389,7 +389,7 @@ class FIREQ_SoC(Overlay):
                 continue
 
         if found_dac_sr is None:
-            raise RuntimeError("FIREQ_SoC: no active DAC tiles found in the RF-DC.")
+            raise RuntimeError("FIREQSoC: no active DAC tiles found in the RF-DC.")
 
         dac_sr = found_dac_sr
 
@@ -407,7 +407,7 @@ class FIREQ_SoC(Overlay):
                     found_adc_sr = sr
                 elif abs(sr - found_adc_sr) > 1e3:
                     raise RuntimeError(
-                        f"FIREQ_SoC: ADC Clock mismatch! "
+                        f"FIREQSoC: ADC Clock mismatch! "
                         f"Tile {i} has {sr} Hz vs {found_adc_sr} Hz."
                     )
 
@@ -422,7 +422,7 @@ class FIREQ_SoC(Overlay):
                 continue
 
         if found_adc_sr is None:
-            raise RuntimeError("FIREQ_SoC: no active ADC tiles found in the RF-DC.")
+            raise RuntimeError("FIREQSoC: no active ADC tiles found in the RF-DC.")
 
         adc_sr = found_adc_sr
 
@@ -657,7 +657,7 @@ class FIREQ_SoC(Overlay):
             return {"status": "skipped", "reason": "no_rf_dc"}
         
         # Lookup tile/block
-        gen_map = self._GEN_RF_MAP.get(gen_index)
+        gen_map = self._gen_rf_map.get(gen_index)
         if gen_map is None:
             raise ValueError(f"No RF mapping for gen_index={gen_index}")
         
@@ -715,7 +715,7 @@ class FIREQ_SoC(Overlay):
             return {"status": "skipped", "reason": "no_rf_dc"}
         
         # Lookup tile/block
-        tile_block = self._ACQ_RF_MAP.get(acq_index)
+        tile_block = self._acq_rf_map.get(acq_index)
         if tile_block is None:
             raise ValueError(f"No RF mapping for acq_index={acq_index}")
         
@@ -798,6 +798,6 @@ class FIREQ_SoC(Overlay):
         }
     
 
-def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQ_SoC:
-    """Helper per creare e inizializzare un FIREQ_SoC."""
-    return FIREQ_SoC(bitfile_name, ignore_version=False, init_clocks=init_clocks)
+def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:
+    """Helper per creare e inizializzare un FIREQSoC."""
+    return FIREQSoC(bitfile_name, ignore_version=False, init_clocks=init_clocks)

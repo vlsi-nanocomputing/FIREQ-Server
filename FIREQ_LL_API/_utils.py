@@ -14,9 +14,15 @@ class _FIREQDriver(DefaultIP):
     bindto = []
     
     def __init__(self, description):
+        """
+        Calls the init method of DefaultIP and sets internal MMIO handlers for up to 
+        two axi interfaces.
+        
+        :param description: Dictionary passed by PYNQ when instantiating the driver.
+        """
         super().__init__(description=description)
-        self.AxiFullInterfaceMMIO = None
-        self.AxiLiteInterfaceMMIO = None
+        self.axi_full_interface_mmio = None
+        self.axi_lite_interface_mmio = None
 
     def print_description(self):
         """
@@ -33,8 +39,8 @@ class _FIREQDriver(DefaultIP):
         :param axi_depth: Depth of the axi interface, in bytes
         :type axi_depth: int
         """
-        if self.AxiFullInterfaceMMIO is None:
-            self.AxiFullInterfaceMMIO = MMIO(base_address, axi_depth)
+        if self.axi_full_interface_mmio is None:
+            self.axi_full_interface_mmio = MMIO(base_address, axi_depth)
 
     def init_axi_lite_interface(self, base_address : int, axi_depth : int):
         """
@@ -45,8 +51,8 @@ class _FIREQDriver(DefaultIP):
         :param axi_depth: Depth of the axi interface, in bytes
         :type axi_depth: int
         """
-        if self.AxiLiteInterfaceMMIO is None:
-            self.AxiLiteInterfaceMMIO = MMIO(base_address, axi_depth)
+        if self.axi_lite_interface_mmio is None:
+            self.axi_lite_interface_mmio = MMIO(base_address, axi_depth)
     
     def set_debug_level(self, level : int, axi_lite_file_handler : TextIO, axi_full_file_handler : TextIO | None):
         """
@@ -65,15 +71,15 @@ class _FIREQDriver(DefaultIP):
         
         if level == 0:
             # no debug
-            lite_mmio = self.AxiLiteInterfaceMMIO.replaces
-            full_mmio = self.AxiFullInterfaceMMIO.replaces
-            del self.AxiLiteInterfaceMMIO
-            del self.AxiFullInterfaceMMIO
-            self.AxiLiteInterfaceMMIO = lite_mmio
-            self.AxiFullInterfaceMMIO = full_mmio
+            lite_mmio = self.axi_lite_interface_mmio.replaces
+            full_mmio = self.axi_full_interface_mmio.replaces
+            del self.axi_lite_interface_mmio
+            del self.axi_full_interface_mmio
+            self.axi_lite_interface_mmio = lite_mmio
+            self.axi_full_interface_mmio = full_mmio
         elif level == 1:
-            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiLiteInterfaceMMIO, 1, axi_lite_file_handler)
-            self.AxiLiteInterfaceMMIO = _DebugMMIO(self.AxiFullInterfaceMMIO, 1, axi_full_file_handler)
+            self.axi_lite_interface_mmio = _DebugMMIO(self.axi_lite_interface_mmio, 1, axi_lite_file_handler)
+            self.axi_lite_interface_mmio = _DebugMMIO(self.axi_full_interface_mmio, 1, axi_full_file_handler)
         else:
             return 0
         

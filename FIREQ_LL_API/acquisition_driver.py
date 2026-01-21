@@ -14,6 +14,11 @@ class AcquisitionDriver(_FIREQDriver):
     bindto = ['user.org:user:axisAcquistionIP:1.0']
 
     def __init__(self, description):
+        """
+        Sets class attributes that depend on IP parametrization.
+
+        :param description: Dictionary that is passed by PYNQ when initializing the IP.
+        """
         super().__init__(description=description)
         # maximum acquistion duration in clock cycles
         self.duration_width = int(description["parameters"]["DurationWidth"])
@@ -104,14 +109,14 @@ class AcquisitionDriver(_FIREQDriver):
         """
 
         # write inc LOW
-        self.AxiLiteInterfaceMMIO.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
+        self.axi_lite_interface_mmio.write(self.readout_inc_l*4, inc & 0xFFFFFFFF)
         # write inc HIGH
-        self.AxiLiteInterfaceMMIO.write(self.readout_inc_h*4, inc >> 32)
+        self.axi_lite_interface_mmio.write(self.readout_inc_h*4, inc >> 32)
 
         # write off LOW
-        self.AxiLiteInterfaceMMIO.write(self.readout_off_l*4, off & 0xFFFFFFFF)
+        self.axi_lite_interface_mmio.write(self.readout_off_l*4, off & 0xFFFFFFFF)
         # write off HIGH
-        self.AxiLiteInterfaceMMIO.write(self.readout_off_h*4, off >> 32)
+        self.axi_lite_interface_mmio.write(self.readout_off_h*4, off >> 32)
 
         return 0
     
@@ -121,8 +126,8 @@ class AcquisitionDriver(_FIREQDriver):
         """
 
         manual_trigger_mask = 0x80000000
-        control_register = self.AxiLiteInterfaceMMIO.read(0) | manual_trigger_mask
-        self.AxiLiteInterfaceMMIO.write(0, control_register)
+        control_register = self.axi_lite_interface_mmio.read(0) | manual_trigger_mask
+        self.axi_lite_interface_mmio.write(0, control_register)
         return
     
     def set_acquisition_duration(self, duration):
@@ -139,9 +144,9 @@ class AcquisitionDriver(_FIREQDriver):
             print("acquistion duration is out of range")
             return -3
 
-        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = self.axi_lite_interface_mmio.read(self.ctrl*4)
         control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration-1)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
+        self.axi_lite_interface_mmio.write(self.ctrl*4, control_register)
     
     def set_trigger_channel(self, channel):
         """
@@ -158,9 +163,9 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         channel_mask = (1 << channel) >> 1
-        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = self.axi_lite_interface_mmio.read(self.ctrl*4)
         control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
+        self.axi_lite_interface_mmio.write(self.ctrl*4, control_register)
         return 0
     
     def set_time_of_flight(self, time_of_flight):
@@ -177,9 +182,9 @@ class AcquisitionDriver(_FIREQDriver):
             print("time of flight is out of range")
             return -3
 
-        control_register = self.AxiLiteInterfaceMMIO.read(self.ctrl*4)
+        control_register = self.axi_lite_interface_mmio.read(self.ctrl*4)
         control_register = _set_bits(control_register, self.trigger_channels + self.duration_width, self.time_of_flight_width, time_of_flight-1)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, control_register)
+        self.axi_lite_interface_mmio.write(self.ctrl*4, control_register)
 
     def set_decimated_output_type(self, type):
         """
@@ -200,6 +205,6 @@ class AcquisitionDriver(_FIREQDriver):
             print("error, input value for type is not recognized, allowed values are 'decimated' and 'accumulated'")
             return -3
 
-        updated_control = _set_bit(self.AxiLiteInterfaceMMIO.read(self.ctrl), self.accumulate_select_pos, output_mode_bit)
-        self.AxiLiteInterfaceMMIO.write(self.ctrl*4, updated_control)
+        updated_control = _set_bit(self.axi_lite_interface_mmio.read(self.ctrl), self.accumulate_select_pos, output_mode_bit)
+        self.axi_lite_interface_mmio.write(self.ctrl*4, updated_control)
         return 0
