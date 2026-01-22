@@ -9,7 +9,5 @@
   // Ruff configuration: lint only, no formatting
   "ruff.enable": true,
   "ruff.lint.enable": true,
-  "ruff.format.enable": false,
-  // Optional: ensure VS Code uses the project interpreter
-  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+  "ruff.format.enable": false
 }
