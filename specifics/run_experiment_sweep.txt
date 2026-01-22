@@ -1,0 +1,174 @@
+{
+  "cmd": "run_sweep",
+  "session_id": "session_001",
+  "sweep_id": "example_sweep_001",
+
+  // Base config: stessa identica struttura di run_experiment (REGULAR)
+  "base": {
+    // Opzionale: definizioni inline per compilazione JIT lato server
+    // (Se vuoi tenere la regola "in sweep non si compila client-side", qui va benissimo:
+    //  l'importante è che siano SOLO definizioni, non "compilazione".)
+    "envelopes": { /* ... */ },
+    "waves": { /* ... */ },
+
+    "generators": [
+      {
+        "gen_index": 0,
+
+        "drive": {
+          "frequency_mhz": "$DRV_FREQ",     // sweepabile (HW units)
+          "phase": "$DRV_PHASE",            // sweepabile
+          "channel": 1,                     // NON sweepabile (0=disabilitato)
+          "nyquist_zone": 1,                // opzionale
+          "fifo": ["PI", "PI"],             // sequenza wave_id (stringhe)
+          "fifo_start_index": 1
+        },
+
+        "readout": {
+          "frequency_mhz": "$RO_FREQ",      // sweepabile
+          "phase": "$RO_PHASE",             // sweepabile
+          "channel": 2,                     // NON sweepabile (0=disabilitato)
+          "wave": {
+            "envelope": "RECT_READOUT",
+            "duration": "$RO_DUR",          // sweepabile (dac_samples)
+            "gain": "$RO_GAIN"              // sweepabile
+          }
+        }
+      }
+    ],
+
+    "acquisitions": [
+      {
+        "acq_index": 0,
+        "frequency_mhz": "$RO_FREQ",        // spesso uguale al readout, sweepabile
+        "phase": "$RO_PHASE",               // sweepabile
+        "channel": 2,                       // NON sweepabile (0=disabilitato)
+
+        "duration": "$ACQ_DUR",             // sweepabile (adc_samples)
+        "tof": 150,                         // NON sweepabile (cycles) [se vuoi mantenerlo fisso]
+        "output_type": "decimated"          // "raw" | "decimated" | "accumulated"
+      }
+    ],
+
+    "trigger": {
+      "shots": "$SHOTS",                    // sweepabile (cycles/int)
+      "shot_duration": "$SHOT_CC",          // sweepabile (clock cycles)
+      "drive_start_index": 1,
+
+      "drive": {
+        "1": {                              // canale trigger fisico drive (string key)
+          "delay": [
+            ["$D0", 1],                     // [delay_cycles, generate_flag]
+            ["$D1", 1],
+            ["$D2", 0]
+          ]
+        }
+      },
+
+      "readout": {
+        "2": {
+          "delay": "$RO_DLY"                // delay_cycles
+        }
+      }
+    }
+  },
+
+  // Assi sweep: SEMPRE server-side linspace(start, stop, num), in HW units
+  "variables": [
+    { "name": "DRV_FREQ",  "start": 100.0, "stop": 120.0, "num": 5, "space": "lin" },
+    { "name": "DRV_PHASE", "start": 0.0,   "stop": 3.14159, "num": 5, "space": "lin" },
+
+    { "name": "RO_FREQ",   "start": 220.0, "stop": 260.0, "num": 5, "space": "lin" },
+    { "name": "RO_PHASE",  "start": 0.0,   "stop": 3.14159, "num": 5, "space": "lin" },
+    { "name": "RO_DUR",    "start": 800,   "stop": 1600,  "num": 5, "space": "lin" },
+    { "name": "RO_GAIN",   "start": 0.1,   "stop": 0.9,   "num": 5, "space": "lin" },
+
+    { "name": "ACQ_DUR",   "start": 1024,  "stop": 4096,  "num": 5, "space": "lin" },
+
+    { "name": "D0",        "start": 10,    "stop": 200,   "num": 5, "space": "lin" },
+    { "name": "D1",        "start": 10,    "stop": 200,   "num": 5, "space": "lin" },
+    { "name": "D2",        "start": 0,     "stop": 50,    "num": 5, "space": "lin" },
+
+    { "name": "RO_DLY",    "start": 300,   "stop": 1200,  "num": 5, "space": "lin" },
+    { "name": "SHOT_CC",   "start": 2000,  "stop": 8000,  "num": 5, "space": "lin" },
+    { "name": "SHOTS",     "start": 32,    "stop": 256,   "num": 5, "space": "lin" }
+  ],
+
+  "sweep_mode": "cartesian",
+  "batch_size": 10                      // Optional: number of points to batch before sending (default: 10)
+}
+
+
+SERVER RESPONSE (Protocol 2.2 - Header + Binary Sweep Stream)
+
+// Sweep experiments return a single header with all point metadata,
+// then stream binary frames only (in batches of points).
+
+// HEADER MESSAGE (sent once at the beginning):
+
+{
+  "type": "sweep_header",
+  "sweep_id": "example_sweep_001",
+  "batch_size": 10,
+  "n_points": 125,
+  "points": [
+    {
+      "point_index": 0,
+      "variables": {"DRV_FREQ": 100.0, "RO_GAIN": 0.1, ...}  // Resolved variable values
+    },
+    {
+      "point_index": 1,
+      "variables": {"DRV_FREQ": 105.0, "RO_GAIN": 0.2, ...}
+    }
+    // ... up to all points in the sweep
+  ],
+  "adc_metadata": {
+    "0": {
+      "dtype": "complex64",
+      "shape": [32, 1024]                // [shots, samples] or [samples] if accumulated
+    }
+  }
+}
+
+// BINARY STREAM (repeated in batches):
+// For each point (in order, batched):
+//   For each ADC in the sweep:
+//     [4-byte ADC index (uint32 big-endian)]
+//     [4-byte data length in bytes (uint32 big-endian)]
+//     [raw numpy complex array bytes]
+//
+// Example for batch with 2 points, each with 1 ADC:
+// Point 0, ADC 0: [adc_idx=0][length=262144][262144 bytes of complex64 data]
+// Point 1, ADC 0: [adc_idx=0][length=262144][262144 bytes of complex64 data]
+
+
+// FINAL STATUS MESSAGE (after all batches):
+{
+  "type": "sweep_status",
+  "sweep_id": "example_sweep_001",
+  "ok": true,
+  "total_points": 125,                  // Total points in sweep (cartesian product of all variables)
+  "completed_points": 125,
+  "debug_timing": {
+    "total_server_time_ms": 5234.2,
+    "server_encode_ms": 234.5,
+    "payload_bytes": 32768000
+  },
+  "error": null
+}
+
+// Client Usage Pattern:
+// header = receive_message()
+// assert header["type"] == "sweep_header"
+// for point_meta in header["points"]:
+//     variables = point_meta["variables"]
+//
+//     # Reconstruct numpy arrays for each ADC in header["adc_metadata"]
+//     for adc_idx, adc_meta in header["adc_metadata"].items():
+//         frame = receive_binary_frame()
+//         arr = np.frombuffer(frame[adc_idx], dtype=adc_meta["dtype"])
+//         arr = arr.reshape(adc_meta["shape"])
+//         # arr is now complex array: np.real(arr), np.imag(arr), np.abs(arr)
+//
+// status = receive_message()
+// assert status["type"] == "sweep_status"

@@ -1,4 +1,2 @@
 # file: fireq-hardware/server/utils.py
-"""
-Utility classes for the hardware layer.
-"""
+"""Utility classes for the hardware layer."""

@@ -1,0 +1,112 @@
+CLIENT REQUEST
+
+{
+  "cmd": "run_experiment",
+  "session_id": "ses_001",
+  // Opzionale: definizioni inline per compilazione JIT
+  "envelopes": { ... }, 
+  "waves": { ... },
+
+  "generators": [
+    {
+      "gen_index": 0,
+      "drive": {
+        "frequency_mhz": 150.0,
+        "phase": 0.0,
+        "channel": 1,             // Drive trigger channel
+        "nyquist_zone": 1,        // OPTIONAL (auto Mix-Mode)
+        "fifo": ["pi_pulse_x", "vz_gate_pi_half", "pi_pulse_x"], // drive pulses sequence
+        "fifo_start_index": 1     // Offset FIFO hardware (default: 1)
+      },
+
+      "readout": {
+        "frequency_mhz": 200.0,
+        "phase": 0.0,
+        "channel": 2,             // Readout trigger channel
+        "wave": {                 //Esplicit readout wave definition. 
+          "envelope": "RECT_READOUT",
+          "duration": 1024,
+          "gain": 0.5
+        }
+      }
+    }
+  ],
+
+  "acquisitions": [
+    {
+      "acq_index": 0,
+      "frequency_mhz": 200.0,
+      "phase": 0.0,
+      "channel": 2,               // Trigger channel to listen
+      "duration": 2048,           // acquisition window duration (samples)
+      "tof": 150,                 // Time of Flight (hardware delay)
+      "output_type": "decimated"  // "raw", "decimated", "accumulated"
+    }
+  ],
+
+  "trigger": {
+    "shots": 1000,                // HW repetitions
+    "shot_duration": 5000,        // Total experiment duration in Clock Cycles
+    "drive_start_index": 1,
+    "drive": {
+      "1": { // Canale trigger fisico 1
+        "delay": [
+          [10, 1],  // [delay, generate]: trigger a drive wave after 10 C.C. 
+          [200, 0]  // [delay, generate]: NOT trigger a drive wave after 200 C.C. <-> generate a delay
+
+        ]
+      }
+    },
+    "readout": {
+      "2": { // trigger channel to listen
+        "delay": 500 // Delay after which readout wave must be triggered
+      }
+    }
+  }
+}
+
+
+SERVER RESPONSE (Protocol 2.1 - Binary Acquisition Data)
+
+// Step 1: Server sends metadata JSON
+{
+  "cmd": "run_experiment",
+  "session_id": "ses_001",
+  "ok": true,
+  "config_log": [ "gen 0 drive frequency: 150.0 MHz", "..." ],
+  "adc_metadata": {
+    "0": {  // ADC index (string key)
+      "dtype": "complex64",           // or "complex128" for accumulated mode
+      "shape": [1000, 2048],          // [shots, samples] or [samples] if accumulated
+      "byte_order": "little",
+      "size_bytes": 16384000          // Total bytes for this ADC's data
+    }
+  },
+  "debug_timing": {
+    "total_server_time_ms": 150.5,
+    "server_encode_ms": 12.3,
+    "payload_bytes": 16384000
+  },
+  "error": null
+}
+
+// Step 2: Server sends binary frames (immediately after metadata JSON)
+// For each ADC in metadata:
+//
+// Frame format:
+// [4-byte ADC index (uint32 big-endian)]
+// [4-byte data length in bytes (uint32 big-endian)]
+// [raw numpy complex array bytes from .tobytes()]
+//
+// Example for ADC 0:
+// Header: 8 bytes = [adc_idx=0][length=16384000]
+// Data: 16384000 bytes = raw complex64 array (1000 shots × 2048 samples × 8 bytes/sample)
+//
+// Client reconstruction:
+// arr = np.frombuffer(data_bytes, dtype='complex64')
+// arr = arr.reshape([1000, 2048])  // shape from metadata
+//
+// Result: Complex numpy array where:
+//   - Real part = I component
+//   - Imaginary part = Q component
+//   - Access: np.real(arr), np.imag(arr), or np.abs(arr) for amplitude

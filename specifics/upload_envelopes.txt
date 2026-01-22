@@ -1,0 +1,50 @@
+CLIENT REQUEST (Protocol 2.1 - Binary Envelope Upload)
+
+// Step 1: Send metadata JSON
+{
+  "cmd": "upload_envelopes",
+  "session_id": "ses_001",
+  "envelopes": {
+    "0": [  // Chiave: Indice Generatore (stringa)
+      {
+        "name": "GAUSS_SIGMA_10",
+        "for_interpolation": true,
+        "is_symmetric": true,     // Only if interpolation = true
+        "i_even": true,           // Only if interpolation = true AND is_symmetric=true
+        "q_even": false,	  // Only if interpolation = true AND is_symmetric=true
+        "num_samples": 3          // Number of I/Q sample pairs (REQUIRED, transport only)
+      }
+    ]
+  }
+}
+
+// Step 2: Send binary frames (immediately after metadata JSON)
+// For each envelope in metadata order (gen_index ascending, then env_index):
+//
+// Frame format:
+// [4-byte generator index (uint32 big-endian)]
+// [4-byte envelope index in batch (uint32 big-endian)]
+// [4-byte sample count (uint32 big-endian)]
+// [N × 8 bytes: float32 I/Q pairs]
+//
+// Example binary frame for envelope above (3 samples):
+// Header: 12 bytes = [gen_idx=0][env_idx=0][num_samples=3]
+// Data: 24 bytes = [I0_float32][Q0_float32][I1_float32][Q1_float32][I2_float32][Q2_float32]
+//       Samples must be normalized [-1.0, 1.0]
+//
+// Total frame size: 12 + (3 × 8) = 36 bytes
+
+SERVER RESPONSE
+{
+  "cmd": "upload_envelopes",
+  "session_id": "ses_001",
+  "ok": true,
+  "result": {
+    "0": {
+      "loaded": ["GAUSS_SIGMA_10"],
+      "skipped": [],              // If already present
+      "failed": []                // Any specific error log
+    }
+  },
+  "error": null
+}

@@ -5,7 +5,7 @@ Before making your contribution:
 - create a new branch for your feature.
 - make your modifications following the style guidelines.
 - once you are done, create a merge request.
-  
+
 ## Style Guidelines
 
 ### Python
