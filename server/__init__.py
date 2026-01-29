@@ -4,44 +4,24 @@ This package exposes the main adapter, data structures, exceptions, and the TCP 
 class for the FIREQ system.
 """
 
-# Import DMA engine
-from .dma_engine import AcquisitionEngine
-
-# Import exceptions
-from .exceptions import (
+from .execution.message_handler import MessageHandler
+from .hardware import OverlayAdapter
+from .hardware.dma_engine import AcquisitionEngine
+from .models import EnvelopeSpec, Modulation, TriggerCommand, WaveEntry
+from .models.exceptions import (
     ConfigurationError,
     DMAError,
     DMATimeoutError,
     DriverError,
+    EnvelopeUploadError,
     FireqHardwareError,
     HardwareResourceError,
     HardwareStateError,
     TimingError,
+    WaveCompilationError,
 )
-
-# Import Message Handler and Result structures
-from .message_handler import (
-    EnvelopeResult,
-    ExperimentResult,
-    HardwareStatusResult,
-    MessageHandler,
-    ResetResult,
-    SweepPointResult,
-    SweepStatus,
-    WaveResult,
-)
-
-# Import OverlayAdapter class and related data structures
-from .ol_adapter import (
-    EnvelopeSpec,
-    Modulation,
-    OverlayAdapter,
-    TriggerCommand,
-    WaveEntry,
-)
-
-# Import TCP Server
-from .tcp_server import FIREQServer
+from .models.results import HardwareStatusResult, ResetResult, SweepStatus
+from .network.tcp_server import FIREQServer
 
 __all__ = [
     # Main Server Class
@@ -58,10 +38,6 @@ __all__ = [
     # Results & Status
     "HardwareStatusResult",
     "ResetResult",
-    "EnvelopeResult",
-    "WaveResult",
-    "ExperimentResult",
-    "SweepPointResult",
     "SweepStatus",
     # Exceptions
     "FireqHardwareError",
@@ -72,4 +48,6 @@ __all__ = [
     "DMATimeoutError",
     "HardwareResourceError",
     "TimingError",
+    "EnvelopeUploadError",
+    "WaveCompilationError",
 ]

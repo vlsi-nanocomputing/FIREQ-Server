@@ -495,7 +495,7 @@ class FIREQSoC(Overlay):
                 "phase_bits": getattr(gen, "phase_depth", None),
                 "trigger_word_width": getattr(gen, "trigger_channels", None),
                 "duration_bits": getattr(gen, "duration_width", None),
-                "max_duration_cycles": getattr(gen, "maximum_duration", None),
+                "max_duration_samples": getattr(gen, "maximum_duration", None),
                 "sample_mem_addr_bits": getattr(gen, "sample_memory_address_width", None),
                 "sample_mem_depth_words_per_channel": getattr(gen, "channel_sample_memory_depth", None),
                 "fractional_precision_bits": getattr(gen, "fractional_precision", None),

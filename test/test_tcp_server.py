@@ -10,9 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server.message_handler import MessageHandler, SweepPointResult
-from server.ol_adapter import OverlayAdapter
-from server.tcp_server import FIREQServer
+from server import FIREQServer, MessageHandler, OverlayAdapter, SweepStatus
 
 try:
     from test.mock_hardware import MockOverlay
@@ -227,17 +225,19 @@ def test_broken_pipe_during_sweep(client, server_ctx):
         replace=True,
     )
 
-    # 2. Mock acquisition to be slow
-    original_acq = server_ctx.adapter.run_multi_acquisition
+    # 2. Mock acquisition to be slow via run_multi_acquisition
+    original_run_multi_acq = server_ctx.adapter.run_multi_acquisition
 
-    def slow_mock_acquisition(*args, **kwargs):
+    def slow_mock_run_multi_acquisition(*args, **kwargs):
         time.sleep(0.2)
         shots = kwargs.get("shots", 1)
         sps = kwargs.get("samp_per_shot", 100)
-        adc = kwargs.get("adc_indices", [0])[0]
-        return {adc: np.zeros((shots, sps), dtype=np.complex64)}
+        adc_indices = kwargs.get("adc_indices", [0])
+        dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+        result = {adc: np.zeros((shots, sps), dtype=dtype) for adc in adc_indices}
+        yield result
 
-    server_ctx.adapter.run_multi_acquisition = slow_mock_acquisition
+    server_ctx.adapter.run_multi_acquisition = slow_mock_run_multi_acquisition
 
     try:
         client.connect()
@@ -246,6 +246,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
         sweep_cmd = {
             "cmd": "run_sweep",
             "sweep_id": "crash_test",
+            "sweep_mode": "cartesian",
             "base": {
                 "generators": [
                     {
@@ -276,7 +277,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
             check_client.close()
 
     finally:
-        server_ctx.adapter.run_multi_acquisition = original_acq
+        server_ctx.adapter.run_multi_acquisition = original_run_multi_acq
 
 
 def test_abort_command_execution(client, server_ctx):
@@ -286,24 +287,37 @@ def test_abort_command_execution(client, server_ctx):
 
     # Improved Mock: Checks stop_event immediately after waking up
     def blocking_sweep(msg, on_point, stop_event, on_plan=None):
+        sweep_id = msg.get("sweep_id", "test")
         points = [{"dummy": v} for v in msg.get("variables", [{}])[0].get("values", [])]
+        n_points = len(points)
         if on_plan is not None:
             on_plan(points)
 
+        # Send sweep_metadata first to trigger sweep_header in TCP server
+        on_point({"kind": "sweep_metadata", "n_total": n_points, "adc_metadata": {}})
+
         for i in range(50):
             if stop_event.is_set():
-                return server_ctx.server.handler.status_h.get_sweep_status("aborted")
+                return SweepStatus(ok=True, sweep_id=sweep_id, n_points=n_points, n_completed=i)
 
             time.sleep(0.1)
 
             # DOUBLE CHECK: Re-check stop event after sleep before sending data
             # This prevents the "last gasp" packet that was breaking the next test
             if stop_event.is_set():
-                return server_ctx.server.handler.status_h.get_sweep_status("aborted")
+                return SweepStatus(ok=True, sweep_id=sweep_id, n_points=n_points, n_completed=i)
 
-            on_point(SweepPointResult(i, len(points), points[i % len(points)], {}))
+            on_point(
+                {
+                    "kind": "sweep_chunk",
+                    "point_index": i,
+                    "n_total": len(points),
+                    "variables": points[i % len(points)],
+                    "data": {0: np.zeros(1)},
+                }
+            )
 
-        return server_ctx.server.handler.status_h.get_sweep_status("completed")
+        return SweepStatus(ok=True, sweep_id=sweep_id, n_points=n_points, n_completed=n_points)
 
     server_ctx.server.handler.run_sweep = blocking_sweep
 
@@ -315,7 +329,7 @@ def test_abort_command_execution(client, server_ctx):
             {
                 "cmd": "run_sweep",
                 "sweep_id": "test_abort",
-                "batch_size": 1,
+                "sweep_mode": "cartesian",
                 "base": {"generators": [], "acquisitions": [], "trigger": {"shots": 1}},
                 "variables": [{"name": "dummy", "values": [1, 2]}],
             }
@@ -346,8 +360,7 @@ def test_internal_exception_handling(client, server_ctx):
     Uses a drain loop to ignore stale packets from previous tests.
     """
     # Clean queue just in case
-    with server_ctx.server.queue_out.mutex:
-        server_ctx.server.queue_out.queue.clear()
+    server_ctx.server.queue_out.clear()
 
     original_compile = server_ctx.server.handler.wave_h.compile
     server_ctx.server.handler.wave_h.compile = MagicMock(side_effect=ValueError("Simulated Compile Error"))

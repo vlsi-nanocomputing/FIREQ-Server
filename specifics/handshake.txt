@@ -1,15 +1,68 @@
-CLIENT REQUEST
+HANDSHAKE PROTOCOL
+==================
 
+The handshake establishes authentication and provides hardware configuration
+to the client before normal operations can begin.
+
+Flow:
+1. Client connects via TCP
+2. Server sends hardware summary
+3. Client responds with authentication token
+4. Server validates and confirms
+
+
+STEP 1: SERVER -> CLIENT (Initial Handshake)
+--------------------------------------------
+{
+  "type": "handshake",
+  "protocol_version": "0.2",
+  "hw_summary": {
+    "num_generators": 2,
+    "num_acquisitions": 2,
+    "generators": [
+      {
+        "gen_index": 0,
+        "drive_freq_range_mhz": [0.0, 6000.0],
+        "readout_freq_range_mhz": [0.0, 6000.0]
+      }
+    ],
+    "acquisitions": [
+      {
+        "acq_index": 0,
+        "freq_range_mhz": [0.0, 6000.0],
+        "max_samples": 16384
+      }
+    ]
+  }
+}
+
+
+STEP 2: CLIENT -> SERVER (Authentication)
+-----------------------------------------
 {
   "type": "handshake_ack",
-  "token": "fireq",             // Token FIREQServer (default: "fireq")
+  "token": "fireq",               // Authentication token (default: "fireq")
   "client_name": "Lab_Control_PC"
 }
 
-SERVER RESPONSE
 
+STEP 3: SERVER -> CLIENT (Confirmation)
+---------------------------------------
+On success:
 {
   "type": "handshake_ok",
-  "protocol_version": "2.1",    // Protocol version: 2.0 = binary acquisitions, 2.1 = + binary envelopes
   "message": "Welcome Lab_Control_PC"
 }
+
+On failure:
+{
+  "type": "handshake_error",
+  "error": "Invalid token"
+}
+
+
+NOTES
+-----
+- Handshake must complete within 3 seconds (server timeout)
+- After successful handshake, the client can send commands
+- hw_summary structure depends on the actual hardware configuration

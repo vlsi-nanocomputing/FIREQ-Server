@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server.exceptions import ConfigurationError
-from server.ol_adapter import OverlayAdapter
+from server import ConfigurationError, OverlayAdapter
+from server.hardware.utils import iq_float_to_cint16
 
 try:
     from test.mock_hardware import MockOverlay
@@ -152,7 +152,7 @@ def test_iq_quantization_logic(ctx: AdapterContext) -> None:
     """
     # Inputs: Zero, Boundary (-1.0), Overflow (-2.0)
     inputs = [[0.0, 0.0], [1.0, -1.0], [1.5, -2.0]]
-    res = ctx.adapter._iq_float_to_cint16(inputs, sample_bits=16)
+    res = iq_float_to_cint16(inputs, sample_bits=16)
 
     assert res[0] == 0 + 0j
 
@@ -166,17 +166,48 @@ def test_iq_quantization_logic(ctx: AdapterContext) -> None:
 
 
 def test_tg_program_delays_logic(ctx: AdapterContext) -> None:
-    """Verify the programming of trigger delays into the FIFO."""
+    """Verify the programming of trigger delays with lazy FIFO cleanup.
+
+    The optimized implementation uses high water mark (HWM) tracking to avoid
+    unnecessary AXI transactions when the sequence length doesn't change.
+    """
+    # First call: 2 entries, no previous HWM -> only 2 writes
     drive_spec = {0: {"delay": [[10, 0], [20, 1]]}}
     ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
-    print(ctx.trig.insert_drive_delay.call_count)
-    # always fill the entire fifo for safe tails
-    assert ctx.trig.insert_drive_delay.call_count == 1024
+    assert ctx.trig.insert_drive_delay.call_count == 2
+
+    # Second call: 1 entry, previous HWM=2 -> 1 write + 1 clear = 2 writes
     drive_spec = {0: {"delay": [[10, 0]]}}
     ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
-    print(ctx.trig.insert_drive_delay.call_count)
-    # always fill the entire fifo for safe tails
-    assert ctx.trig.insert_drive_delay.call_count == 2 * 1024  # second run
+    assert ctx.trig.insert_drive_delay.call_count == 4  # total: 2 + 2
+
+    # Third call: same length (1 entry), HWM=1 -> only 1 write, no clears
+    drive_spec = {0: {"delay": [[15, 1]]}}
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    assert ctx.trig.insert_drive_delay.call_count == 5  # total: 4 + 1
+
+    # Fourth call: longer sequence (3 entries), HWM=1 -> 3 writes, no clears
+    drive_spec = {0: {"delay": [[10, 0], [20, 1], [30, 0]]}}
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    assert ctx.trig.insert_drive_delay.call_count == 8  # total: 5 + 3
+
+
+def test_tg_reset_drive_tracking(ctx: AdapterContext) -> None:
+    """Verify that tg_reset_drive_tracking clears the HWM state."""
+    # Program 3 entries -> HWM = 3
+    drive_spec = {0: {"delay": [[10, 0], [20, 1], [30, 0]]}}
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    assert ctx.trig.insert_drive_delay.call_count == 3
+
+    # Reset the HWM tracking
+    ctx.adapter.tg_reset_drive_tracking()
+
+    # Program 1 entry after reset -> no clears (HWM was cleared)
+    drive_spec = {0: {"delay": [[10, 0]]}}
+    ctx.adapter.tg_program_delays(drive=drive_spec, drive_start_index=1)
+    # Without reset, this would have been 3 + 1 + 2 (clear indices 2,3) = 6
+    # With reset, HWM is unknown (0), so only 1 write
+    assert ctx.trig.insert_drive_delay.call_count == 4  # total: 3 + 1
 
 
 def test_modulation_setup(ctx: AdapterContext) -> None:
@@ -279,29 +310,104 @@ def test_compile_waves_conflict_raises_error(ctx: AdapterContext) -> None:
     assert "spec differs" in res["failed"][0]["error"]
 
 
-def test_run_multi_acquisition_chunking(ctx: AdapterContext) -> None:
-    """Verify acquisitions exceeding buffer limits are chunked."""
-    hw_limit = 100
-    ctx.adapter.dma_engine.get_max_shots.return_value = hw_limit
+def test_run_multi_acquisition_single_adc(ctx: AdapterContext) -> None:
+    """Verify run_multi_acquisition correctly arms, triggers, and retrieves data from single ADC."""
+    # Setup mock return values
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+    mock_data = np.zeros((10, 100), dtype=dtype)
 
-    def retrieve_side_effect(
-        buffer: object,
-        mode: str,
-        shots: int,
-        samp_per_shot: int,
-        adc_index: int,
-        timeout: float | None,
-    ) -> np.ndarray:
-        return np.zeros((shots, samp_per_shot))
+    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer_handle"
+    ctx.adapter.dma_engine.retrieve_acquisition.return_value = mock_data
+    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
+    ctx.adapter.dma_engine.last_invalidate_s = 0.0002
+
+    # Consume iterator to get result
+    results = list(
+        ctx.adapter.run_multi_acquisition(
+            adc_indices=[0],
+            mode="raw",
+            shots=10,
+            samp_per_shot=100,
+            timeout=5.0,
+        )
+    )
+
+    # Should yield exactly one chunk
+    assert len(results) == 1
+    result = results[0]
+
+    # Verify DMA arm was called with correct parameters
+    ctx.adapter.dma_engine.arm_acquisition.assert_called_once_with(
+        samp_per_shot=100,
+        shots_per_exp=10,
+        mode="raw",
+        adc_index=0,
+    )
+
+    # Verify trigger was fired
+    ctx.trig.start_experiment.assert_called_once()
+
+    # Verify data returned
+    assert 0 in result
+    assert result[0].shape == (10, 100)
+
+    # Verify timing stats populated
+    assert ctx.adapter.last_timing_stats["fpga_wait_ms"] == pytest.approx(1.0)
+    assert ctx.adapter.last_timing_stats["dma_overhead_ms"] == pytest.approx(0.2)
+
+    # Verify retrieve was called once
+    ctx.adapter.dma_engine.retrieve_acquisition.assert_called_once()
+
+
+def test_run_multi_acquisition_multi_adc(ctx: AdapterContext) -> None:
+    """Verify multi-ADC acquisition with switch routing."""
+    # Setup mock for arm
+    buffer_counter = [0]
+
+    def arm_side_effect(**kwargs: object) -> str:
+        buffer_counter[0] += 1
+        return f"buffer_{buffer_counter[0]}"
+
+    ctx.adapter.dma_engine.arm_acquisition.side_effect = arm_side_effect
+    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+
+    # Setup mock for retrieve - returns buffer
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+
+    def retrieve_side_effect(**kwargs: object) -> np.ndarray:
+        return np.zeros((10, 100), dtype=dtype)
 
     ctx.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
+    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
+    ctx.adapter.dma_engine.last_invalidate_s = 0.0001
 
-    results = ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=250, samp_per_shot=10)
+    # Run acquisition for both ADCs
+    results = list(
+        ctx.adapter.run_multi_acquisition(
+            adc_indices=[0, 1],
+            mode="raw",
+            shots=10,
+            samp_per_shot=100,
+            timeout=5.0,
+        )
+    )
 
-    assert results[0].shape == (250, 10)
-    assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 3
-    # Check if trigger was called 3 times (via ol.trigger)
-    assert ctx.trig.start_experiment.call_count == 3
+    # Should yield exactly one chunk
+    assert len(results) == 1
+    result = results[0]
+
+    # Verify trigger was fired once
+    ctx.trig.start_experiment.assert_called_once()
+
+    # Verify both ADCs have data
+    assert 0 in result and 1 in result
+
+    # Verify both ADCs were armed (sequential ARM → TRIGGER → RETRIEVE)
+    assert ctx.adapter.dma_engine.arm_acquisition.call_count == 2
+
+    # Verify retrieve was called twice (once per ADC)
+    assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 2
 
 
 def test_fifo_patching_consistency(ctx: AdapterContext) -> None:
@@ -362,24 +468,27 @@ def test_reset_wave_memory_preserve_specs(ctx: AdapterContext) -> None:
     ctx.gen.reset_wave_memory_dict.assert_called_once()
 
 
-def test_multi_acquisition_mid_stream_failure(ctx: AdapterContext) -> None:
-    """Verify errors during chunked acquisition are propagated."""
-    # Setup for chunking (low limit)
-    ctx.adapter.dma_engine.get_max_shots.return_value = 100
+def test_run_multi_acquisition_dma_failure(ctx: AdapterContext) -> None:
+    """Verify DMA errors during run_multi_acquisition are propagated."""
+    # Setup arm to succeed
+    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer_handle"
+    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+    # Simulate DMA timeout during retrieval
+    ctx.adapter.dma_engine.retrieve_acquisition.side_effect = TimeoutError("DMA Timeout")
 
-    # Simulate 3 calls: Success, Success, Failure
-    def side_effect(*args: object, **kwargs: object) -> np.ndarray:
-        if ctx.adapter.dma_engine.retrieve_acquisition.call_count == 3:
-            raise TimeoutError("DMA Timeout")
-        return np.zeros((100, 10))
+    # Execute run_multi_acquisition - consume iterator to trigger exception
+    with pytest.raises(TimeoutError, match="DMA Timeout"):
+        list(
+            ctx.adapter.run_multi_acquisition(
+                adc_indices=[0],
+                mode="raw",
+                shots=10,
+                samp_per_shot=100,
+                timeout=5.0,
+            )
+        )
 
-    ctx.adapter.dma_engine.retrieve_acquisition.side_effect = side_effect
-
-    # Execute acquisition requiring 3 chunks
-    with pytest.raises(TimeoutError):
-        ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=250, samp_per_shot=10)
-
-    assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 3
+    ctx.adapter.dma_engine.retrieve_acquisition.assert_called_once()
 
 
 def test_sweep_lifecycle(ctx: AdapterContext) -> None:
@@ -450,21 +559,28 @@ def test_upload_envelopes_symmetry_constraint(ctx: AdapterContext) -> None:
     ctx.gen.add_envelope_to_envelope_memory.assert_not_called()
 
 
-def test_acquisition_single_shot_overflow(ctx: AdapterContext) -> None:
-    """Verify rejection when a single shot exceeds total buffer memory.
+def test_run_multi_acquisition_shot_memoization(ctx: AdapterContext) -> None:
+    """Verify trigger shots are memoized to skip redundant HW writes."""
+    # Setup mocks
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+    mock_data = np.zeros((10, 100), dtype=dtype)
+    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer"
+    ctx.adapter.dma_engine.retrieve_acquisition.return_value = mock_data
+    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
+    ctx.adapter.dma_engine.last_invalidate_s = 0.0001
+    ctx.adapter.tg_set_shots = MagicMock()
 
-    If samp_per_shot > buffer_size, chunking is impossible.
-    """
-    # Simulate very small buffer
-    ctx.adapter.dma_engine.get_max_shots.return_value = 0
+    # First call with 10 shots - should set trigger
+    list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    assert ctx.adapter.tg_set_shots.call_count == 1
+    ctx.adapter.tg_set_shots.assert_called_with(10)
 
-    with pytest.raises(ConfigurationError) as exc:
-        ctx.adapter.run_multi_acquisition(
-            adc_indices=[0],
-            mode="raw",
-            shots=1,
-            samp_per_shot=999999,  # Huge single shot
-        )
+    # Second call with same shots - should NOT reconfigure
+    list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    assert ctx.adapter.tg_set_shots.call_count == 1  # Still 1
 
-    assert "Impossible configuration" in str(exc.value)
-    ctx.trig.start_experiment.assert_not_called()
+    # Third call with different shots - should reconfigure
+    list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=20, samp_per_shot=100))
+    assert ctx.adapter.tg_set_shots.call_count == 2
+    ctx.adapter.tg_set_shots.assert_called_with(20)

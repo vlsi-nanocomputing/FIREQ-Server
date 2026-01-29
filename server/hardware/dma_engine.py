@@ -58,13 +58,17 @@ hardware configuration without ending the sweep and re-arming through the full p
 
 import logging
 import signal  # for timeout handling
+import sys
 import time
 from typing import Literal, NoReturn
 
 import numpy as np
 from pynq import allocate
 
-from .exceptions import DMAError, DMATimeoutError
+from ..models.exceptions import DMAError, DMATimeoutError
+
+# Zero-copy parsing requires little-endian byte order (ARM/Zynq is little-endian)
+assert sys.byteorder == "little", "Zero-copy DMA parsing requires little-endian system"
 
 
 class AcquisitionEngine:
@@ -136,6 +140,12 @@ class AcquisitionEngine:
         self._reset_on_next_arm = False
         # Last successful DMA wait duration (seconds). Set to 0.0 on entry.
         self.last_dma_wait_s = 0.0
+        # Detailed timing: buffer invalidation (seconds).
+        self.last_invalidate_s: float = 0.0
+        # Memoization for stream routing to avoid redundant MMIO writes.
+        self._last_routed_port: int | None = None
+        # Cache SIGALRM availability check (Unix only).
+        self._has_sigalrm: bool = hasattr(signal, "SIGALRM")
 
         # Ensure the DMA recvchannel is transitioned into a usable state early.
         # This is intentionally done at construction time so failures are detected
@@ -207,6 +217,58 @@ class AcquisitionEngine:
                     self.logger.warning(f"Failed to free buffer for ADC {idx}: {e}")
         self._persistent_buffers.clear()
 
+    def set_active_adcs(self, adc_indices: list[int]) -> None:
+        """Update which ADCs are active and free buffers for inactive ADCs.
+
+        This method should be called before arm_acquisition() when the set of
+        active ADCs changes (e.g., switching between single-ADC and dual-ADC
+        experiments). Buffers for ADCs that are no longer in the active set
+        are freed to reduce memory usage.
+
+        :param adc_indices: List of ADC indices that will be used.
+        :type adc_indices: list[int]
+        """
+        new_active = set(adc_indices)
+
+        # Free buffers for ADCs that are no longer active
+        for adc_idx in list(self._persistent_buffers.keys()):
+            if adc_idx not in new_active:
+                buf = self._persistent_buffers.pop(adc_idx, None)
+                if buf is not None and hasattr(buf, "freebuffer"):
+                    try:
+                        buf.freebuffer()
+                        self.logger.debug(f"Freed buffer for inactive ADC {adc_idx}")
+                    except Exception as e:
+                        self.logger.warning(f"Failed to free buffer for inactive ADC {adc_idx}: {e}")
+
+    def _get_fifo_params(
+        self,
+        mode: Literal["raw", "decimated", "accumulated"],
+        adc_index: int,
+    ) -> tuple[int, int]:
+        """Return FIFO depth and width for the given mode and ADC.
+
+        :param mode: Acquisition mode.
+        :type mode: Literal["raw", "decimated", "accumulated"]
+        :param adc_index: ADC/acquisition IP index.
+        :type adc_index: int
+        :return: Tuple of (fifo_depth_words, fifo_width_bits).
+        :rtype: tuple[int, int]
+        :raises DMAError: If mode is unknown.
+        """
+        acq_spec = self.hw_specs["acquisitions"][adc_index]
+
+        if mode == "raw":
+            fifo_depth = int(acq_spec.get("raw_fifo_depth_words", 0))
+            fifo_width = int(acq_spec.get("raw_output_width_bits", 256))
+        elif mode in ("decimated", "accumulated"):
+            fifo_depth = int(acq_spec.get("decimated_fifo_depth_words", 0))
+            fifo_width = int(acq_spec.get("dec_output_width_bits", 64))
+        else:
+            raise DMAError(f"Unknown mode: {mode}")
+
+        return fifo_depth, fifo_width
+
     def get_max_shots(
         self,
         mode: Literal["raw", "decimated", "accumulated"],
@@ -215,41 +277,16 @@ class AcquisitionEngine:
     ) -> int:
         """Compute the maximum number of shots that can fit in the acquisition FIFO/buffer.
 
-        This is a hardware-capacity computation based on the FIFO depth/width
-        described in ``hw_specs``. It intentionally does not consider
-        higher-level constraints such as trigger generator register limits.
-
-        :param mode:
-            Acquisition output mode. Determines FIFO width and packing.
+        :param mode: Acquisition output mode.
         :type mode: Literal["raw", "decimated", "accumulated"]
-        :param samp_per_shot:
-            Samples per shot as interpreted by the selected mode. For raw mode, the
-            effective samples per shot scale by ADC parallelism.
+        :param samp_per_shot: Samples per shot (scales by parallelism for raw mode).
         :type samp_per_shot: int
-        :param adc_index:
-            Acquisition IP index used to select FIFO parameters.
+        :param adc_index: Acquisition IP index.
         :type adc_index: int
-        :return:
-            Maximum number of shots that fit without overflow (0 if
-            configuration yields degenerate sizing).
+        :return: Maximum shots that fit without overflow (0 if degenerate).
         :rtype: int
-
-        :raises DMAError:
-            If ``mode`` is unknown.
         """
-        acq_spec = self.hw_specs["acquisitions"][adc_index]
-
-        if mode in ["decimated", "accumulated"]:
-            fifo_depth = int(acq_spec.get("decimated_fifo_depth_words", 0))
-            fifo_width = int(acq_spec.get("dec_output_width_bits", 64))
-        elif mode == "raw":
-            fifo_depth = int(acq_spec.get("raw_fifo_depth_words", 0))
-            fifo_width = int(acq_spec.get("raw_output_width_bits", 256))
-        else:
-            raise DMAError(f"Unknown mode: {mode}")
-
-        # Capacity is computed in bits to avoid mixing word-size assumptions.
-        # This makes the constraint audit-friendly when FIFO widths differ by mode.
+        fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
         total_bits = fifo_depth * fifo_width
 
         if mode == "accumulated":
@@ -258,6 +295,7 @@ class AcquisitionEngine:
             bits_per_shot = samp_per_shot * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
         else:  # raw
+            acq_spec = self.hw_specs["acquisitions"][adc_index]
             parallelism = int(acq_spec.get("parallelism", 1))
             bits_per_shot = samp_per_shot * parallelism * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
@@ -308,28 +346,29 @@ class AcquisitionEngine:
         :raises DMAError:
             On invalid sizes, invalid mode, or inability to start DMA transfer.
         """
+        skip_idle_check = False
+
         if self._reset_on_next_arm:
-            self.logger.warning("Resetting DMA before first post-sweep acquisition.")
-            self._hard_reset()
+            self.logger.debug("Clearing _reset_on_next_arm flag (no hard reset, skip idle check).")
             self._reset_on_next_arm = False
+            # Skip idle check to avoid triggering hard reset if DMA reports non-idle
+            # briefly after sweep end
+            skip_idle_check = True
 
         # "Fast path "is correct if the caller keeps mode and sizing invariants stable
         # across iterations.
         if self._sweep_prepared and self._sweep_mode == mode:
             return self._arm_acquisition_fast(mode, adc_index)
         # Full path
-        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, adc_index)
+        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, adc_index, skip_idle_check)
 
     def retrieve_acquisition(
         self,
         buffer: object,
-        mode: str,
-        shots: int,
-        samp_per_shot: int,
-        adc_index: int,
         timeout: float | None = None,
+        skip_timeout: bool = False,
     ) -> np.ndarray:
-        """Wait for DMA completion, apply timeout protection, and parse the acquired data.
+        """Wait for DMA completion, apply timeout protection, and return buffer.
 
         Hardware DMA can hang (commonly: missing TLAST, upstream stream
         starvation). In those cases, waiting indefinitely would deadlock
@@ -345,41 +384,31 @@ class AcquisitionEngine:
         :param buffer:
             DMA destination buffer previously returned by :meth:`arm_acquisition`.
         :type buffer: object
-        :param mode:
-            Acquisition mode used for parsing.
-        :type mode: str
-        :param shots:
-            Number of shots expected in this buffer.
-        :type shots: int
-        :param samp_per_shot:
-            Samples per shot (mode-dependent interpretation).
-        :type samp_per_shot: int
-        :param adc_index:
-            ADC/acquisition IP index used for parsing parameters (e.g., parallelism).
-        :type adc_index: int
         :param timeout:
             Timeout in seconds. If ``None`` or non-positive, no timeout is enforced.
         :type timeout: Optional[float]
+        :param skip_timeout:
+            If True, skip internal signal handler setup (caller manages timeout externally).
+        :type skip_timeout: bool
         :return:
-            Parsed complex I/Q data.
+            Full DMA buffer. Client computes valid_words from request params.
         :rtype: np.ndarray
 
         :raises DMATimeoutError:
             If the DMA wait exceeds the timeout.
         :raises DMAError:
-            For other DMA failures or parsing/validation errors.
+            For other DMA failures.
         """
+        # Reset timing accumulators
+        self.last_dma_wait_s = 0.0
+        self.last_invalidate_s = 0.0
+
         # --- Setup optional timeout via signals (UNIX only) ---
         timeout_sec: float | None = None
         old_handler = None
-        self.last_dma_wait_s = 0.0
-        # NOTE: _hash_sigalrm variable is only meant
-        # to enable functional tests on Windows environment
-        # Check if SIGALRM is available (Unix only)
-        has_sigalrm = hasattr(signal, "SIGALRM")
 
-        if timeout is not None and timeout > 0:
-            if has_sigalrm:
+        if not skip_timeout and timeout is not None and timeout > 0:
+            if self._has_sigalrm:
                 timeout_sec = float(timeout)
 
                 def _timeout_handler(signum: int, frame: object) -> NoReturn:
@@ -408,7 +437,7 @@ class AcquisitionEngine:
             self._hard_reset()
             # free resources in case of timeout error
             self.free_resources()
-            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec:.3f} s") from e
+            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec:.3f} s", timeout_sec) from e
 
         except Exception as e:
             # Any other error (e.g. RuntimeError: DMA channel not started)
@@ -419,7 +448,7 @@ class AcquisitionEngine:
             raise DMAError(f"DMA transfer failed: {e}") from e
 
         finally:
-            # Restore signal handler
+            # Restore signal handler (only if we set one up)
             if timeout_sec is not None:
                 try:
                     signal.setitimer(signal.ITIMER_REAL, 0.0)
@@ -431,14 +460,16 @@ class AcquisitionEngine:
                     except Exception:
                         pass
 
-        # Invalidate buffer cache
+        # Invalidate buffer cache (timed)
+        t_invalidate_start = time.perf_counter()
         try:
             buffer.invalidate()
         except Exception:
             pass
+        self.last_invalidate_s = time.perf_counter() - t_invalidate_start
 
-        # --- Parse data ---
-        return self._parse(buffer, mode, shots, samp_per_shot, adc_index)
+        # Return full buffer (client computes valid_words from request params)
+        return buffer
 
     # ------------------------------------------------------------------
     # Acquisition methods : full validation for non-sweep experiments
@@ -450,12 +481,18 @@ class AcquisitionEngine:
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
         adc_index: int,
+        skip_idle_check: bool = False,
     ) -> object:
         """Conservative arm path: validate capacity, check DMA state, route stream, allocate buffer, start DMA.
 
         This method is intentionally strict. The validation step is
         performed *before* routing/starting DMA so that configuration errors
         are reported without mutating hardware state.
+
+        :param skip_idle_check: If True, skip the DMA idle check. Used when
+            the caller has just performed a hard reset and the DMA may briefly
+            report non-idle state during the start sequence.
+        :type skip_idle_check: bool
 
         :raises DMAError:
             If parameters are invalid, capacity is exceeded, DMA is not
@@ -464,29 +501,35 @@ class AcquisitionEngine:
         if shots_per_exp < 1:
             raise DMAError("shots_per_exp must be >= 1")
 
-        total_shots = shots_per_exp
-
-        # 1. Validation
-        self._validate_buffer_capacity(samp_per_shot, shots_per_exp, mode, adc_index)
+        # 1. Validation - check capacity using get_max_shots
+        max_shots = self.get_max_shots(mode, samp_per_shot, adc_index)
+        if shots_per_exp > max_shots:
+            raise DMAError(
+                f"Buffer capacity exceeded (mode={mode}, ADC={adc_index}): "
+                f"requested {shots_per_exp} shots, max is {max_shots} "
+                f"(for {samp_per_shot} samp/shot)"
+            )
 
         self.logger.debug(
-            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, "
-            f"total={total_shots}, mode={mode}, adc={adc_index}"
+            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, " f"mode={mode}, adc={adc_index}"
         )
 
         # 2. DMA state check
         # DMA may report a non-idle state after a previous run (or an error).
         # Starting a new transfer while not idle is undefined; actively reset
         # to avoid timeouts and partial data.
-        if not self.dma.recvchannel.idle:
+        # Skip this check if we just performed a reset (the DMA may briefly
+        # report non-idle during the start sequence after a hard reset).
+        if not skip_idle_check and not self.dma.recvchannel.idle:
             self.logger.warning("DMA not idle before arm. Forcing hard reset.")
             self._hard_reset()
 
         # 3. Switch routing
         self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
 
-        # 4. Buffer allocation
-        total_words = self._compute_total_words(mode, adc_index)
+        # 4. Buffer allocation (size = FIFO capacity in 32-bit words)
+        fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
+        total_words = fifo_depth * (fifo_width // 32)
         buffer = self._get_or_allocate_buffer(adc_index, total_words)
 
         # 5. Start DMA
@@ -536,6 +579,8 @@ class AcquisitionEngine:
         self._sweep_prepared = False
         self._sweep_mode = None
         self._reset_on_next_arm = True
+        # Reset routing memoization so next acquisition re-routes.
+        self._last_routed_port = None
 
     def _arm_acquisition_fast(
         self,
@@ -561,11 +606,12 @@ class AcquisitionEngine:
         # 1. Routing (always needed - changes per ADC)
         self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
 
-        # 2. Reuse existing buffer (assume already allocated)
+        # 2. Reuse existing buffer or fallback to full allocation
         buffer = self._persistent_buffers.get(adc_index)
         if buffer is None:
             # Fallback to full allocation if not pre-allocated
-            total_words = self._compute_total_words(mode, adc_index)
+            fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
+            total_words = fifo_depth * (fifo_width // 32)
             buffer = self._get_or_allocate_buffer(adc_index, total_words)
 
         try:
@@ -602,54 +648,6 @@ class AcquisitionEngine:
         except Exception as e:
             raise DMAError(f"Failed to start DMA recvchannel: {e}") from e
 
-    def _compute_total_words(
-        self,
-        mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
-    ) -> int:
-        """Compute the DMA buffer length required by the selected mode.
-
-        This is based on *hardware maximum duration* as described by
-        ``hw_specs``, not on the user's requested duration. The intention
-        is to allocate a buffer that always fits the maximum allowed
-        acquisition for the current bitstream configuration.
-
-        Firmware packing assumptions
-        ----------------------------
-        - accumulated: 2 words per cycle (I32, Q32)
-        - decimated: 1 word per cycle (packed I16/Q16)
-        - raw: ``parallelism`` words per cycle (packed I16/Q16 per lane)
-
-        :raises DMAError:
-            If ``mode`` is unknown.
-        """
-        # Buffer sizing uses hw_specs as the authoritative interface contract
-        # between Python and FPGA firmware. Any mismatch here is a
-        # versioning/configuration bug.
-        acq_spec = self.hw_specs["acquisitions"][adc_index]
-        # take out parameters from acquisition spec
-        spec_dur = acq_spec["max_duration_cycles"]
-        spec_par = acq_spec["parallelism"]
-
-        max_cycles = int(spec_dur)
-        parallelism = int(spec_par)
-
-        self.logger.debug(f"Buffer Calc (ADC {adc_index}, {mode}): HW_MaxCycles={max_cycles}, Par={parallelism} ")
-        if mode == "accumulated":
-            # Accumulated output: 2 Sample/Clock
-            return max_cycles * 2
-
-        elif mode == "decimated":
-            # Decimated output: 1 Sample/Clock
-            return max_cycles
-
-        elif mode == "raw":
-            # Raw output: 'parallelism' Samples/Clock
-            return max_cycles * parallelism
-
-        else:
-            raise DMAError(f"Unknown acquisition mode for buffer sizing: {mode}")
-
     def _route_switch(self, adc_index: int, raw_mode: bool) -> None:
         """Route the AXI Stream Switch to select the desired ADC and output mode.
 
@@ -682,109 +680,16 @@ class AcquisitionEngine:
         base_port = hard_map.get(adc_idx, adc_idx * 2)
         target_port = base_port + (0 if raw_mode else 1)
 
-        self.logger.info(f"Routing AXI switch: adc={adc_index}, raw_mode={raw_mode} -> port={target_port}")
+        # Skip MMIO writes if routing hasn't changed (memoization).
+        if target_port == self._last_routed_port:
+            return
 
         try:
             self.switch.mmio.write(self.REG_MI_MUX_0, target_port)
             self.switch.mmio.write(self.REG_CTRL, self.MASK_COMMIT)
+            self._last_routed_port = target_port
         except Exception as e:
             raise DMAError(f"AXI switch routing failed: {e}") from e
-
-    def _parse(self, buffer: object, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> np.ndarray:
-        """Convert the raw DMA buffer into a complex numpy array.
-
-        This method processes raw data retrieved from the DMA, handling different
-        firmware data formats (decimated/raw vs accumulated).
-
-        :param buffer: The raw data buffer containing DMA samples.
-        :type buffer: object
-        :param mode: The acquisition mode ('decimated', 'raw', or 'accumulated').
-        :type mode: str
-        :param shots: Number of acquisition shots captured.
-        :type shots: int
-        :param samp_per_shot: Number of samples per shot (decimated) or raw samples.
-        :type samp_per_shot: int
-        :param adc_index: Index of the ADC being processed.
-        :type adc_index: int
-        :return: A complex numpy array of shape (shots, samples) or (shots,).
-        :rtype: np.ndarray
-        :raises DMAError: If the hardware specifications are invalid or mode is unknown.
-        """
-        try:
-            parallelism = int(self.hw_specs["acquisitions"][adc_index]["parallelism"])
-        except (KeyError, ValueError, TypeError) as err:
-            raise DMAError(f"Cannot determine parallelism for ADC {adc_index} from hw_specs.") from err
-
-        # Parsing begins by interpreting the DMA payload as uint32 words.
-        # The firmware exports word-aligned samples, and using uint32
-        # makes bit slicing/pattern interpretation explicit.
-
-        raw_u32 = buffer.view(np.uint32) if isinstance(buffer, np.ndarray) else np.frombuffer(buffer, dtype=np.uint32)
-
-        if mode == "accumulated":
-            # Data format: 32-bit I and 32-bit Q are stored in separate words.
-            # Sequence: I0, Q0, I1, Q1, ...
-
-            # Accumulated mode is "one complex value per shot", represented
-            # as two 32-bit signed words. Any mismatch here is a
-            # firmware/API contract violation
-            valid_len = shots * 2
-
-            if len(raw_u32) < valid_len:
-                self.logger.error(
-                    f"Buffer size {len(raw_u32)} smaller than expected for accumulated mode ({valid_len})."
-                )
-
-            # Slice only the valid portion of the buffer
-            trimmed_data = raw_u32[:valid_len]
-
-            # Reinterpret as signed 32-bit integers for I/Q processing
-            # I is at indices 0, 2, 4... | Q is at indices 1, 3, 5...
-            i_data = trimmed_data[0::2].astype(np.int32)
-            q_data = trimmed_data[1::2].astype(np.int32)
-
-            complex_data = i_data + 1j * q_data
-
-            return complex_data
-
-        elif mode in ("decimated", "raw"):
-            # Data format: Packed 32-bit word.
-            # [31:16] = Q (16-bit signed)
-            # [15:00] = I (16-bit signed)
-
-            if mode == "decimated":
-                real_samples_per_shot = samp_per_shot
-            else:  # raw
-                real_samples_per_shot = samp_per_shot * parallelism
-
-            total_valid_samples = real_samples_per_shot * shots
-
-            if total_valid_samples > len(raw_u32):
-                self.logger.error("Buffer DMA smaller than expected valid samples.")
-                valid_data = raw_u32
-            else:
-                valid_data = raw_u32[:total_valid_samples]
-
-            # Parse packed I/Q using bitwise operations
-            # Note: Casting to int16 handles the sign extension correctly
-            # for 16-bit values.
-            i_data = (valid_data & 0xFFFF).astype(np.int16)
-            q_data = (valid_data >> 16).astype(np.int16)
-
-            complex_data = i_data + 1j * q_data
-
-            # Reshape data for user-ease and high level JSON-serialization
-            try:
-                return complex_data.reshape((shots, real_samples_per_shot))
-            except ValueError as e:
-                self.logger.warning(
-                    f"Reshape failed for {shots} shots (samples_per_shot={real_samples_per_shot}): {e}. "
-                    "Returning flat array."
-                )
-                return complex_data
-
-        else:
-            raise DMAError(f"Unknown acquisition mode for parsing: {mode}")
 
     def _hard_reset(self) -> None:
         """Perform a robust MMIO-based reset of the AXI DMA channel.
@@ -806,8 +711,8 @@ class AcquisitionEngine:
         Failure policy
         --------------
         If the reset bit does not clear within the timeout, we raise
-        :class:`DMAError`. At that point, the most likely causes are missing
-        clocks, a broken fabric, or an inconsistent overlay state.
+        :class:`DMAError`. At that point, the most likely cause is
+        inconsistent overlay state.
         Continuing would be unsafe and misleading.
 
         :raises DMAError:
@@ -859,138 +764,24 @@ class AcquisitionEngine:
             if hasattr(self.dma.recvchannel, "_first_transfer"):
                 self.dma.recvchannel._first_transfer = True
 
-            self.logger.info("DMA S2MM Hard Reset Completed.")
+            # 7. Reset routing memoization so next acquisition re-routes.
+            self._last_routed_port = None
+
+            self.logger.debug("DMA S2MM Hard Reset Completed.")
 
         except Exception as e:
             self.logger.error(f"Critical Failure during DMA Reset: {e}")
             raise DMAError(f"Critical Failure during DMA Reset: {e}") from e
 
-    def _validate_buffer_capacity(
-        self,
-        samp_per_shot: int,
-        shots_per_exp: int,
-        mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
-    ) -> None:
-        """Validate that the requested acquisition fits in the FPGA-side buffering capacity.
-
-        This check is performed in *bits* using FIFO depth/width taken from
-        ``hw_specs``. It prevents silent truncation and protects against
-        wrong configurations.
-
-        Caller responsibilities
-        -----------------------
-        - Provide correct ``hw_specs`` consistent with the loaded overlay.
-        - Ensure ``samp_per_shot`` and ``shots_per_exp`` are the *true*
-          firmware-level values for the selected mode.
-
-        :raises DMAError:
-            If the request exceeds capacity or if the mode is unknown.
-        """
-        acq_spec = self.hw_specs["acquisitions"][adc_index]
-
-        # --- 1. Retrieve Hardware FIFO Capacity from hw_specs ---
-        if mode in ["decimated", "accumulated"]:
-            fifo_depth_words = int(acq_spec.get("decimated_fifo_depth_words", 0))
-            fifo_width_bits = int(acq_spec.get("dec_output_width_bits", 64))
-        elif mode == "raw":
-            fifo_depth_words = int(acq_spec.get("raw_fifo_depth_words", 0))
-            fifo_width_bits = int(acq_spec.get("raw_output_width_bits", 256))
-        else:
-            raise DMAError(f"Unknown mode for validation: {mode}")
-
-        total_fifo_bits = fifo_depth_words * fifo_width_bits
-        usable_fifo_bits = total_fifo_bits
-
-        # --- 2. Calculate requested and limits based on mode ---
-        if mode == "raw":
-            parallelism = int(acq_spec.get("parallelism", 1))
-            bits_per_sample = 32
-            samples_per_shot = samp_per_shot * parallelism
-            total_requested_bits = samples_per_shot * shots_per_exp * bits_per_sample
-
-            max_total_samples = usable_fifo_bits // bits_per_sample
-            max_samp_per_shot = (
-                max_total_samples // parallelism
-                if shots_per_exp == 1
-                else max_total_samples // (shots_per_exp * parallelism)
-            )
-            max_shots = usable_fifo_bits // (samples_per_shot * bits_per_sample) if samples_per_shot > 0 else 0
-
-        elif mode == "decimated":
-            bits_per_sample = 32
-            total_requested_bits = samp_per_shot * shots_per_exp * bits_per_sample
-
-            max_total_samples = usable_fifo_bits // bits_per_sample
-            max_samp_per_shot = max_total_samples // shots_per_exp if shots_per_exp > 0 else max_total_samples
-            max_shots = max_total_samples // samp_per_shot if samp_per_shot > 0 else 0
-
-        elif mode == "accumulated":
-            bits_per_shot = 64
-            total_requested_bits = shots_per_exp * bits_per_shot
-
-            max_shots = usable_fifo_bits // bits_per_shot
-            max_samp_per_shot = None  # Not relevant for accumulated
-
-        # --- 3. Check and raise descriptive error ---
-        if total_requested_bits > usable_fifo_bits:
-
-            if mode == "accumulated":
-                raise DMAError(
-                    f"Buffer capacity exceeded (mode={mode}, ADC={adc_index}):\n"
-                    f"  Requested: {shots_per_exp} shots/experiment\n"
-                )
-            else:
-                # For raw/decimated, show both constraints
-                if mode == "decimated":
-                    requested_samples = samp_per_shot * shots_per_exp
-                else:
-                    requested_samples = samp_per_shot * shots_per_exp * parallelism
-
-                hint_lines = []
-                if samp_per_shot > max_samp_per_shot:
-                    hint_lines.append(
-                        f" samp_per_shot too large: {samp_per_shot} > "
-                        f"{max_samp_per_shot} (for {shots_per_exp} shots)"
-                    )
-                if shots_per_exp > max_shots:
-                    hint_lines.append(
-                        f"  shots too large: {shots_per_exp} > {max_shots} " f"(for {samp_per_shot} samp/shot)"
-                    )
-
-                hint = "\n".join(hint_lines) if hint_lines else "  Reduce shots or samp_per_shot"
-                # Error messages are intentionally descriptive and include
-                # actionable hints, because capacity failures are common
-                # during experiment development
-
-                raise DMAError(
-                    f"Buffer capacity exceeded (mode={mode}, "
-                    f"ADC={adc_index}):\n"
-                    f"  Requested: {requested_samples} total samples "
-                    f"({shots_per_exp} shots × {samp_per_shot} samp/shot)\n"
-                    f"  Maximum:   {max_total_samples} total samples\n"
-                    f"{hint}"
-                )
-
     def _get_or_allocate_buffer(self, adc_index: int, total_words: int) -> object:
         """Return a persistent DMA buffer for the given ADC, allocating if necessary.
 
-        Performance
-        -----------
-        DDR allocation via `pynq.allocate` is relatively expensive and can
-        fragment resources in long-running processes. We therefore cache one
-        buffer per ADC index.
-
-        Correctness rationale
-        ---------------------
-        A buffer is only reused if its length is >= the requested length
-        (in words). This prevents overflow. Using a larger-than-needed
-        buffer is safe because parsing uses explicit "valid length"
-        computations based on ``shots`` and ``samp_per_shot``.
+        Buffer size is always the full FIFO capacity. We cache one buffer per
+        ADC index to avoid repeated allocations.
 
         :param adc_index: ADC/acquisition index used as the cache key.
         :type adc_index: int
-        :param total_words: Required buffer length in 32-bit words.
+        :param total_words: Buffer length in 32-bit words (full FIFO capacity).
         :type total_words: int
         :return: A PYNQ-allocated buffer suitable for DMA reception.
         :rtype: object
@@ -999,6 +790,10 @@ class AcquisitionEngine:
 
         if existing is not None and existing.shape[0] >= total_words:
             return existing
+
+        # Free old buffer if it exists but is too small
+        if existing is not None and hasattr(existing, "freebuffer"):
+            existing.freebuffer()
 
         buffer = allocate(shape=(total_words,), dtype="u4")
         self._persistent_buffers[adc_index] = buffer

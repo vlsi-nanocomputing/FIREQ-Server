@@ -74,6 +74,12 @@ class TimingError(FireqHardwareError):
 
     These errors should be caught and parameters adjusted before retrying.
 
+    Attributes:
+        parameter: Name of the timing parameter that violated constraints
+        value: The invalid value that was provided
+        min_required: Minimum valid value (if applicable)
+        max_allowed: Maximum valid value (if applicable)
+
     Example:
         >>> try:
         ...     backend.start_experiment(duration_cycles=10)
@@ -82,7 +88,20 @@ class TimingError(FireqHardwareError):
         ...     backend.start_experiment(duration_cycles=e.min_required)
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        parameter: str | None = None,
+        value: float | None = None,
+        min_required: float | None = None,
+        max_allowed: float | None = None,
+    ) -> None:
+        """Initialize a TimingError with constraint details."""
+        super().__init__(message)
+        self.parameter = parameter
+        self.value = value
+        self.min_required = min_required
+        self.max_allowed = max_allowed
 
 
 class ConfigurationError(FireqHardwareError):
@@ -138,6 +157,66 @@ class FrequencyError(ConfigurationError):
         super().__init__(message)
 
 
+class EnvelopeUploadError(ConfigurationError):
+    """Raised when envelope upload fails.
+
+    This exception wraps errors during the envelope upload stage, providing
+    context about which generator and envelope failed.
+
+    :param gen_index: Generator index where upload failed.
+    :type gen_index: int
+    :param envelope_name: Name of the envelope that failed.
+    :type envelope_name: str
+    :param reason: Human-readable failure reason.
+    :type reason: str
+    """
+
+    def __init__(self, gen_index: int, envelope_name: str, reason: str) -> None:
+        """Initialize an EnvelopeUploadError with context.
+
+        :param gen_index: Generator index where upload failed.
+        :type gen_index: int
+        :param envelope_name: Name of the envelope that failed.
+        :type envelope_name: str
+        :param reason: Human-readable failure reason.
+        :type reason: str
+        """
+        self.gen_index = gen_index
+        self.envelope_name = envelope_name
+        message = f"Envelope '{envelope_name}' upload failed on gen {gen_index}: {reason}"
+        super().__init__(message)
+
+
+class WaveCompilationError(ConfigurationError):
+    """Raised when wave compilation fails.
+
+    This exception wraps errors during the wave compilation stage, providing
+    context about which generator and wave failed.
+
+    :param gen_index: Generator index where compilation failed.
+    :type gen_index: int
+    :param wave_id: Identifier of the wave that failed.
+    :type wave_id: str
+    :param reason: Human-readable failure reason.
+    :type reason: str
+    """
+
+    def __init__(self, gen_index: int, wave_id: str, reason: str) -> None:
+        """Initialize a WaveCompilationError with context.
+
+        :param gen_index: Generator index where compilation failed.
+        :type gen_index: int
+        :param wave_id: Identifier of the wave that failed.
+        :type wave_id: str
+        :param reason: Human-readable failure reason.
+        :type reason: str
+        """
+        self.gen_index = gen_index
+        self.wave_id = wave_id
+        message = f"Wave '{wave_id}' compilation failed on gen {gen_index}: {reason}"
+        super().__init__(message)
+
+
 class DMAError(FireqHardwareError):
     """DMA-related error.
 
@@ -146,10 +225,18 @@ class DMAError(FireqHardwareError):
     - Buffer allocation failure
     - Transfer timeout (see DMATimeoutError for specific timeout case)
 
-    May have a recovery_strategy attribute indicating if recovery is possible.
+    Attributes:
+        recovery_strategy: 'fatal' or 'recoverable' indicating if recovery is possible
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        recovery_strategy: str = "fatal",
+    ) -> None:
+        """Initialize a DMAError with recovery strategy."""
+        super().__init__(message)
+        self.recovery_strategy = recovery_strategy
 
 
 class DMATimeoutError(DMAError):
@@ -163,7 +250,15 @@ class DMATimeoutError(DMAError):
         recovery_strategy: 'fatal' or 'recoverable'
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        timeout_seconds: float,
+        recovery_strategy: str = "fatal",
+    ) -> None:
+        """Initialize a DMATimeoutError with timeout details."""
+        super().__init__(message, recovery_strategy=recovery_strategy)
+        self.timeout_seconds = timeout_seconds
 
 
 class RecoverableDMAError(DMAError):
@@ -179,7 +274,14 @@ class RecoverableDMAError(DMAError):
         recovery_strategy: Always 'recoverable' for this exception
     """
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+    ) -> None:
+        """Initialize a RecoverableDMAError with status code."""
+        super().__init__(message, recovery_strategy="recoverable")
+        self.status_code = status_code
 
 
 class HardwareResourceError(FireqHardwareError):
@@ -247,6 +349,8 @@ __all__ = [
     "TimingError",
     "ConfigurationError",
     "FrequencyError",
+    "EnvelopeUploadError",
+    "WaveCompilationError",
     "DMAError",
     "DMATimeoutError",
     "RecoverableDMAError",

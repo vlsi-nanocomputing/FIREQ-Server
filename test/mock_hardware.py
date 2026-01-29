@@ -167,6 +167,14 @@ class MockAcquisitionDriver:
         self.idx = idx
         self.ctrl = 0
         self.AxiLiteInterfaceMMIO = MagicMock()
+        # Internal attributes accessed by ol_adapter for raw mode and diagnostics
+        self._axi_lite_interface_mmio = MagicMock()
+        self._axi_lite_interface_mmio.read = MagicMock(return_value=0)
+        self._axi_lite_interface_mmio.write = MagicMock()
+        self._ctrl = 0  # Control register offset
+        self.trigger_channels = 4  # Number of trigger channel bits
+        self.duration_width = 16  # Duration field width in bits
+        self.time_of_flight_width = 8  # ToF field width in bits
         # Track trigger channel settings for verification
         self.trigger_channel_calls: list[dict[str, Any]] = []
         self.current_channel: int = 0
@@ -269,19 +277,21 @@ class MockOverlay:
             "acquisitions": [
                 {
                     "id": 0,
+                    "index": 0,
                     "parallelism": 8,
                     "max_duration_cycles": 65536,
                     "decimated_fifo_depth_words": 16384,
-                    "dec_output_width_bits": 32,
+                    "dec_output_width_bits": 64,  # 64 bits for decimated/accumulated (I32+Q32)
                     "raw_fifo_depth_words": 16384,
                     "raw_output_width_bits": 256,
                 },
                 {
                     "id": 1,
+                    "index": 1,
                     "parallelism": 8,
                     "max_duration_cycles": 65536,
                     "decimated_fifo_depth_words": 16384,
-                    "dec_output_width_bits": 32,
+                    "dec_output_width_bits": 64,  # 64 bits for decimated/accumulated (I32+Q32)
                     "raw_fifo_depth_words": 16384,
                     "raw_output_width_bits": 256,
                 },
@@ -295,8 +305,17 @@ class MockOverlay:
         self.acquisitions = [MockAcquisitionDriver(0), MockAcquisitionDriver(1)]
 
     def summary(self) -> dict:
-        """Return the hardware summary."""
-        return self.hw_specs["summary"]
+        """Return the hardware summary (matches FIREQSoC.summary() structure)."""
+        return {
+            "bitfile": "mock_bitfile.bit",
+            "num_generators": len(self.generators),
+            "num_acquisitions": len(self.acquisitions),
+            "num_triggers": 1,
+            "has_dma": self.dma is not None,
+            "has_axis_switch": self.axis_switch is not None,
+            "has_rf": False,
+            "hw_specs": self.hw_specs,
+        }
 
     def configure_dac_mix_mode(self, *args: object, **kwargs: object) -> dict:
         """Mock DAC mix mode configuration."""

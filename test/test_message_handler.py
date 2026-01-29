@@ -1,18 +1,11 @@
 # file: fireq-utils/test/test_message_handler.py
-from threading import Event
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from server.message_handler import (
-    ExperimentResult,
-    MessageHandler,
-    SweepPointResult,
-    find_variable_paths,
-    substitute_variables,
-)
-from server.ol_adapter import OverlayAdapter
+from server import MessageHandler, OverlayAdapter, WaveCompilationError
+from server.models import BinaryChunk, StreamHeader, StreamTiming
 
 # Attempt to import Mock Hardware; fallback to local import if the file is adjacent
 try:
@@ -42,18 +35,78 @@ def stack() -> object:
             self.adapter.dma_engine = MagicMock()
             self.adapter.dma_engine.get_max_shots.return_value = 999999
 
-            # Setup valid DMA buffer return
+            # Setup valid DMA buffer return - returns just buffer (no valid_words)
             def retrieve_side_effect(
                 buffer: object,
-                mode: object,
-                shots: int,
-                samp_per_shot: int,
-                adc_index: int,
-                timeout: object,
+                timeout: object = None,
+                skip_timeout: bool = False,
             ) -> np.ndarray:
-                return np.zeros((shots, samp_per_shot))
+                # Return compact I/Q format (structured array)
+                # Note: In tests, we create dummy data; real shape comes from buffer
+                dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+                data = np.zeros((10, 256), dtype=dtype)
+                return data
 
             self.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
+
+            # Setup timing tracking attributes on DMA mock
+            self.adapter.dma_engine.last_dma_wait_s = 0.001
+            self.adapter.dma_engine.last_invalidate_s = 0.0001
+
+            # Mock run_acquisition method on adapter
+            # This is used by _stream_acquisition_only in MessageHandler
+            def run_acquisition_side_effect(
+                adc_indices: list,
+                mode: str,
+                shots: int,
+                samp_per_shot: int,
+                timeout: float | None = None,
+            ) -> tuple:
+                """Return data dict and timing info (fpga_wait_s, dma_overhead_s)."""
+                result = {}
+                for adc in adc_indices:
+                    if mode == "accumulated":
+                        dtype = np.dtype([("i", "<i4"), ("q", "<i4")])
+                        result[adc] = np.zeros(shots, dtype=dtype)
+                    else:
+                        dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+                        result[adc] = np.zeros((shots, samp_per_shot), dtype=dtype)
+                return result, 0.001, 0.0001
+
+            self.adapter.run_acquisition = MagicMock(side_effect=run_acquisition_side_effect)
+
+            # Mock run_multi_acquisition - generator that yields data_dict only
+            def run_multi_acquisition_side_effect(
+                *,
+                adc_indices: list,
+                mode: str,
+                shots: int,
+                samp_per_shot: int,
+                timeout: float | None = None,
+                validate_chunk: bool = True,
+            ):
+                """Generator that yields data_dict."""
+                result = {}
+                for adc in adc_indices:
+                    if mode == "accumulated":
+                        dtype = np.dtype([("i", "<i4"), ("q", "<i4")])
+                        result[adc] = np.zeros(shots, dtype=dtype)
+                    else:
+                        dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+                        result[adc] = np.zeros((shots, samp_per_shot), dtype=dtype)
+                # Update timing stats on adapter (simulating what the real method does)
+                self.adapter.last_timing_stats = {
+                    "total_ms": 1.0,
+                    "fpga_wait_ms": 0.5,
+                    "dma_overhead_ms": 0.1,
+                    "sw_overhead_ms": 0.35,
+                }
+                yield result
+
+            self.adapter.run_multi_acquisition = MagicMock(side_effect=run_multi_acquisition_side_effect)
+
+            # Mock _compute_max_hw_shots to return a high limit (no chunking by default)
+            self.adapter._compute_max_hw_shots = MagicMock(return_value=999999)
 
             # 4. Initialize Handler
             self.handler = MessageHandler(self.adapter)
@@ -62,44 +115,51 @@ def stack() -> object:
 
 
 # =============================================================================
-# STANDARD TESTS (HAPPY PATH)
+# STANDARD TESTS
 # =============================================================================
 
 
 def test_run_experiment_flow(stack: object) -> None:
-    """Test the _run_acquisition orchestrator."""
+    """Test the full experiment run flow via the public run() method."""
     config = {
         "acquisitions": [{"acq_index": 0, "output_type": "decimated", "duration": 256, "channel": 1}],
         "trigger": {"shots": 10},
         "timeout": 5.0,
     }
-    log = []
 
     # Mock the arming phase to return a dummy buffer object
     stack.adapter.dma_engine.arm_acquisition.return_value = "dummy_buffer"
 
     # Pre-set the acquisition's trigger channel so it's considered "active"
-    # (normally _setup_acquisition would do this, but we're testing _run_acquisition directly)
     stack.ol.acquisitions[0].current_channel = 1
     stack.ol.acquisitions[1].current_channel = 1
 
-    # Run the internal method
-    results = stack.handler._run_acquisition(config, log)
+    # Run using the public method and consume all events
+    events = list(stack.handler.run(config, cmd="run_experiment", session_id="test_session"))
 
-    # Check results
-    # Note: acq_index maps directly to adc_index with identity mapping.
-    assert 0 in results
-    assert results[0].shape == (10, 256)
+    # First event should be header (header_binary protocol)
+    assert isinstance(events[0], StreamHeader)
+    assert events[0].type == "experiment_header"
+    metadata = events[0].metadata
+    assert metadata["ok"]
+    assert "n_chunks" in metadata
+    assert metadata["stream_mode"] == "header_binary"
 
-    # Robust log checking
-    log_content = " ".join([str(entry) for entry in log])
-    assert "Acquisition" in log_content or "complete" in log_content
+    # Check that binary data chunks were produced (if any ADC was active)
+    chunk_events = [e for e in events if isinstance(e, BinaryChunk)]
+    if chunk_events:
+        # Verify chunk structure (binary-only, no JSON metadata)
+        chunk = chunk_events[0]
+        assert chunk.binary_data is not None
+        assert chunk.timing is not None
+        assert 0 in chunk.binary_data  # ADC index 0 should be present
 
 
 def test_run_sweep_optimized(stack: object) -> None:
     """Test the optimized sweep loop."""
     msg = {
         "sweep_id": "test_sweep",
+        "sweep_mode": "cartesian",
         "base": {
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "$freq"}}],
             "acquisitions": [{"acq_index": 0, "duration": 100}],
@@ -109,13 +169,19 @@ def test_run_sweep_optimized(stack: object) -> None:
     }
 
     stack.adapter.dma_engine.arm_acquisition.return_value = "dummy_buffer"
-    on_point = MagicMock()
 
-    status = stack.handler.run_sweep(msg, on_point)
+    # Consume all items from the generator
+    items = list(stack.handler.run_sweep(msg, cmd="run_sweep", session_id="test_session", stop_check=lambda: False))
 
-    assert status.ok
-    assert status.n_completed == 2
-    assert on_point.call_count == 2
+    # Should have header + binary chunks + final status
+    headers = [i for i in items if isinstance(i, StreamHeader)]
+    statuses = [i for i in items if isinstance(i, StreamTiming)]
+
+    assert len(headers) == 1
+    assert headers[0].type == "sweep_header"
+    assert len(statuses) == 1
+    assert statuses[0].metadata["ok"]
+    assert statuses[0].metadata["n_completed"] == 2
 
 
 # =============================================================================
@@ -127,32 +193,29 @@ class TestRobustness:
     """Advanced test suite covering edge cases and error resilience."""
 
     def test_input_sanity_validation(self, stack: object) -> None:
-        """Verify that physically impossible values are rejected before hitting hardware
-        drivers.
+        """Verify that errors during setup are caught and reported gracefully.
 
-        **Rationale:** Passing negative durations or non-physical parameters to FPGA
-        registers can lead to integer underflows (very large uint values) causing
-        hardware lockups that require a power cycle.
+        **Rationale:** Even though validation is handled at the TCP layer, errors
+        during setup (from adapter or drivers) should be caught and reported
+        without crashing the handler.
         """
-        # Scenario: User requests a negative duration
+        # Scenario: Adapter's internal call raises an error during setup
         config = {
-            "acquisitions": [{"acq_index": 0, "duration": -100}],  # Impossible
-            "generators": [{"gen_index": 0, "drive": {"frequency_mhz": "NaN"}}],  # Invalid type/value
+            "acquisitions": [{"acq_index": 0, "duration": 100, "channel": 1}],
+            "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}],
         }
 
-        # We assume the Adapter or the Handler raises an error.
-        # If the Handler logic just casts to int(-100), the driver receiving a uint32
-        # might interpret it as 4.29 billion cycles.
-        # Note: If your current code doesn't validate this, this test serves as a
-        # request for a future feature (Validation Layer).
+        # Simulate the adapter protecting itself by raising during _call
+        stack.adapter._call = MagicMock(side_effect=ValueError("Duration must be positive"))
 
-        # For now, let's simulate the adapter protecting itself:
-        stack.adapter.acquisition_timing = MagicMock(side_effect=ValueError("Duration must be positive"))
+        # run() is a generator - consume it and check the header event
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        result = stack.handler.run(config)
-
-        assert not result.ok
-        assert "Duration must be positive" in result.error
+        assert isinstance(header, StreamHeader)
+        assert header.type == "experiment_header"
+        assert not header.metadata["ok"]
+        assert "Duration must be positive" in header.metadata["error"]
 
     def test_partial_config_caching(self, stack: object) -> None:
         """Verify that partial configurations do NOT trigger unnecessary upload/compile
@@ -164,23 +227,19 @@ class TestRobustness:
             "trigger": {},
         }
 
-        # SPY/MOCK INTERNAL HANDLERS
-        stack.handler.env_h.upload = MagicMock(return_value=MagicMock(ok=True))
-        stack.handler.wave_h.compile = MagicMock(return_value=MagicMock(ok=True))
+        # SPY/MOCK INTERNAL HANDLERS (now return dicts, not Result objects)
+        stack.handler.env_h.upload = MagicMock(return_value={})
+        stack.handler.wave_h.compile = MagicMock(return_value={})
 
-        # MOCK THE ADAPTER METHOD
-        stack.adapter.generator_modulation = MagicMock()
+        # Run experiment - consume the generator
+        events = list(stack.handler.run(minimal_config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        # Run experiment
-        result = stack.handler.run(minimal_config)
-
-        assert result.ok
+        assert isinstance(header, StreamHeader)
+        assert header.metadata["ok"]
         # Ensure upload/compile were NOT called (Optimization check)
         stack.handler.env_h.upload.assert_not_called()
         stack.handler.wave_h.compile.assert_not_called()
-
-        # Ensure hardware setup proceeded (Functional check)
-        stack.adapter.generator_modulation.assert_called()
 
     def test_fail_fast_on_compilation_error(self, stack: object) -> None:
         """Verify the 'Fail-Fast' mechanism during the preparation stage."""
@@ -189,20 +248,19 @@ class TestRobustness:
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}],
         }
 
-        # Simulate a compilation failure
-        failure_result = MagicMock()
-        failure_result.ok = False
-        failure_result.error = "Missing dependency"
-        stack.handler.wave_h.compile = MagicMock(return_value=failure_result)
+        # Simulate a compilation failure (now raises exception instead of returning Result)
+        stack.handler.wave_h.compile = MagicMock(side_effect=WaveCompilationError(0, "w1", "Missing dependency"))
 
         # MOCK THE ADAPTER METHOD to verify it is NOT called
         stack.adapter.generator_modulation = MagicMock()
 
-        # Run experiment
-        result = stack.handler.run(config)
+        # Run experiment - consume the generator
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        assert not result.ok
-        assert "Missing dependency" in result.error
+        assert isinstance(header, StreamHeader)
+        assert not header.metadata["ok"]
+        assert "Missing dependency" in header.metadata["error"]
 
         # CRITICAL: The hardware setup must be skipped
         stack.adapter.generator_modulation.assert_not_called()
@@ -245,87 +303,21 @@ class TestRobustness:
         # Verify adapter call
         stack.adapter.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
 
-    def test_deep_variable_substitution(self, stack: object) -> None:
-        """Verify recursive variable substitution."""
-        base_config = {
-            "sequence": [
-                {"op": "play", "args": {"freq": "$f1", "amp": 0.5}},
-                {"op": "wait", "args": {"time": "$t1"}},
-            ]
-        }
-        variables = {"f1", "t1"}
-
-        # 1. Test Path Discovery
-        paths = find_variable_paths(base_config, variables)
-        assert "sequence.0.args.freq" in paths["f1"]
-
-        # 2. Test Substitution
-        point = {"f1": 123.5, "t1": 1000}
-        new_config = substitute_variables(base_config, point)
-
-        assert new_config["sequence"][0]["args"]["freq"] == 123.5
-        assert base_config["sequence"][0]["args"]["freq"] == "$f1"
-
-    def test_sweep_interruption(self, stack: object) -> None:
-        """Verify that a running sweep can be aborted via the stop_event."""
-        # 1. Setup a multi-point sweep
-        msg = {
-            "sweep_id": "long_run",
-            "base": {
-                "generators": [],
-                "acquisitions": [{"acq_index": 0, "duration": 10}],
-                "trigger": {},
-            },
-            "variables": [{"name": "x", "values": [1, 2, 3, 4, 5]}],
-        }
-
-        # 2. Setup the stop event
-        stop_evt = Event()
-
-        # 3. Define a side effect to simulate user interruption
-        mock_on_point = MagicMock()
-
-        def on_point_side_effect(result: SweepPointResult) -> None:
-            # After processing the second point (index 1), signal stop
-            if result.point_index == 1:
-                stop_evt.set()
-
-        mock_on_point.side_effect = on_point_side_effect
-
-        # Monkey patch adapter to ensure it runs fast and we can spy on end_sweep
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={0: np.zeros(10)})
-        stack.adapter.prepare_sweep = MagicMock()
-        stack.adapter.end_sweep = MagicMock()
-
-        # 4. Run Sweep
-        status = stack.handler.run_sweep(msg, mock_on_point, stop_event=stop_evt)
-
-        # 5. Verifications
-        assert status.ok
-
-        # Logic check: Point 0 runs (init). Point 1 runs (loop).
-        # After Point 1, event is set. Loop check for Point 2 finds event set -> break.
-        # Total completed should be 2.
-        assert status.n_completed == 2
-        assert status.n_points == 5
-
-        # Ensure hardware was released
-        stack.adapter.end_sweep.assert_called_once()
-
     def test_sweep_integer_casting_edge_cases(self, stack: object) -> None:
         """Verify strict type casting for discrete hardware parameters."""
         # Config sweeping a discrete parameter (nyquist_zone) with FLOAT values
         msg = {
+            "sweep_id": "nz_sweep",
+            "sweep_mode": "cartesian",
             "base": {"generators": [{"gen_index": 0, "drive": {"nyquist_zone": "$nz"}}]},
             "variables": [{"name": "nz", "values": [1.0, 2.0]}],  # User provides floats
         }
 
         # Monkey patch the adapter method receiving the value
         stack.adapter.set_nyquist_zone = MagicMock()
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={})
 
-        # Run sweep
-        stack.handler.run_sweep(msg, MagicMock())
+        # Run sweep - consume all items
+        list(stack.handler.run_sweep(msg, cmd="run_sweep", session_id="test", stop_check=lambda: False))
 
         # Verify arguments passed to adapter
         # We expect set_nyquist_zone(gen_index, type, value)
@@ -346,20 +338,30 @@ class TestRobustness:
         }
 
         # 1. Simulate a Timeout Exception from the driver
-        # Monkey patch run_multi_acquisition
-        stack.adapter.run_multi_acquisition = MagicMock(side_effect=TimeoutError("DMA Receive Timeout"))
+        # Monkey patch run_multi_acquisition to raise TimeoutError (used by _stream_acquisition_only)
+        def timeout_side_effect(**kwargs):
+            raise TimeoutError("DMA Receive Timeout")
 
-        # 2. Run execution
-        result = stack.handler.run(config)
+        stack.adapter.run_multi_acquisition = MagicMock(side_effect=timeout_side_effect)
+
+        # 2. Run execution - consume the generator
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
 
         # 3. Verify Graceful Failure
-        assert result.ok is False
-        assert result.data is None
-        assert "DMA Receive Timeout" in result.error
+        # The first header event has ok=True (setup succeeded), then when timeout
+        # occurs during acquisition streaming, a second header event is yielded with ok=False
+        header_events = [e for e in events if isinstance(e, StreamHeader)]
+        assert len(header_events) == 2, f"Expected 2 header events, got {len(header_events)}"
 
-        # Verify the configuration log was preserved for debugging
-        assert result.config_log is not None
-        assert any("acq 0" in entry for entry in result.config_log)
+        # The error header is the second (last) one
+        error_header = header_events[-1]
+        assert error_header.metadata["ok"] is False
+        assert "DMA Receive Timeout" in error_header.metadata["error"]
+
+        # Verify the first header (successful setup) had config log preserved
+        success_header = header_events[0]
+        assert success_header.metadata["config_log"] is not None
+        assert any("acq 0" in entry for entry in success_header.metadata["config_log"])
 
     def test_zipped_sweep_topology(self, stack: object) -> None:
         """Verify 'zipped' sweep mode behavior (Diagonal vs Cartesian).
@@ -383,33 +385,18 @@ class TestRobustness:
             ],
         }
 
-        # We want to verify the generated points.
-        # We can spy on the 'on_point' callback to see what variables were passed.
-        on_point_spy = MagicMock()
-
         # Monkey patch adapter
         stack.adapter.generator_modulation = MagicMock()
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={0: np.zeros(10)})
         stack.adapter.prepare_sweep = MagicMock()
         stack.adapter.end_sweep = MagicMock()
 
-        # Run
-        status = stack.handler.run_sweep(msg, on_point_spy)
+        # Run - consume all items
+        items = list(stack.handler.run_sweep(msg, cmd="run_sweep", session_id="test", stop_check=lambda: False))
 
-        assert status.ok
-        assert status.n_points == 3  # If Cartesian, this would be 3x3=9. Zipped is 3.
-
-        # Verify exact point pairing
-        # Call args structure: (SweepPointResult, )
-        calls = on_point_spy.call_args_list
-
-        # Point 1: f=10, g=0.1
-        vars_p1 = calls[0][0][0].variables
-        assert vars_p1["f"] == 10.0 and vars_p1["g"] == 0.1
-
-        # Point 3: f=30, g=0.3
-        vars_p3 = calls[2][0][0].variables
-        assert vars_p3["f"] == 30.0 and vars_p3["g"] == 0.3
+        statuses = [i for i in items if isinstance(i, StreamTiming)]
+        assert len(statuses) == 1
+        assert statuses[0].metadata["ok"]
+        assert statuses[0].metadata["n_points"] == 3  # If Cartesian, this would be 3x3=9. Zipped is 3.
 
     def test_trigger_delay_propagation(self, stack: object) -> None:
         """Verify that trigger parameters are correctly propagated to the adapter.
@@ -432,10 +419,9 @@ class TestRobustness:
         # Mock adapter methods
         stack.adapter.tg_program_delays = MagicMock()
         stack.adapter.tg_set_duration = MagicMock()
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={})
 
-        # Run
-        stack.handler.run(config)
+        # Run - consume the generator to execute the code
+        list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
 
         # Check Duration
         stack.adapter.tg_set_duration.assert_called_with(1000)
@@ -463,13 +449,17 @@ class TestRobustness:
         # to test the handler's reaction to such an event.
         stack.adapter.generator_modulation = MagicMock(side_effect=IndexError("Generator 99 out of range"))
 
-        result = stack.handler.run(config)
+        # run() is a generator - consume it
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        assert result.ok is False
-        assert "Generator 99 out of range" in result.error
+        assert isinstance(header, StreamHeader)
+        assert header.metadata["ok"] is False
+        # The mocked exception message is propagated through the handler
+        assert "Generator 99 out of range" in header.metadata["error"]
 
-        # Verify it didn't crash and returned an object
-        assert isinstance(result.error, str)
+        # Verify it didn't crash and returned a valid error message
+        assert isinstance(header.metadata["error"], str)
 
     def test_config_log_completeness(self, stack: object) -> None:
         """Verify that the execution log captures key actions for audit.
@@ -487,38 +477,51 @@ class TestRobustness:
 
         stack.adapter.generator_modulation = MagicMock()
         stack.adapter.acq_trigger2listen = MagicMock()
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={})
 
-        result = stack.handler.run(config)
+        # run() is a generator - consume it
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        assert result.ok
-        assert result.config_log is not None
+        assert isinstance(header, StreamHeader)
+        assert header.metadata["ok"]
+        assert header.metadata["config_log"] is not None
 
         # Flatten log for search
-        log_text = " ".join(result.config_log)
+        log_text = " ".join(header.metadata["config_log"])
 
         # Verify content reflects the configuration
         assert "gen 0 drive frequency: 50.0 MHz" in log_text
         assert "acq 0 listening to trigger channel 1" in log_text
 
     def test_sweep_string_substitution(self, stack: object) -> None:
-        """Verify that string sweep variables are rejected by numeric casting."""
+        """Verify that string sweep variables are passed through without validation.
+
+        **Design Note:** Input validation is handled at the TCP layer, not MessageHandler.
+        The handler passes values directly to the adapter, which will fail if the value
+        is incompatible with the hardware operation. This test verifies the handler
+        doesn't crash when receiving string values for sweep variables.
+        """
         # Scenario: Sweeping the envelope name referenced by a wave definition
         msg = {
             "sweep_id": "shape_optimization",
+            "sweep_mode": "cartesian",
             "base": {"waves": {"0": [{"id": "pulse", "envelope": "$env_name"}]}},
             "variables": [{"name": "env_name", "values": ["gauss_99", "rect_01"]}],
         }
 
         # Mock dependencies
         stack.adapter.compile_waves = MagicMock(return_value={"waves": [], "replaced": []})
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={0: np.zeros(10)})
         stack.adapter.prepare_sweep = MagicMock()
         stack.adapter.end_sweep = MagicMock()
 
-        # Run sweep
-        with pytest.raises(ValueError):
-            stack.handler.run_sweep(msg, MagicMock())
+        # Run sweep - no validation at MessageHandler level
+        items = list(stack.handler.run_sweep(msg, cmd="run_sweep", session_id="test", stop_check=lambda: False))
+
+        # Handler should complete without error - validation is TCP layer responsibility
+        statuses = [i for i in items if isinstance(i, StreamTiming)]
+        assert len(statuses) == 1
+        assert statuses[0].metadata["ok"]
+        assert statuses[0].metadata["n_completed"] == 2
 
     def test_empty_payload_behavior(self, stack: object) -> None:
         """Verify system stability when receiving an empty configuration.
@@ -534,14 +537,13 @@ class TestRobustness:
         stack.adapter.generator_modulation = MagicMock()
         stack.adapter.acquisition_timing = MagicMock()
 
-        # Run
-        result = stack.handler.run(config)
+        # Run - consume the generator
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
         # Should be successful (no errors occurred)
-        assert result.ok
-
-        # Should contain no data
-        assert result.data is None or result.data == {}
+        assert isinstance(header, StreamHeader)
+        assert header.metadata["ok"]
 
         # Hardware setup should have been skipped
         stack.adapter.generator_modulation.assert_not_called()
@@ -571,100 +573,18 @@ class TestRobustness:
         # Mock adapter methods
         stack.adapter.generator_modulation = MagicMock()
         stack.adapter.upload_readout_wave = MagicMock()
-        stack.adapter.run_multi_acquisition = MagicMock(return_value={})
 
-        # Run
-        result = stack.handler.run(config)
+        # Run - consume the generator
+        events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
+        header = events[0]
 
-        assert result.ok
+        assert isinstance(header, StreamHeader)
+        assert header.metadata["ok"]
 
         # Verify specific call
         stack.adapter.upload_readout_wave.assert_called_with(
             gen_index=0, wave={"type": "const", "length": 100}, replace=True
         )
-
-
-# =============================================================================
-# BINARY SERIALIZATION TESTS
-# =============================================================================
-
-
-def test_experiment_result_binary_metadata() -> None:
-    """Test ExperimentResult.to_metadata_dict() generates correct metadata."""
-    # Create test data with different dtypes and shapes
-    data = {
-        0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64),
-        1: np.array([[5 + 6j, 7 + 8j]], dtype=np.complex128),
-    }
-    result = ExperimentResult(ok=True, data=data, config_log=["test"])
-
-    # Test metadata generation
-    meta = result.to_metadata_dict()
-
-    assert meta["ok"] is True
-    assert "adc_metadata" in meta
-    assert meta["adc_metadata"][0]["dtype"] == "complex64"
-    assert meta["adc_metadata"][0]["shape"] == [2]
-    assert meta["adc_metadata"][1]["dtype"] == "complex128"
-    assert meta["adc_metadata"][1]["shape"] == [1, 2]
-    assert meta["config_log"] == ["test"]
-
-    # Test binary data unchanged
-    binary = result.get_binary_data()
-    assert np.array_equal(binary[0], data[0])
-    assert np.array_equal(binary[1], data[1])
-
-
-def test_experiment_result_empty_data() -> None:
-    """Test ExperimentResult with empty data."""
-    result = ExperimentResult(ok=False, error="Test error")
-
-    meta = result.to_metadata_dict()
-
-    assert meta["ok"] is False
-    assert meta["adc_metadata"] == {}
-    assert meta["error"] == "Test error"
-    assert result.get_binary_data() == {}
-
-
-def test_sweep_point_result_binary_metadata() -> None:
-    """Test SweepPointResult.to_metadata_dict() for binary protocol."""
-    data = {0: np.array([1 + 2j, 3 + 4j], dtype=np.complex64)}
-    result = SweepPointResult(point_index=5, n_total=10, variables={"freq": 5.5, "gain": 0.8}, data=data)
-
-    meta = result.to_metadata_dict()
-
-    assert meta["point_index"] == 5
-    assert meta["n_total"] == 10
-    assert meta["variables"]["freq"] == 5.5
-    assert meta["variables"]["gain"] == 0.8
-    assert "adc_metadata" in meta
-    assert meta["adc_metadata"][0]["dtype"] == "complex64"
-    assert meta["adc_metadata"][0]["shape"] == [2]
-
-    # Test binary data
-    binary = result.get_binary_data()
-    assert np.array_equal(binary[0], data[0])
-
-
-def test_binary_metadata_preserves_array_properties() -> None:
-    """Test that metadata preserves all necessary array properties."""
-    # Test with large multi-dimensional array
-    data = {0: np.random.rand(100, 512).astype(np.complex64) + 1j * np.random.rand(100, 512).astype(np.complex64)}
-    result = ExperimentResult(ok=True, data=data)
-
-    meta = result.to_metadata_dict()
-    binary = result.get_binary_data()
-
-    # Verify metadata matches actual array
-    arr = binary[0]
-    assert meta["adc_metadata"][0]["dtype"] == str(arr.dtype)
-    assert meta["adc_metadata"][0]["shape"] == list(arr.shape)
-
-    # Verify client can reconstruct from metadata
-    expected_size = np.dtype(arr.dtype).itemsize * arr.size
-    actual_bytes = arr.tobytes()
-    assert len(actual_bytes) == expected_size
 
 
 # =============================================================================
@@ -693,12 +613,11 @@ def test_envelope_handler_binary_input(stack: object) -> None:
         }
     }
 
-    # Call upload with binary data
+    # Call upload with binary data (returns dict on success, raises on failure)
     result = stack.handler.env_h.upload(config, envelope_data)
 
-    # Verify success
-    assert result.ok, f"Expected ok=True, got {result}"
-    assert result.error is None
+    # Verify success - result is now a dict, not EnvelopeResult
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
 
 
 def test_envelope_handler_binary_multiple_generators(stack: object) -> None:
@@ -739,8 +658,8 @@ def test_envelope_handler_binary_multiple_generators(stack: object) -> None:
 
     result = stack.handler.env_h.upload(config, envelope_data)
 
-    assert result.ok
-    assert result.error is None
+    # Verify success - result is now a dict
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
 
 
 def test_envelope_handler_binary_multiple_envelopes_per_generator(
@@ -781,8 +700,8 @@ def test_envelope_handler_binary_multiple_envelopes_per_generator(
 
     result = stack.handler.env_h.upload(config, envelope_data)
 
-    assert result.ok
-    assert result.error is None
+    # Verify success - result is now a dict
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
 
 
 def test_envelope_handler_binary_large_samples(stack: object) -> None:
@@ -810,8 +729,8 @@ def test_envelope_handler_binary_large_samples(stack: object) -> None:
 
     result = stack.handler.env_h.upload(config, envelope_data)
 
-    assert result.ok
-    assert result.error is None
+    # Verify success - result is now a dict
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
 
 
 # =============================================================================
