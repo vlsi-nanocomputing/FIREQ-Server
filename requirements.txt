@@ -7,7 +7,3 @@ pytest==8.3.4
 # Runtime dependencies
 numpy==1.26.4
 pynq==3.1.2
-
-# Board-specific (pre-installed on RFSoC PYNQ images)
-xrfclk
-xrfdc
