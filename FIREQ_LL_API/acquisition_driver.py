@@ -101,9 +101,11 @@ class AcquisitionDriver(_FIREQDriver):
         # get poff and pinc
         phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, adc_samplerate, self.phase_depth)
 
-        # this masking is due to the fact that the frequency of the dac is double.
-        # this prevents the ADC from going out of phase wrt the generator which means
-        # that the readout channels will always be at a constant phase
+        # masking off the LSB of the phases. This is done in an effort to keep the generation and acquisition in phase.
+        # Generation is done (at the DAC) at a frequency that is double the one used for the ADC. As a result, the phase
+        # increment for the acquisition (at equal modulation and demodulation frequencies) is equal to double the one
+        # of the generation. Masking the LSB accounts for the truncation done in the generation portion, and keeps the
+        # two systems in sync.
         pinc = phase_parameters[0] & (2**self.phase_depth - 2)
         poff = phase_parameters[1] & (2**self.phase_depth - 2)
 
