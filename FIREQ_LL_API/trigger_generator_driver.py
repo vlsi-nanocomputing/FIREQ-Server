@@ -22,7 +22,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         super().__init__(description=description)
         # parse the number of channels of the trigger generator
         self.trigger_channels = int(description["parameters"]["TriggerWordWidth"])
-        # parse the fifo interface depth and create mmio handle
+        # depth of the axi full interface, also equal to the total depth of internal memory mapped fifos
         self.fifo_interface_memory_depth = pow(2, int(description["parameters"]["C_S00_AXI_ADDR_WIDTH"]))
         # fifo depth in number of words
         self.channel_fifo_depth = pow(2, int(description["parameters"]["FifoAddressWidth"]))

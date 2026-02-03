@@ -64,7 +64,7 @@ class FIREQSoC(Overlay):
         # 4) FIREQ IPs lists
         self._generation_ips: list[GeneratorDriver] = []
         self._acquisition_ips: list[AcquisitionDriver] = []
-        self._trigger_ip: list[TriggerGeneratorDriver] = []
+        self._trigger_ips: list[TriggerGeneratorDriver] = []
         self._GEN_RF_MAP: dict[int, dict[str, tuple[int, int]]] = {}
         self._ACQ_RF_MAP: dict[int, tuple[int, int]] = {}
         self._cached_nyquist_zone: dict[tuple, int] = {}
@@ -83,13 +83,13 @@ class FIREQSoC(Overlay):
             raise RuntimeError("FIREQ_SoC: no Generator IPs found in overlay.")
         if not self._acquisition_ips:
             raise RuntimeError("FIREQ_SoC: no Acquisition IPs found in overlay.")
-        if not self._trigger_ip:
+        if not self._trigger_ips:
             raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")
 
         # 6) Hardware specs (clock validation, sample rates etc.)
         self.num_generators = len(self._generation_ips)
         self.num_acquisitions = len(self._acquisition_ips)
-        self.num_triggers = len(self._trigger_ip)
+        self.num_triggers = len(self._trigger_ips)
 
         self.hw_specs = self._build_hw_specs()
 
@@ -123,7 +123,7 @@ class FIREQSoC(Overlay):
 
         - _generation_ips: List of GeneratorDriver instances
         - _acquisition_ips: List of AcquisitionDriver instances
-        - _trigger_ip: List of TriggerGeneratorDriver instances
+        - _trigger_ips: List of TriggerGeneratorDriver instances
         """
         mmap = self._fireq_parser.get_address_mapping()
 
@@ -153,7 +153,7 @@ class FIREQSoC(Overlay):
             elif isinstance(ip_object, AcquisitionDriver):
                 self._acquisition_ips.append(ip_object)
             elif isinstance(ip_object, TriggerGeneratorDriver):
-                self._trigger_ip.append(ip_object)
+                self._trigger_ips.append(ip_object)
 
     def _map_rf_topology(self) -> None:
         """Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
@@ -511,7 +511,7 @@ class FIREQSoC(Overlay):
         # TriggerGeneratorDrivers: one entry per trigger IP
         # ------------------------------------------------------------------
         triggers_specs = []
-        for idx, trig in enumerate(self._trigger_ip):
+        for idx, trig in enumerate(self._trigger_ips):
             trig_specs = {
                 "index": idx,
                 "trigger_channels": getattr(trig, "trigger_channels", None),
@@ -767,7 +767,7 @@ class FIREQSoC(Overlay):
         :return: The main trigger generator driver
         :rtype: TriggerGeneratorDriver
         """
-        return self._trigger_ip[0]
+        return self._trigger_ips[0]
 
     # Infra IPs
 
