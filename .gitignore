@@ -31,9 +31,6 @@ env/
 htmlcov/
 coverage.xml
 
-# --- IDE & Editors ---
-.vscode/
-
 # --- Data from Jupyter Notebooks ---
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
