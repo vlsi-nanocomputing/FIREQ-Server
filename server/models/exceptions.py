@@ -247,7 +247,7 @@ class DMATimeoutError(DMAError):
 
     Attributes:
         timeout_seconds: The timeout that was exceeded
-        recovery_strategy: 'fatal' or 'recoverable'
+        recovery_strategy: Inherited from DMAError ('fatal' or 'recoverable')
     """
 
     def __init__(

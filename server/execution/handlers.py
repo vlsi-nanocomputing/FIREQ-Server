@@ -95,7 +95,7 @@ class StatusHandler:
                 envelopes=envelopes,
                 waves_count=len(wave_cache),
                 readout_wave=ro_dict,
-                hw_summary=self.adapter.summary,
+                hw_summary=self.adapter.summary(),
             )
         except Exception as e:
             self.logger.error(f"Status check failed for gen {gen_index}: {e}")
@@ -107,7 +107,7 @@ class StatusHandler:
         :return: Summary payload.
         :rtype: dict
         """
-        return self.adapter.summary
+        return self.adapter.summary()
 
 
 class ResetHandler:
