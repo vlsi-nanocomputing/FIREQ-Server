@@ -155,6 +155,21 @@ class FIREQSoC(Overlay):
             elif isinstance(ip_object, TriggerGeneratorDriver):
                 self._trigger_ips.append(ip_object)
 
+    @staticmethod
+    def _get_gen_label_from_port_alias(gen_port_alias: str) -> str:
+        """Determine the generator label from a port alias.
+
+        Classifies the generator port as either 'drive' or 'readout' based on
+        naming conventions in the port alias. Ports containing 'm0' or 'drive'
+        are classified as drive ports, all others as readout ports.
+
+        :param gen_port_alias: The generator port alias string to analyze
+        :type gen_port_alias: str
+        :return: Generator label, either 'drive' or 'readout'
+        :rtype: str
+        """
+        return "drive" if "m0" in gen_port_alias or "drive" in gen_port_alias else "readout"
+
     def _map_rf_topology(self) -> None:
         """Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
 
@@ -200,7 +215,7 @@ class FIREQSoC(Overlay):
                     tile = dac_global_index // 2
                     block = dac_global_index % 2
 
-                    label = "drive" if "m0" in gen_port_alias or "drive" in gen_port_alias else "readout"
+                    label = self._get_gen_label_from_port_alias(gen_port_alias)
 
                     if idx not in self._GEN_RF_MAP:
                         self._GEN_RF_MAP[idx] = {}
@@ -227,7 +242,7 @@ class FIREQSoC(Overlay):
                 curr_name = node_dict["NODE"]
                 for idx, acq in enumerate(self._acquisition_ips):
                     acq_fullpath = getattr(acq, "_fullpath", "")
-                    if acq_fullpath.split("/")[0] == curr_name:
+                    if acq_fullpath and acq_fullpath.split("/")[0] == curr_name:
                         return idx
 
                 for child in node_dict.get("CHILDREN", []):
