@@ -151,13 +151,13 @@ def test_logout(client, server_ctx):
     client.handshake(server_ctx.auth_token)
 
     # Pre-condition: Dirty the cache
-    server_ctx.adapter.get_wave_cache(0)["dummy"] = "exists"
+    server_ctx.adapter.generator.get_wave_cache(0)["dummy"] = "exists"
 
     client.send({"cmd": "logout"})
     res = client.receive()
 
     assert res.get("ok") is True
-    assert len(server_ctx.adapter.get_wave_cache(0)) == 0
+    assert len(server_ctx.adapter.generator.get_wave_cache(0)) == 0
 
 
 # =============================================================================
@@ -219,14 +219,14 @@ def test_broken_pipe_during_sweep(client, server_ctx):
     # 1. Preload dummy data
     gen_idx = 0
     server_ctx.adapter.ol.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
-    server_ctx.adapter.compile_waves(
+    server_ctx.adapter.generator.compile_waves(
         gen_index=gen_idx,
         waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}],
         replace=True,
     )
 
     # 2. Mock acquisition to be slow via run_multi_acquisition
-    original_run_multi_acq = server_ctx.adapter.run_multi_acquisition
+    original_run_multi_acq = server_ctx.adapter.acquisition.run_multi_acquisition
 
     def slow_mock_run_multi_acquisition(*args, **kwargs):
         time.sleep(0.2)
@@ -237,7 +237,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
         result = {adc: np.zeros((shots, sps), dtype=dtype) for adc in adc_indices}
         yield result
 
-    server_ctx.adapter.run_multi_acquisition = slow_mock_run_multi_acquisition
+    server_ctx.adapter.acquisition.run_multi_acquisition = slow_mock_run_multi_acquisition
 
     try:
         client.connect()
@@ -277,7 +277,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
             check_client.close()
 
     finally:
-        server_ctx.adapter.run_multi_acquisition = original_run_multi_acq
+        server_ctx.adapter.acquisition.run_multi_acquisition = original_run_multi_acq
 
 
 def test_abort_command_execution(client, server_ctx):

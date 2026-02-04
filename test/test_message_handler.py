@@ -511,7 +511,7 @@ class TestRobustness:
         }
 
         # Mock dependencies
-        stack.adapter.compile_waves = MagicMock(return_value={"waves": [], "replaced": []})
+        stack.adapter.generator.compile_waves = MagicMock(return_value={"waves": [], "replaced": []})
         stack.adapter.prepare_sweep = MagicMock()
         stack.adapter.end_sweep = MagicMock()
 

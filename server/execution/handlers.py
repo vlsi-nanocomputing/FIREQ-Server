@@ -1,4 +1,4 @@
-# file: fireq-utils/server/handlers.py
+# file: fireq-utils/server/execution/handlers.py
 """Specialized handlers for FIREQ operations.
 
 This module provides adapter wrappers for specific concerns:
@@ -83,9 +83,9 @@ class StatusHandler:
         :rtype: HardwareStatusResult
         """
         try:
-            envelopes = self.adapter.get_envelope_names(gen_index)
-            wave_cache = self.adapter.get_wave_cache(gen_index)
-            readout_wave = self.adapter.get_readout_wave_cache(gen_index)
+            envelopes = self.adapter.generator.get_envelope_names(gen_index)
+            wave_cache = self.adapter.generator.get_wave_cache(gen_index)
+            readout_wave = self.adapter.generator.get_readout_wave_cache(gen_index)
 
             ro_dict = readout_wave.__dict__ if readout_wave else None
 
@@ -135,7 +135,7 @@ class ResetHandler:
         :rtype: ResetResult
         """
         try:
-            res = self.adapter.reset_wave_memory(
+            res = self.adapter.generator.reset_wave_memory(
                 gen_index=gen_index,
                 preserve_specs=preserve_specs,
             )
@@ -152,7 +152,7 @@ class ResetHandler:
         :rtype: ResetResult
         """
         try:
-            res = self.adapter.reset_envelopes(gen_index=gen_index)
+            res = self.adapter.generator.reset_envelopes(gen_index=gen_index)
             return ResetResult(ok=True, gen_index=gen_index, action="envelope_reset", details=res)
         except Exception as e:
             return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
@@ -257,7 +257,7 @@ class EnvelopeHandler:
 
                 envelopes_with_samples.append(envelope)
 
-            res = self.adapter.upload_envelopes(
+            res = self.adapter.generator.upload_envelopes(
                 gen_index=gen_index,
                 envelopes=envelopes_with_samples,
                 auto_pad_noninterp=True,
@@ -306,7 +306,7 @@ class WaveHandler:
         waves_cfg = config.get("waves", {})
         for gen_index_str, waves in waves_cfg.items():
             gen_index = int(gen_index_str)
-            res = self.adapter.compile_waves(gen_index=gen_index, waves=waves, replace=True)
+            res = self.adapter.generator.compile_waves(gen_index=gen_index, waves=waves, replace=True)
 
             gen_payload = {
                 "waves": [w.get("wave_id") for w in res.get("waves", [])],

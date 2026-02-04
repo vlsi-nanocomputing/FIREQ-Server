@@ -507,30 +507,30 @@ def apply_gen_type(adapter: object, gi: int, cfg: dict, flags: set, ttype: str, 
     if f"{prefix}mod" in flags and "frequency_mhz" in cfg:
         val = extract_mod_value(cfg)
         if tracker.changed(("gen", gi, f"{prefix}mod"), val):
-            adapter.generator_modulation(gi, ttype, {"frequency_mhz": val[0], "phase": val[1]})
+            adapter.generator.set_modulation(gi, ttype, {"frequency_mhz": val[0], "phase": val[1]})
 
     if f"{prefix}nyquist" in flags and "nyquist_zone" in cfg:
         val = int(cfg["nyquist_zone"])
         if tracker.changed(("gen", gi, f"{prefix}nyquist"), val):
-            adapter.set_nyquist_zone(gi, ttype, val)
+            adapter.generator.set_nyquist_zone(gi, ttype, val)
 
     if f"{prefix}channel" in flags and "channel" in cfg:
         val = int(cfg["channel"])
         if tracker.changed(("gen", gi, f"{prefix}channel"), val):
-            adapter.gen_trigger2listen(gi, {"ttype": ttype, "channel": val})
+            adapter.generator.set_trigger_listener(gi, {"ttype": ttype, "channel": val})
 
     # Type-specific final action
     if ttype == "drive" and "drive_fifo" in flags and "fifo" in cfg:
         val = (tuple(cfg["fifo"]), cfg.get("fifo_start_index", 1))
         if tracker.changed(("gen", gi, "drive_fifo"), val):
-            adapter.program_drive_sequence(gen_index=gi, wave_id_list=cfg["fifo"], start_index=val[1])
+            adapter.generator.program_drive_sequence(gen_index=gi, wave_id_list=cfg["fifo"], start_index=val[1])
 
     elif ttype == "readout" and "readout_wave" in flags and "wave" in cfg:
         # Deep conversion to capture nested values (config is mutated in-place by apply_point)
         wave_cfg = cfg["wave"]
         val = make_hashable(wave_cfg)
         if tracker.changed(("gen", gi, "readout_wave"), val):
-            adapter.upload_readout_wave(gen_index=gi, wave=wave_cfg, replace=True)
+            adapter.generator.upload_readout_wave(gen_index=gi, wave=wave_cfg, replace=True)
 
 
 # ====================================================

@@ -362,6 +362,116 @@ class AcquisitionEngine:
         # Full path
         return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, adc_index, skip_idle_check)
 
+    def _setup_timeout(self, timeout: float | None, skip_timeout: bool) -> tuple[float | None, object]:
+        """Set up timeout mechanism for DMA wait (UNIX only, via SIGALRM).
+
+        :param timeout:
+            Timeout in seconds. If ``None`` or non-positive, no timeout is enforced.
+        :type timeout: Optional[float]
+        :param skip_timeout:
+            If True, skip internal signal handler setup.
+        :type skip_timeout: bool
+        :return:
+            Tuple of (timeout_sec, old_handler) where:
+            - timeout_sec: Effective timeout in seconds, or None if not set up
+            - old_handler: Previous signal handler (to be restored later), or None
+        :rtype: tuple[Optional[float], object]
+        """
+        timeout_sec: float | None = None
+        old_handler = None
+
+        if not skip_timeout and timeout is not None and timeout > 0:
+            if self._has_sigalrm:
+                timeout_sec = float(timeout)
+
+                def _timeout_handler(signum: int, frame: object) -> NoReturn:
+                    raise TimeoutError("DMA wait timeout")
+
+                # Save old handler, set new one
+                old_handler = signal.getsignal(signal.SIGALRM)
+                signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.setitimer(signal.ITIMER_REAL, timeout_sec)
+            else:
+                self.logger.warning("DMA timeout disabled: SIGALRM not supported on this platform.")
+
+        return timeout_sec, old_handler
+
+    def _wait_for_dma_with_timeout(self, timeout_sec: float | None) -> None:
+        """Wait for DMA completion with timeout handling.
+
+        Performs the blocking wait on the DMA recvchannel and measures the wait duration.
+        On timeout, performs a hard reset and cleanup. On other exceptions, also resets.
+
+        :param timeout_sec:
+            Effective timeout in seconds from _setup_timeout, or None if not set up.
+        :type timeout_sec: Optional[float]
+        :raises DMATimeoutError:
+            If the DMA wait exceeds the timeout.
+        :raises DMAError:
+            For other DMA failures.
+        """
+        try:
+            # Block until DMA finishes
+            # Blocking wait is the standard PYNQ completion mechanism.
+            # If the hardware never asserts TLAST, this call may block forever without
+            # an external timeout mechanism.
+            t_wait_start = time.perf_counter()
+            self.dma.recvchannel.wait()
+            self.last_dma_wait_s = time.perf_counter() - t_wait_start
+
+        except TimeoutError as e:
+            # Timeout means DMA is likely starving (waiting for TLAST).
+            # We MUST reset the core to clear the internal buffer state.
+            self.logger.error(f"DMA Timeout ({timeout_sec}s). Resetting core.")
+            self._hard_reset()
+            # free resources in case of timeout error
+            self.free_resources()
+            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec:.3f} s", timeout_sec) from e
+
+        except Exception as e:
+            # Any other error (e.g. RuntimeError: DMA channel not started)
+            # implies the state is inconsistent. Reset.
+            self._hard_reset()
+            self.free_resources()
+            self.logger.error(f"DMA Runtime Error: {e}. Resetting core.")
+            raise DMAError(f"DMA transfer failed: {e}") from e
+
+    def _restore_timeout_handler(self, timeout_sec: float | None, old_handler: object) -> None:
+        """Restore the original signal handler after DMA wait completes.
+
+        :param timeout_sec:
+            Effective timeout that was set up (if None, handler was not set).
+        :type timeout_sec: Optional[float]
+        :param old_handler:
+            Previous signal handler to restore.
+        :type old_handler: object
+        """
+        # Restore signal handler (only if we set one up)
+        if timeout_sec is not None:
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+            except Exception:
+                pass
+            if old_handler is not None:
+                try:
+                    signal.signal(signal.SIGALRM, old_handler)
+                except Exception:
+                    pass
+
+    def _invalidate_buffer(self, buffer: object) -> None:
+        """Invalidate DMA buffer cache to ensure coherency and measure time.
+
+        :param buffer:
+            DMA buffer to invalidate.
+        :type buffer: object
+        """
+        t_invalidate_start = time.perf_counter()
+        try:
+            buffer.invalidate()
+        except Exception:
+            pass
+        self.last_invalidate_s = time.perf_counter() - t_invalidate_start
+
     def retrieve_acquisition(
         self,
         buffer: object,
@@ -403,70 +513,19 @@ class AcquisitionEngine:
         self.last_dma_wait_s = 0.0
         self.last_invalidate_s = 0.0
 
-        # --- Setup optional timeout via signals (UNIX only) ---
-        timeout_sec: float | None = None
-        old_handler = None
-
-        if not skip_timeout and timeout is not None and timeout > 0:
-            if self._has_sigalrm:
-                timeout_sec = float(timeout)
-
-                def _timeout_handler(signum: int, frame: object) -> NoReturn:
-                    raise TimeoutError("DMA wait timeout")
-
-                # Save old handler, set new one
-                old_handler = signal.getsignal(signal.SIGALRM)
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.setitimer(signal.ITIMER_REAL, timeout_sec)
-            else:
-                self.logger.warning("DMA timeout disabled: SIGALRM not supported on this platform.")
+        # Set up timeout mechanism (UNIX only, via SIGALRM)
+        timeout_sec, old_handler = self._setup_timeout(timeout, skip_timeout)
 
         try:
-            # Block until DMA finishes
-            # Blocking wait is the standard PYNQ completion mechanism.
-            # If the hardware never asserts TLAST, this call may block forever without
-            # an external timeout mechanism.
-            t_wait_start = time.perf_counter()
-            self.dma.recvchannel.wait()
-            self.last_dma_wait_s = time.perf_counter() - t_wait_start
-
-        except TimeoutError as e:
-            # Timeout means DMA is likely starving (waiting for TLAST).
-            # We MUST reset the core to clear the internal buffer state.
-            self.logger.error(f"DMA Timeout ({timeout_sec}s). Resetting core.")
-            self._hard_reset()
-            # free resources in case of timeout error
-            self.free_resources()
-            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec:.3f} s", timeout_sec) from e
-
-        except Exception as e:
-            # Any other error (e.g. RuntimeError: DMA channel not started)
-            # implies the state is inconsistent. Reset.
-            self._hard_reset()
-            self.free_resources()
-            self.logger.error(f"DMA Runtime Error: {e}. Resetting core.")
-            raise DMAError(f"DMA transfer failed: {e}") from e
+            # Wait for DMA completion with timeout handling
+            self._wait_for_dma_with_timeout(timeout_sec)
 
         finally:
-            # Restore signal handler (only if we set one up)
-            if timeout_sec is not None:
-                try:
-                    signal.setitimer(signal.ITIMER_REAL, 0.0)
-                except Exception:
-                    pass
-                if old_handler is not None:
-                    try:
-                        signal.signal(signal.SIGALRM, old_handler)
-                    except Exception:
-                        pass
+            # Always restore signal handler if we set one up
+            self._restore_timeout_handler(timeout_sec, old_handler)
 
-        # Invalidate buffer cache (timed)
-        t_invalidate_start = time.perf_counter()
-        try:
-            buffer.invalidate()
-        except Exception:
-            pass
-        self.last_invalidate_s = time.perf_counter() - t_invalidate_start
+        # Invalidate buffer cache to ensure coherency
+        self._invalidate_buffer(buffer)
 
         # Return full buffer (client computes valid_words from request params)
         return buffer

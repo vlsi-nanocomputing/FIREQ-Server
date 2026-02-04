@@ -1,4 +1,4 @@
-# file: fireq-utils/server/message_handler.py
+# file: fireq-utils/server/execution/message_handler.py
 """Server-side message orchestration for FIREQ experiments.
 
 Translates JSON experiment configurations into hardware actions via an adapter.
@@ -61,7 +61,7 @@ class MessageHandler:
         """
         try:
             if hasattr(self.adapter, "end_sweep"):
-                self.adapter.end_sweep()
+                self.adapter.experiment.end_sweep()
         except Exception as e:
             self.logger.warning(f"end_sweep during cleanup failed: {e}")
 
@@ -114,7 +114,8 @@ class MessageHandler:
             n_chunks = 1
             if adc_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices
+                    self.adapter.acquisition._execution.compute_max_hw_shots(mode, samp_per_shot, adc)
+                    for adc in adc_indices
                 )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
 
@@ -247,7 +248,8 @@ class MessageHandler:
             # Compute chunks_per_point based on hardware buffer limits
             if adc_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices
+                    self.adapter.acquisition._execution.compute_max_hw_shots(mode, samp_per_shot, adc)
+                    for adc in adc_indices
                 )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
             else:
@@ -289,7 +291,7 @@ class MessageHandler:
 
             if n_points == 1:
                 t_finalize_start = time.perf_counter()
-                self.adapter.end_sweep()
+                self.adapter.experiment.end_sweep()
                 timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
                 timing.total_hardware_ms = _hw_ms
                 timing.total_dma_overhead_ms = _dma_ms
@@ -306,7 +308,7 @@ class MessageHandler:
             t_prepare_start = time.perf_counter()
 
             if adc_indices:
-                self.adapter.prepare_sweep(mode, adc_indices)
+                self.adapter.experiment.prepare_sweep(mode, adc_indices)
 
             sweep_config = current_config
             if not plan.has_envelope_vars:
@@ -364,7 +366,7 @@ class MessageHandler:
             timing.n_points_timed = _n_timed
 
             t_finalize_start = time.perf_counter()
-            self.adapter.end_sweep()
+            self.adapter.experiment.end_sweep()
             timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
 
             status = SweepStatus(True, sweep_id, n_points, n_completed, timing_stats=timing)
@@ -377,7 +379,7 @@ class MessageHandler:
             self.logger.exception(f"Sweep '{sweep_id}' failed")
             try:
                 t_finalize_start = time.perf_counter()
-                self.adapter.end_sweep()
+                self.adapter.experiment.end_sweep()
                 timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
             except Exception as cleanup_err:
                 self.logger.error(f"Failed to end sweep during cleanup: {cleanup_err}")
@@ -448,17 +450,17 @@ class MessageHandler:
             if "acq_mod" in af and "frequency_mhz" in acq_cfg:
                 val = extract_mod_value(acq_cfg)
                 if tracker.changed(("acq", acq_idx, "acq_mod"), val):
-                    self.adapter.acquisition_modulation(acq_idx, {"frequency_mhz": val[0], "phase": val[1]})
+                    self.adapter.acquisition.set_modulation(acq_idx, {"frequency_mhz": val[0], "phase": val[1]})
 
             if "acq_channel" in af and "channel" in acq_cfg:
                 val = int(acq_cfg["channel"])
                 if tracker.changed(("acq", acq_idx, "acq_channel"), val):
-                    self.adapter.acq_trigger2listen(acq_idx, {"ttype": "acquisition", "channel": val})
+                    self.adapter.acquisition.set_trigger_listener(acq_idx, {"channel": val})
 
             if af & {"acq_duration", "acq_tof"} and "duration" in acq_cfg:
                 val = (int(acq_cfg.get("tof", 0)), int(acq_cfg["duration"]))
                 if tracker.changed(("acq", acq_idx, "acq_timing"), val):
-                    self.adapter.acquisition_timing(acq_idx, tof=val[0], duration=val[1])
+                    self.adapter.acquisition.set_timing(acq_idx, tof=val[0], duration=val[1])
 
         # Trigger updates
         if trig_flags:
@@ -467,7 +469,7 @@ class MessageHandler:
             if "trig_shot_duration" in trig_flags and "shot_duration" in trig_cfg:
                 val = int(trig_cfg["shot_duration"])
                 if tracker.changed(("trig", "shot_duration"), val):
-                    self.adapter.tg_set_duration(val)
+                    self.adapter.trigger.set_duration(val)
 
             if trig_flags & {"trig_drive", "trig_readout"}:
                 drive_cfg = trig_cfg.get("drive") if "trig_drive" in trig_flags else None
@@ -480,7 +482,7 @@ class MessageHandler:
                 val = (drive_val, readout_val, start_idx)
 
                 if tracker.changed(("trig", "delays"), val):
-                    self.adapter.tg_program_delays(
+                    self.adapter.trigger.program_delays(
                         drive=drive_cfg,
                         readout=readout_cfg,
                         drive_start_index=start_idx,
@@ -503,35 +505,39 @@ class MessageHandler:
 
         if drive := gen_cfg.get("drive"):
             if "frequency_mhz" in drive:
-                self.adapter.generator_modulation(
+                self.adapter.generator.set_modulation(
                     gen_index,
                     "drive",
                     {"frequency_mhz": float(drive["frequency_mhz"]), "phase": float(drive.get("phase", 0.0))},
                 )
                 self._log(log, f"gen {gen_index} drive frequency: {drive['frequency_mhz']} MHz")
             if "nyquist_zone" in drive:
-                self.adapter.set_nyquist_zone(gen_index, "drive", int(drive["nyquist_zone"]))
+                self.adapter.generator.set_nyquist_zone(gen_index, "drive", int(drive["nyquist_zone"]))
             if "channel" in drive:
-                self.adapter.gen_trigger2listen(gen_index, {"ttype": "drive", "channel": int(drive["channel"])})
+                self.adapter.generator.set_trigger_listener(
+                    gen_index, {"ttype": "drive", "channel": int(drive["channel"])}
+                )
             if "fifo" in drive:
-                self.adapter.program_drive_sequence(
+                self.adapter.generator.program_drive_sequence(
                     gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
                 )
                 self._log(log, f"gen {gen_index} drive sequence programmed")
 
         if readout := gen_cfg.get("readout"):
             if "frequency_mhz" in readout:
-                self.adapter.generator_modulation(
+                self.adapter.generator.set_modulation(
                     gen_index,
                     "readout",
                     {"frequency_mhz": float(readout["frequency_mhz"]), "phase": float(readout.get("phase", 0.0))},
                 )
             if "nyquist_zone" in readout:
-                self.adapter.set_nyquist_zone(gen_index, "readout", int(readout["nyquist_zone"]))
+                self.adapter.generator.set_nyquist_zone(gen_index, "readout", int(readout["nyquist_zone"]))
             if "channel" in readout:
-                self.adapter.gen_trigger2listen(gen_index, {"ttype": "readout", "channel": int(readout["channel"])})
+                self.adapter.generator.set_trigger_listener(
+                    gen_index, {"ttype": "readout", "channel": int(readout["channel"])}
+                )
             if "wave" in readout:
-                self.adapter.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
+                self.adapter.generator.upload_readout_wave(gen_index=gen_index, wave=readout["wave"], replace=True)
                 self._log(log, f"gen {gen_index} readout wave uploaded")
 
     def _configure_acquisition(self, acq_cfg: dict, log: list | None = None) -> None:
@@ -545,16 +551,16 @@ class MessageHandler:
         acq_index = acq_cfg["acq_index"]
 
         if "frequency_mhz" in acq_cfg:
-            self.adapter.acquisition_modulation(
+            self.adapter.acquisition.set_modulation(
                 acq_index,
                 {"frequency_mhz": float(acq_cfg["frequency_mhz"]), "phase": float(acq_cfg.get("phase", 0.0))},
             )
         if "channel" in acq_cfg:
-            self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": int(acq_cfg["channel"])})
+            self.adapter.acquisition.set_trigger_listener(acq_index, {"channel": int(acq_cfg["channel"])})
             self._log(log, f"acq {acq_index} listening to trigger channel {acq_cfg['channel']}")
         if "duration" in acq_cfg:
             tof = int(acq_cfg.get("tof", 0))
-            self.adapter.acquisition_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
+            self.adapter.acquisition.set_timing(acq_index, tof=tof, duration=int(acq_cfg["duration"]))
             self._log(log, f"acq {acq_index} timing set: tof={tof}")
 
     def _configure_trigger(self, trigger_cfg: dict, log: list | None = None) -> None:
@@ -569,12 +575,12 @@ class MessageHandler:
             return
 
         if "shot_duration" in trigger_cfg:
-            self.adapter.tg_set_duration(int(trigger_cfg["shot_duration"]))
+            self.adapter.trigger.set_duration(int(trigger_cfg["shot_duration"]))
 
         has_drive = "drive" in trigger_cfg
         has_readout = "readout" in trigger_cfg
         if has_drive or has_readout:
-            self.adapter.tg_program_delays(
+            self.adapter.trigger.program_delays(
                 drive=trigger_cfg.get("drive") if has_drive else None,
                 readout=trigger_cfg.get("readout") if has_readout else None,
                 drive_start_index=trigger_cfg.get("drive_start_index", 1),
@@ -597,7 +603,7 @@ class MessageHandler:
         used = {int(acq["acq_index"]) for acq in config.get("acquisitions", [])} if config else set()
         for acq_index in range(total):
             if acq_index not in used:
-                self.adapter.acq_trigger2listen(acq_index, {"ttype": "acquisition", "channel": 0})
+                self.adapter.acquisition.set_trigger_listener(acq_index, {"channel": 0})
                 self._log(log, f"acq {acq_index} disabled (trigger channel 0)")
 
     # =========================================================================
@@ -634,7 +640,7 @@ class MessageHandler:
         if not adc_indices or shots <= 0:
             return
 
-        yield from self.adapter.run_multi_acquisition(
+        yield from self.adapter.acquisition.run_multi_acquisition(
             adc_indices=adc_indices,
             mode=mode,
             shots=shots,
@@ -715,7 +721,7 @@ class MessageHandler:
         all_indices = [acq["acq_index"] for acq in acquisitions]
 
         # Filter out deaf acquisitions (channel == 0)
-        active_indices = [idx for idx in all_indices if self.adapter._acq_trigger_channel.get(idx, 0) != 0]
+        active_indices = [idx for idx in all_indices if self.adapter._ctx.cache.acq_trigger_channel.get(idx, 0) != 0]
 
         if len(active_indices) < len(all_indices):
             deaf = set(all_indices) - set(active_indices)

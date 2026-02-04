@@ -9,14 +9,12 @@ This module provides the TriggerOps class that handles:
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from ...models.exceptions import ConfigurationError
-from .ll_access import LowLevelAccess
 
 if TYPE_CHECKING:
-    from .cache import CacheContainers
+    from .cache import AdapterContext
 
 
 class TriggerOps:
@@ -27,32 +25,17 @@ class TriggerOps:
 
     Attributes:
     -----------
-    _ll : LowLevelAccess
-        Unified interface for low-level driver access and error handling.
-    _logger : logging.Logger
-        Logger instance for debug/error reporting.
-    _cache : CacheContainers
-        Shared cache with trigger state (tg_drive_hwm).
+    _ctx : AdapterContext
+        Shared context containing ll, cache, logger, and other dependencies.
     """
 
-    def __init__(
-        self,
-        ll: LowLevelAccess,
-        cache: CacheContainers,
-        logger: logging.Logger,
-    ) -> None:
+    def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
         """Initialize the TriggerOps class.
 
-        :param ll: Low-level driver access helper.
-        :type ll: LowLevelAccess
-        :param cache: Shared cache containers.
-        :type cache: CacheContainers
-        :param logger: Logger instance.
-        :type logger: logging.Logger
+        :param ctx: Shared adapter context with all dependencies.
+        :type ctx: AdapterContext
         """
-        self._ll = ll
-        self._cache = cache
-        self._logger = logger
+        self._ctx = ctx
 
     def set_shots(self, shots: int) -> dict:
         """Set the number of hardware repetitions (shots) for the trigger generator.
@@ -62,7 +45,7 @@ class TriggerOps:
         :return: Dictionary containing the set number of shots.
         :rtype: dict
         """
-        t = self._ll.get_trig()
+        t = self._ctx.ll.get_trig()
         shots_i = int(shots)
 
         if shots_i < 1 or shots_i > int(t.max_hw_repetitions):
@@ -82,8 +65,8 @@ class TriggerOps:
         :rtype: dict
         :raises ConfigurationError: If duration_cycles is less than 1.
         """
-        self._logger.debug("Setting experiment duration. Clock Cycles : %d", duration_cycles)
-        t = self._ll.get_trig()
+        self._ctx.logger.debug("Setting experiment duration. Clock Cycles : %d", duration_cycles)
+        t = self._ctx.ll.get_trig()
         dur_i = int(duration_cycles)
         if dur_i < 1:
             raise ConfigurationError(f"duration={dur_i} is not valid. Must be positive.")
@@ -116,14 +99,14 @@ class TriggerOps:
         :return: Report of programmed readout channels and drive sequences.
         :rtype: dict
         """
-        self._logger.debug("Setting experiment delays in the Trigger Generator")
-        self._logger.debug(
+        self._ctx.logger.debug("Setting experiment delays in the Trigger Generator")
+        self._ctx.logger.debug(
             "---Experiment delay details--- \n1. drive_start_index = %d \n2.drive_delays = %s \n3.readout_delays= %s",
             drive_start_index,
             drive,
             readout,
         )
-        t = self._ll.get_trig()
+        t = self._ctx.ll.get_trig()
         drive = drive or {}
         readout = readout or {}
 
@@ -138,13 +121,13 @@ class TriggerOps:
             if not (isinstance(spec, dict) and "delay" in spec):
                 raise ConfigurationError(f"readout[{ch}] must be dict with key 'delay'")
             ro_delay = int(spec["delay"])
-            self._logger.debug(
+            self._ctx.logger.debug(
                 "program_delays: readout ch=%d delay=%d",
                 ch,
                 ro_delay,
             )
 
-            self._ll.call(
+            self._ctx.ll.call(
                 t.set_readout_delay(ro_delay, ch),
                 operation="set_readout_delay",
                 driver_name="TriggerGeneratorDriver",
@@ -169,7 +152,7 @@ class TriggerOps:
                 )
 
             # program the requested block (patching supported via start_idx)
-            self._logger.debug(
+            self._ctx.logger.debug(
                 "program_delays: drive ch=%d entries_list=%s",
                 ch,
                 entries_list,
@@ -183,14 +166,14 @@ class TriggerOps:
                 gen_i = 1 if int(gen) else 0
 
                 fifo_index = start_idx + k  # LL index is 1-based
-                self._logger.debug(
+                self._ctx.logger.debug(
                     "program_delays: drive ch=%d FIFO[%d] delay=%d gen_bit=%d",
                     ch,
                     fifo_index,
                     delay_i,
                     gen_i,
                 )
-                self._ll.call(
+                self._ctx.ll.call(
                     t.insert_drive_delay(ch, fifo_index, delay_i, gen_i),
                     operation="insert_drive_delay",
                     driver_name="TriggerGeneratorDriver",
@@ -200,12 +183,12 @@ class TriggerOps:
             # Lazy FIFO cleanup: only clear slots that previously contained data.
             # This optimization avoids thousands of unnecessary AXI transactions during sweeps.
             new_hwm = start_idx + len(entries_list) - 1  # last written index (1-based)
-            prev_hwm = self._cache.tg_drive_hwm.get(ch, 0)
+            prev_hwm = self._ctx.cache.tg_drive_hwm.get(ch, 0)
 
             # Clear only if the new sequence is shorter than the previous one
             if prev_hwm > new_hwm:
                 for fifo_index in range(new_hwm + 1, prev_hwm + 1):
-                    self._ll.call(
+                    self._ctx.ll.call(
                         t.insert_drive_delay(ch, fifo_index, int(t.drive_delay_max), 0),
                         operation="insert_drive_delay",
                         driver_name="TriggerGeneratorDriver",
@@ -216,7 +199,7 @@ class TriggerOps:
                 cleared_count = 0
 
             # Update the high water mark for this channel
-            self._cache.tg_drive_hwm[ch] = new_hwm
+            self._ctx.cache.tg_drive_hwm[ch] = new_hwm
 
             drive_report[ch] = {
                 "start_index": start_idx,
@@ -224,7 +207,7 @@ class TriggerOps:
                 "padded": cleared_count,
             }
 
-        self._logger.debug(
+        self._ctx.logger.debug(
             "program_delays: DONE readout_channels=%s drive_report=%s",
             sorted(ro_programmed),
             drive_report,
@@ -236,7 +219,7 @@ class TriggerOps:
 
     def trigger_experiment(self) -> None:
         """Trigger the experiment."""
-        trigger = self._ll.get_trig()
+        trigger = self._ctx.ll.get_trig()
         trigger.start_experiment()
 
     def reset_drive_tracking(self) -> None:
@@ -246,8 +229,8 @@ class TriggerOps:
         on the next program_delays call. This is useful when the FIFO state is
         unknown or when switching between different experiment configurations.
         """
-        self._cache.tg_drive_hwm.clear()
-        self._logger.debug("reset_drive_tracking: cleared HWM state")
+        self._ctx.cache.tg_drive_hwm.clear()
+        self._ctx.logger.debug("reset_drive_tracking: cleared HWM state")
 
 
 __all__ = ["TriggerOps"]

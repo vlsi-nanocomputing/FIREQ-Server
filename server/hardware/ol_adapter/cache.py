@@ -11,9 +11,17 @@ Cache containers track:
 - Timing statistics
 """
 
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .types import WaveEntry
+
+if TYPE_CHECKING:
+    from ..dma_engine import AcquisitionEngine
+    from .ll_access import LowLevelAccess
 
 
 @dataclass
@@ -66,6 +74,44 @@ class CacheContainers:
     """Track high water mark for trigger generator drive FIFOs (per channel)."""
 
 
+@dataclass
+class AdapterContext:
+    """Shared context for all operation classes following composition pattern.
+
+    This context object centralizes all dependencies and shared state,
+    providing a single parameter to each operation class constructor.
+    This follows the professor's suggested pattern for clean, minimal code.
+
+    Attributes
+    ----------
+    ol : object
+        The low-level FIREQ SoC overlay driver instance.
+    ll : LowLevelAccess
+        Low-level access helper for driver calls and error handling.
+    cache : CacheContainers
+        Shared cache containers for all state.
+    logger : logging.Logger
+        Logger instance for debug/error reporting.
+    dma_engine : AcquisitionEngine
+        DMA orchestration engine for multi-ADC acquisition.
+    trigger : object | None
+        Reference to TriggerOps instance (set after initialization).
+    generator : object | None
+        Reference to GeneratorOps instance (set after initialization).
+    acquisition : object | None
+        Reference to AcquisitionOps instance (set after initialization).
+    """
+
+    ol: object
+    ll: LowLevelAccess  # type: ignore  # noqa: F821
+    cache: CacheContainers
+    logger: logging.Logger
+    dma_engine: AcquisitionEngine  # type: ignore  # noqa: F821
+    trigger: object | None = None
+    generator: object | None = None
+    acquisition: object | None = None
+
+
 def get_wave_cache(cache: CacheContainers, gen_index: int) -> dict[str, WaveEntry]:
     """Retrieve the High-Level wave cache for a specific generator.
 
@@ -108,6 +154,7 @@ def reset_sweep_state(cache: CacheContainers) -> None:
 
 
 __all__ = [
+    "AdapterContext",
     "CacheContainers",
     "get_wave_cache",
     "reset_cache_for_generator",

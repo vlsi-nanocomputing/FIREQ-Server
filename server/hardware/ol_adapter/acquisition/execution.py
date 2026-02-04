@@ -1,12 +1,10 @@
-"""Acquisition operations for OverlayAdapter.
+"""DMA acquisition execution with chunking and pipelining.
 
-This module provides the AcquisitionOps class that handles:
-- Single and multi-shot DMA acquisition execution
-- Automatic hardware chunking for large acquisitions
-- Sweep mode optimization
-- Pipelined data retrieval
-- Acquisition DDS modulation
-- Timing configuration
+This module provides the ExecutionOps class that handles:
+- Single and multi-shot hardware acquisitions
+- Automatic chunking for large acquisitions
+- Pipelined DMA transfers for optimal throughput
+- Timeout management using SIGALRM (Unix) or polling (Windows)
 """
 
 from __future__ import annotations
@@ -20,69 +18,36 @@ from typing import TYPE_CHECKING, Literal, NoReturn
 
 import numpy as np
 
-from ...models.config_types import Modulation, TriggerCommand
-from ...models.exceptions import ConfigurationError
-from .ll_access import LowLevelAccess
+from ....models.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    import logging
-
-    from .cache import CacheContainers
-    from .trigger import TriggerOps
+    from .cache import AdapterContext
 
 
-class AcquisitionOps:
-    """Operation class for DMA acquisition control.
+class ExecutionOps:
+    """Operation class for DMA acquisition execution.
 
-    This class handles all acquisition-related operations, including:
-    - DMA-based multi-ADC data acquisition
+    Handles all hardware-level acquisition operations including:
+    - Single and multi-shot DMA transfers
     - Automatic hardware chunking for large acquisitions
     - Pipelined execution for optimal throughput
-    - Sweep mode optimization
-    - Acquisition DDS modulation and timing
+    - Timeout mechanisms (signal-based on Unix, polling on Windows)
 
     Attributes:
     -----------
-    _ll : LowLevelAccess
-        Unified interface for low-level driver access and error handling.
-    _logger : logging.Logger
-        Logger instance for debug/error reporting.
-    _cache : CacheContainers
-        Shared cache with acquisition and modulation state.
-    _trigger : TriggerOps
-        Trigger operations for shot configuration and experiment triggering.
+    _ctx : AdapterContext
+        Shared context containing ll, cache, logger, dma_engine, trigger, and other dependencies.
     """
 
-    def __init__(
-        self,
-        ll: LowLevelAccess,
-        cache: CacheContainers,
-        logger: logging.Logger,
-        dma_engine: object,
-        trigger: TriggerOps,
-    ) -> None:
-        """Initialize the AcquisitionOps class.
+    def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
+        """Initialize ExecutionOps.
 
-        :param ll: Low-level driver access helper.
-        :type ll: LowLevelAccess
-        :param cache: Shared cache containers.
-        :type cache: CacheContainers
-        :param logger: Logger instance.
-        :type logger: logging.Logger
-        :param dma_engine: AcquisitionEngine instance for DMA control.
-        :type dma_engine: object
-        :param trigger: TriggerOps instance for trigger coordination.
-        :type trigger: TriggerOps
+        :param ctx: Shared adapter context with all dependencies.
+        :type ctx: AdapterContext
         """
-        self._ll = ll
-        self._cache = cache
-        self._logger = logger
-        self.dma_engine = dma_engine
-        self._trigger = trigger
+        self._ctx = ctx
 
-    # ========== Acquisition Execution ==========
-
-    def _compute_max_hw_shots(
+    def compute_max_hw_shots(
         self,
         mode: str,
         samp_per_shot: int,
@@ -101,7 +66,7 @@ class AcquisitionOps:
         :return: The maximum allowable shots for a single atomic execution.
         """
         TRIGGER_MAX_SHOTS = 1024  # 10-bit register limit
-        buffer_max = self.dma_engine.get_max_shots(mode, samp_per_shot, adc_index)
+        buffer_max = self._ctx.dma_engine.get_max_shots(mode, samp_per_shot, adc_index)
         return min(TRIGGER_MAX_SHOTS, buffer_max)
 
     @contextmanager
@@ -134,41 +99,6 @@ class AcquisitionOps:
         finally:
             signal.setitimer(signal.ITIMER_REAL, 0.0)
             signal.signal(signal.SIGALRM, old_handler)
-
-    def prepare_sweep(self, mode: str, adc_indices: list[int]) -> None:
-        """Prepare acquisition IPs and DMA engine for sweep-optimized execution.
-
-        This configuration locks the acquisition hardware into the specified mode to
-        guarantee invariant behavior across the sweep duration.
-
-        :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
-        :param adc_indices: List of active ADC indices involved in the sweep.
-        """
-        # Pre-config acquisition IPs
-        for adc_i in adc_indices:
-            acq = self._ll.get_acq(adc_i)
-            if mode in ("decimated", "accumulated"):
-                acq.set_decimated_output_type(mode)
-
-        # Update active ADCs - frees buffers for ADCs not in use
-        self.dma_engine.set_active_adcs(adc_indices)
-
-        # Prepare DMA engine
-        self.dma_engine.prepare_sweep(mode)
-        self._cache.sweep_prepared = True
-        # Reset memoized trigger shots so first acquisition in sweep configures trigger.
-        self._cache.last_hw_shots = None
-
-    def end_sweep(self) -> None:
-        """Finalize the sweep execution and release DMA engine resources.
-
-        This method must be called at the end of a sweep sequence to ensure the DMA
-        engine correctly exits the optimized state and acquisition IPs are clean.
-        """
-        self.dma_engine.end_sweep()
-        self._cache.sweep_prepared = False
-        # Reset memoized trigger shots for next acquisition sequence.
-        self._cache.last_hw_shots = None
 
     def run_multi_acquisition(
         self,
@@ -204,14 +134,14 @@ class AcquisitionOps:
             # --- Input Validation ---
             if not adc_indices:
                 raise ConfigurationError("No ADC indices provided.")
-            if len(adc_indices) > len(self._ll.ol.hw_specs["acquisitions"]):
+            if len(adc_indices) > len(self._ctx.ll.ol.hw_specs["acquisitions"]):
                 raise ConfigurationError(
                     f"Requested {len(adc_indices)} ADCs, "
-                    f"but only {len(self._ll.ol.hw_specs['acquisitions'])} available."
+                    f"but only {len(self._ctx.ll.ol.hw_specs['acquisitions'])} available."
                 )
 
         # Compute hardware buffer limits (Required for chunking logic)
-        max_hw_shots = min(self._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices)
+        max_hw_shots = min(self.compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices)
 
         if validate_chunk:
             if max_hw_shots < 1:
@@ -243,7 +173,7 @@ class AcquisitionOps:
 
             # --- Case 2: Multiple Hardware Acquisitions (Pipelined Chunking) ---
             else:
-                self._logger.debug(f"Splitting {shots} shots into chunks of {max_hw_shots}")
+                self._ctx.logger.debug(f"Splitting {shots} shots into chunks of {max_hw_shots}")
                 remaining = shots
                 first_adc = adc_indices[0]
 
@@ -259,70 +189,70 @@ class AcquisitionOps:
                     # --- Start current chunk (if not pre-started) ---
                     if pending_buffer is None:
                         # First iteration: configure trigger, ARM first ADC, TRIGGER
-                        if hw_shots != self._cache.last_hw_shots:
-                            self._trigger.set_shots(hw_shots)
-                            self._cache.last_hw_shots = hw_shots
+                        if hw_shots != self._ctx.cache.last_hw_shots:
+                            self._ctx.trigger.set_shots(hw_shots)
+                            self._ctx.cache.last_hw_shots = hw_shots
 
                         # Pre-config ADCs (only needed outside sweep mode)
-                        if not self._cache.sweep_prepared:
+                        if not self._ctx.cache.sweep_prepared:
                             for adc_i in adc_indices:
-                                acq = self._ll.get_acq(adc_i)
+                                acq = self._ctx.ll.get_acq(adc_i)
                                 if mode in ("decimated", "accumulated"):
                                     acq.set_decimated_output_type(mode)
 
-                        pending_buffer = self.dma_engine.arm_acquisition(
+                        pending_buffer = self._ctx.dma_engine.arm_acquisition(
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=hw_shots,
                             mode=mode,
                             adc_index=first_adc,
                         )
-                        self._trigger.trigger_experiment()
+                        self._ctx.trigger.trigger_experiment()
                         pending_shots = hw_shots
 
                     # --- Complete current chunk: WAIT + COPY all ADCs ---
                     results: dict[int, np.ndarray] = {}
 
                     # First ADC: wait on pre-armed buffer
-                    buffer_data = self.dma_engine.retrieve_acquisition(
+                    buffer_data = self._ctx.dma_engine.retrieve_acquisition(
                         buffer=pending_buffer,
                         timeout=None,  # Managed by outer context
                         skip_timeout=True,
                     )
                     results[first_adc] = buffer_data.copy()
-                    fpga_wait_accum += self.dma_engine.last_dma_wait_s
-                    dma_overhead_accum += self.dma_engine.last_invalidate_s
+                    fpga_wait_accum += self._ctx.dma_engine.last_dma_wait_s
+                    dma_overhead_accum += self._ctx.dma_engine.last_invalidate_s
 
                     # Remaining ADCs: ARM + WAIT (data already in FIFO from trigger)
                     for adc_i in adc_indices[1:]:
-                        buffer = self.dma_engine.arm_acquisition(
+                        buffer = self._ctx.dma_engine.arm_acquisition(
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=pending_shots,
                             mode=mode,
                             adc_index=adc_i,
                         )
-                        buffer_data = self.dma_engine.retrieve_acquisition(
+                        buffer_data = self._ctx.dma_engine.retrieve_acquisition(
                             buffer=buffer,
                             timeout=None,
                             skip_timeout=True,
                         )
                         results[adc_i] = buffer_data.copy()
-                        fpga_wait_accum += self.dma_engine.last_dma_wait_s
-                        dma_overhead_accum += self.dma_engine.last_invalidate_s
+                        fpga_wait_accum += self._ctx.dma_engine.last_dma_wait_s
+                        dma_overhead_accum += self._ctx.dma_engine.last_invalidate_s
 
                     # --- Pre-start next chunk (before yield) for pipelined execution ---
                     if has_next:
                         next_hw_shots = min(max_hw_shots, next_remaining)
-                        if next_hw_shots != self._cache.last_hw_shots:
-                            self._trigger.set_shots(next_hw_shots)
-                            self._cache.last_hw_shots = next_hw_shots
+                        if next_hw_shots != self._ctx.cache.last_hw_shots:
+                            self._ctx.trigger.set_shots(next_hw_shots)
+                            self._ctx.cache.last_hw_shots = next_hw_shots
 
-                        pending_buffer = self.dma_engine.arm_acquisition(
+                        pending_buffer = self._ctx.dma_engine.arm_acquisition(
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=next_hw_shots,
                             mode=mode,
                             adc_index=first_adc,
                         )
-                        self._trigger.trigger_experiment()
+                        self._ctx.trigger.trigger_experiment()
                         pending_shots = next_hw_shots
                     else:
                         pending_buffer = None  # No more chunks
@@ -338,7 +268,7 @@ class AcquisitionOps:
         sw_overhead = total_duration - fpga_wait_accum - dma_overhead_accum
 
         # Update statistics for telemetry (detailed breakdown)
-        self._cache.last_timing_stats = {
+        self._ctx.cache.last_timing_stats = {
             "total_ms": total_duration * 1000.0,
             "fpga_wait_ms": fpga_wait_accum * 1000.0,
             "dma_overhead_ms": dma_overhead_accum * 1000.0,
@@ -372,20 +302,20 @@ class AcquisitionOps:
         dma_overhead_s = 0.0
 
         # Memoize trigger shots to skip redundant HW writes in chunked acquisitions.
-        if shots != self._cache.last_hw_shots:
-            self._trigger.set_shots(shots)
-            self._cache.last_hw_shots = shots
+        if shots != self._ctx.cache.last_hw_shots:
+            self._ctx.trigger.set_shots(shots)
+            self._ctx.cache.last_hw_shots = shots
 
         # Pre-config ADCs (only needed outside sweep mode)
-        if not self._cache.sweep_prepared:
+        if not self._ctx.cache.sweep_prepared:
             for adc_i in adc_indices:
-                acq = self._ll.get_acq(adc_i)
+                acq = self._ctx.ll.get_acq(adc_i)
                 if mode in ("decimated", "accumulated"):
                     acq.set_decimated_output_type(mode)
 
         # First ADC: arm before trigger
         first_adc = adc_indices[0]
-        first_buffer = self.dma_engine.arm_acquisition(
+        first_buffer = self._ctx.dma_engine.arm_acquisition(
             samp_per_shot=samp_per_shot,
             shots_per_exp=shots,
             mode=mode,
@@ -393,162 +323,36 @@ class AcquisitionOps:
         )
 
         # Trigger
-        self._trigger.trigger_experiment()
+        self._ctx.trigger.trigger_experiment()
 
         # Retrieve first ADC (blocking)
-        buffer_data = self.dma_engine.retrieve_acquisition(
+        buffer_data = self._ctx.dma_engine.retrieve_acquisition(
             buffer=first_buffer,
             timeout=timeout,
             skip_timeout=skip_timeout,
         )
         results[first_adc] = buffer_data.copy()
-        fpga_wait_s += self.dma_engine.last_dma_wait_s
-        dma_overhead_s += self.dma_engine.last_invalidate_s
+        fpga_wait_s += self._ctx.dma_engine.last_dma_wait_s
+        dma_overhead_s += self._ctx.dma_engine.last_invalidate_s
 
         # Remaining ADCs: arm + retrieve (data already captured in FIFO)
         for adc_i in adc_indices[1:]:
-            buffer = self.dma_engine.arm_acquisition(
+            buffer = self._ctx.dma_engine.arm_acquisition(
                 samp_per_shot=samp_per_shot,
                 shots_per_exp=shots,
                 mode=mode,
                 adc_index=adc_i,
             )
-            buffer_data = self.dma_engine.retrieve_acquisition(
+            buffer_data = self._ctx.dma_engine.retrieve_acquisition(
                 buffer=buffer,
                 timeout=timeout,
                 skip_timeout=skip_timeout,
             )
             results[adc_i] = buffer_data.copy()
-            fpga_wait_s += self.dma_engine.last_dma_wait_s
-            dma_overhead_s += self.dma_engine.last_invalidate_s
+            fpga_wait_s += self._ctx.dma_engine.last_dma_wait_s
+            dma_overhead_s += self._ctx.dma_engine.last_invalidate_s
 
         return results, fpga_wait_s, dma_overhead_s
 
-    # ========== Acquisition Modulation ==========
 
-    def set_modulation(self, acq_index: int, mod: Modulation) -> dict:
-        """Configure the DDS modulation parameters for an acquisition unit.
-
-        :param acq_index: Index of the acquisition unit.
-        :type acq_index: int
-        :param mod: Dictionary containing frequency and phase parameters.
-        :type mod: Modulation
-        :return: The applied configuration.
-        :rtype: dict
-        """
-        freq_mhz = mod["frequency_mhz"]
-        phase = mod["phase"]
-
-        self._logger.debug(
-            "set_modulation: acq=%d frequency=%s phase=%s",
-            acq_index,
-            freq_mhz,
-            phase,
-        )
-        unit = self._ll.get_acq(acq_index)
-
-        # Configure Mix-Mode via overlay
-        try:
-            mix_info = self._ll.ol.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
-            if mix_info.get("changed"):
-                self._logger.debug(
-                    "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
-                    mix_info["nyquist_zone"],
-                    mix_info["amd_zone"],
-                    mix_info["tile"],
-                    mix_info["block"],
-                )
-        except ValueError as e:
-            self._logger.warning(f"ADC Mix-mode config skipped: {e}")
-
-        self._ll.call(
-            unit.set_acquisition_dds_parameters(
-                frequency=freq_mhz,
-                phase=phase,
-                adc_samplerate=self._ll.adc_sr_mhz(),
-            ),
-            operation="set_acquisition_dds_parameters",
-            driver_name="AcquisitionDriver",
-            config_error=True,
-        )
-        self._logger.debug("set_modulation: done acq=%d", acq_index)
-
-        return {
-            "acq_index": acq_index,
-            "frequency_mhz": freq_mhz,
-            "phase": phase,
-        }
-
-    def set_trigger_listener(self, acq_index: int, trig: TriggerCommand) -> dict:
-        """Configure which trigger channel the acquisition should listen to.
-
-        :param acq_index: Index of the target acquisition unit.
-        :type acq_index: int
-        :param trig: Dictionary defining the trigger type and source channel.
-        :type trig: TriggerCommand
-        :return: The applied trigger configuration.
-        :rtype: dict
-        """
-        channel = trig["channel"]
-
-        self._logger.debug("set_trigger_listener: acq=%d channel=%s", acq_index, channel)
-        unit = self._ll.get_acq(acq_index)
-
-        self._ll.call(
-            unit.set_trigger_channel(channel=channel),
-            operation="set_trigger_channel",
-            driver_name="AcquisitionDriver",
-            config_error=True,
-        )
-
-        if channel == 0:
-            self._logger.debug("Acquisition %d is deaf to any trigger!", acq_index)
-        else:
-            self._logger.debug(
-                "Acquisition %d listens to trigger_word channel %d",
-                acq_index,
-                channel,
-            )
-        self._cache.acq_trigger_channel[int(acq_index)] = int(channel)
-
-        return {
-            "acq_index": acq_index,
-            "channel": channel,
-        }
-
-    def set_timing(self, acq_index: int, tof: int, duration: int) -> dict:
-        """Configure the timing parameters (Time of Flight and Duration).
-
-        :param acq_index: Index of the acquisition unit.
-        :type acq_index: int
-        :param tof: Time of Flight delay in clock cycles.
-        :type tof: int
-        :param duration: Acquisition duration in clock cycles.
-        :type duration: int
-        :return: The applied timing configuration.
-        :rtype: dict
-        """
-        self._logger.debug("set_timing: acq_index=%d tof=%d duration=%d", acq_index, tof, duration)
-        acq = self._ll.get_acq(acq_index)
-
-        self._ll.call(
-            acq.set_acquisition_duration(duration),
-            operation="set_acquisition_duration",
-            driver_name="AcquisitionDriver",
-            config_error=True,
-        )
-
-        self._ll.call(
-            acq.set_time_of_flight(tof),
-            operation="set_time_of_flight",
-            driver_name="AcquisitionDriver",
-            config_error=True,
-        )
-        return {
-            "acq_index": acq_index,
-            "tof": tof,
-            "duration": duration,
-        }
-
-
-__all__ = ["AcquisitionOps"]
+__all__ = ["ExecutionOps"]
