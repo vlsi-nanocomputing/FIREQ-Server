@@ -106,7 +106,7 @@ def stack() -> object:
             self.adapter.run_multi_acquisition = MagicMock(side_effect=run_multi_acquisition_side_effect)
 
             # Mock _compute_max_hw_shots to return a high limit (no chunking by default)
-            self.adapter._compute_max_hw_shots = MagicMock(return_value=999999)
+            self.adapter.acquisition._compute_max_hw_shots = MagicMock(return_value=999999)
 
             # 4. Initialize Handler
             self.handler = MessageHandler(self.adapter)
@@ -199,14 +199,15 @@ class TestRobustness:
         during setup (from adapter or drivers) should be caught and reported
         without crashing the handler.
         """
-        # Scenario: Adapter's internal call raises an error during setup
+        # Scenario: Adapter's generator operations raise an error during setup
         config = {
             "acquisitions": [{"acq_index": 0, "duration": 100, "channel": 1}],
             "generators": [{"gen_index": 0, "drive": {"frequency_mhz": 100.0}}],
         }
 
-        # Simulate the adapter protecting itself by raising during _call
-        stack.adapter._call = MagicMock(side_effect=ValueError("Duration must be positive"))
+        # Simulate an error during generator modulation setup
+        # In the new architecture, generator operations are accessed via adapter.generator
+        stack.adapter.generator.set_modulation = MagicMock(side_effect=ValueError("Duration must be positive"))
 
         # run() is a generator - consume it and check the header event
         events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))

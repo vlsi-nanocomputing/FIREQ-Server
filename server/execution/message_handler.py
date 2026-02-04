@@ -113,7 +113,9 @@ class MessageHandler:
             # Pre-calculate chunk count (same logic as sweep protocol)
             n_chunks = 1
             if adc_indices and shots > 0:
-                max_hw_shots = min(self.adapter._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices)
+                max_hw_shots = min(
+                    self.adapter.acquisition._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices
+                )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
 
             # Yield header with n_chunks included (header_binary protocol)
@@ -244,7 +246,9 @@ class MessageHandler:
 
             # Compute chunks_per_point based on hardware buffer limits
             if adc_indices and shots > 0:
-                max_hw_shots = min(self.adapter._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices)
+                max_hw_shots = min(
+                    self.adapter.acquisition._compute_max_hw_shots(mode, samp_per_shot, adc) for adc in adc_indices
+                )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
             else:
                 chunks_per_point = 1

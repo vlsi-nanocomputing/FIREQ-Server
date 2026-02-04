@@ -1,13 +1,13 @@
-# file: fireq-utils/server/models/adapter_types.py
-"""Adapter-specific types for server.hardware.ol_adapter.
+"""Adapter-specific types for hardware operation classes.
 
 This module contains data structures used by the OverlayAdapter for:
 - Wave definition and caching (WaveEntry)
 - Envelope specifications (EnvelopeSpec)
 - Type aliases for wave kinds (WaveKind)
 
-These types are separated from config_types.py as they are internal
-to the hardware adapter layer rather than user-facing configuration.
+These types are internal to the hardware adapter layer and represent
+the high-level cache structures used to coordinate with the low-level
+FPGA drivers.
 """
 
 from dataclasses import dataclass

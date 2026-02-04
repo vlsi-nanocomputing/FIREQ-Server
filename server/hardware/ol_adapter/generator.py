@@ -1,48 +1,72 @@
-# file: fireq-utils/server/hardware/adapter/wave.py
-"""Wave management mixin for OverlayAdapter.
+"""Generator operations for OverlayAdapter.
 
-This module provides the WaveMixin class that handles:
-- Wave cache management
-- Envelope upload and management
-- Wave compilation (env and vz types)
+This module provides the GeneratorOps class that handles:
+- Wave and envelope management
+- Wave compilation and caching
 - Readout wave configuration
 - Drive sequence programming
-- Memory reset operations
+- Generator DDS modulation
+- Trigger channel configuration
 """
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
-from ...models.adapter_types import EnvelopeSpec, WaveEntry, same_spec
+from ...models.config_types import Modulation, TriggerCommand
 from ...models.exceptions import ConfigurationError
-from ..utils import iq_float_to_cint16
+from .iq import iq_float_to_cint16
+from .ll_access import LowLevelAccess
+from .types import EnvelopeSpec, WaveEntry, same_spec
 
 if TYPE_CHECKING:
-    import logging
+    from .cache import CacheContainers
 
 
-class WaveMixin:
-    """Mixin class providing wave management methods.
+class GeneratorOps:
+    """Operation class for generator control (waves, modulation, triggering).
 
-    This mixin expects the following attributes on self:
-    - ol: The low-level overlay driver
-    - logger: A logging.Logger instance
-    - _call: Method for driver call error handling
-    - _get_gen: Method to get generator driver by index
-    - _wave_store: Dict[int, Dict[str, WaveEntry]] for wave cache
-    - _last_fifo: Dict[int, List[str]] for FIFO tracking
-    - _readout_wave_store: Dict[int, WaveEntry] for readout waves
+    This class handles all generator-related operations, including:
+    - Wave and envelope management
+    - Wave compilation with caching and DMA orchestration
+    - Readout wave configuration
+    - Drive FIFO sequence programming
+    - Generator DDS modulation
+    - Trigger channel configuration
+
+    Attributes:
+    -----------
+    _ll : LowLevelAccess
+        Unified interface for low-level driver access and error handling.
+    _logger : logging.Logger
+        Logger instance for debug/error reporting.
+    _cache : CacheContainers
+        Shared cache with wave and modulation state.
     """
 
-    # Type hints for attributes expected from the main class
-    ol: object
-    logger: logging.Logger
-    _wave_store: dict[int, dict[str, WaveEntry]]
-    _last_fifo: dict[int, list[str]]
-    _readout_wave_store: dict[int, WaveEntry]
+    def __init__(
+        self,
+        ll: LowLevelAccess,
+        cache: CacheContainers,
+        logger: logging.Logger,
+    ) -> None:
+        """Initialize the GeneratorOps class.
+
+        :param ll: Low-level driver access helper.
+        :type ll: LowLevelAccess
+        :param cache: Shared cache containers.
+        :type cache: CacheContainers
+        :param logger: Logger instance.
+        :type logger: logging.Logger
+        """
+        self._ll = ll
+        self._cache = cache
+        self._logger = logger
+
+    # ========== Wave Management ==========
 
     def _lookup_wave_in_wave_memory(self, gen_index: int, wdw_int: int) -> str:
         """Resolve a compiled Wave Definition Word (WDW) back to its unique wave_id.
@@ -55,7 +79,7 @@ class WaveMixin:
         :return: The unique wave_id associated with the WDW.
         :raises ConfigurationError: If the WDW is not found, ambiguous, or inconsistent.
         """
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         cache: dict[str, WaveEntry] = self.get_wave_cache(gen_index)
 
         # find wave_ids whose cached WDW matches
@@ -76,7 +100,7 @@ class WaveMixin:
         wave_id = matches[0]
 
         # LL consistency check
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         if wave_id not in gen.wave_memory_dict:
             raise ConfigurationError(
                 f"Inconsistent state: wave_id='{wave_id}' has matching WDW in "
@@ -94,10 +118,10 @@ class WaveMixin:
         :param gen_index: Index of the target generator.
         :return: A dictionary mapping wave IDs to their corresponding WaveEntry objects.
         """
-        cache = self._wave_store.get(gen_index)
+        cache = self._cache.wave_store.get(gen_index)
         if cache is None:
             cache = {}
-            self._wave_store[gen_index] = cache
+            self._cache.wave_store[gen_index] = cache
         return cache
 
     def get_envelope_names(self, gen_index: int) -> list[str]:
@@ -106,7 +130,7 @@ class WaveMixin:
         :param gen_index: Index of the target generator.
         :return: A list of envelope names available in the hardware driver.
         """
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         return list(getattr(gen, "envelope_memory_dict", {}).keys())
 
     def upload_envelopes(
@@ -124,14 +148,14 @@ class WaveMixin:
             envelopes to match hardware parallelism.
         :return: A summary dictionary containing lists of loaded, skipped, and failed names.
         """
-        self.logger.debug(
+        self._logger.debug(
             "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s",
             gen_index,
             len(envelopes),
             auto_pad_noninterp,
         )
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         loaded: list[str] = []
         skipped: list[str] = []
         failed: list[dict] = []
@@ -148,7 +172,7 @@ class WaveMixin:
                     raise ConfigurationError("Envelope Name forbidden : '_' is for reserved name")
 
                 if name in env_cache:
-                    self.logger.debug(
+                    self._logger.debug(
                         "upload_envelopes: skip '%s' (already in EnvelopeMemoryDict)",
                         name,
                     )
@@ -170,7 +194,7 @@ class WaveMixin:
                     if r != 0:
                         old = int(env.size)
                         env = np.pad(env, (0, par - r), mode="constant")
-                        self.logger.debug(
+                        self._logger.debug(
                             "upload_envelopes: padded '%s' from %d to %d (par=%d)",
                             name,
                             old,
@@ -187,7 +211,7 @@ class WaveMixin:
                         "envelope.\nHint: set for_interp = True"
                     )
 
-                self._call(
+                self._ll.call(
                     gen.add_envelope_to_envelope_memory(env, for_interp, is_sym, i_even, q_even, name),
                     operation="add_envelope_to_envelope_memory",
                     driver_name="GeneratorDriver",
@@ -196,10 +220,10 @@ class WaveMixin:
                 loaded.append(name)
 
             except Exception as ex:
-                self.logger.exception("upload_envelopes: failed '%s'", name)
+                self._logger.exception("upload_envelopes: failed '%s'", name)
                 failed.append({"name": name, "error": str(ex)})
 
-        self.logger.debug(
+        self._logger.debug(
             "upload_envelopes: done gen=%d loaded=%d skipped=%d failed=%d",
             gen_index,
             len(loaded),
@@ -224,10 +248,9 @@ class WaveMixin:
         :param replace: If True, allows overwriting existing wave definitions.
         :return: A summary dictionary detailing compiled, replaced, skipped, and failed waves.
         """
-        self.logger.debug("compile_waves: gen=%d n=%d", gen_index, len(waves))
-        self.logger.debug("compile_waves: waves=%s", waves)
+        self._logger.debug("compile_waves: gen=%d n=%d", gen_index, len(waves))
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         out, replaced, skipped, failed = [], [], [], []
         cache: dict[str, WaveEntry] = self.get_wave_cache(gen_index)
 
@@ -275,7 +298,7 @@ class WaveMixin:
                     new_entry.wdw = old_entry.wdw
                     cache[wave_id] = new_entry
                     out.append({"wave_id": wave_id, "WDW": hex(new_entry.wdw)})
-                    self.logger.debug(
+                    self._logger.debug(
                         "compile_waves: wave_id '%s' already present (same spec) -> skipped",
                         wave_id,
                     )
@@ -298,7 +321,7 @@ class WaveMixin:
 
                 # WDW generation by kind
                 if new_entry.kind == "env":
-                    wdw = self._call(
+                    wdw = self._ll.call(
                         gen.create_wave_definition_word(
                             new_entry.envelope,
                             new_entry.duration,
@@ -311,7 +334,7 @@ class WaveMixin:
                         config_error=True,
                     )
                 else:
-                    wdw = self._call(
+                    wdw = self._ll.call(
                         gen.create_vz_gate_definition_word(new_entry.vz_phase_rad),
                         operation="create_vz_gate_definition_word",
                         driver_name="GeneratorDriver",
@@ -322,7 +345,7 @@ class WaveMixin:
                 new_entry.wdw = wdw
 
                 if in_hw:
-                    self._call(
+                    self._ll.call(
                         gen.replace_wave_in_wave_memory(wdw, wave_id, wave_id),
                         operation="replace_wave_in_wave_memory",
                         driver_name="GeneratorDriver",
@@ -330,7 +353,7 @@ class WaveMixin:
                     )
                     replaced.append(wave_id)
                 else:
-                    self._call(
+                    self._ll.call(
                         gen.add_wave_in_wave_memory(wdw, wave_id),
                         operation="add_wave_in_wave_memory",
                         driver_name="GeneratorDriver",
@@ -341,10 +364,10 @@ class WaveMixin:
                 out.append({"wave_id": wave_id, "WDW": hex(wdw)})
 
             except Exception as ex:
-                self.logger.exception("compile_waves: failed wave=%s", w)
+                self._logger.exception("compile_waves: failed wave=%s", w)
                 failed.append({"wave_id": w.get("wave_id"), "error": str(ex)})
 
-        self.logger.debug(
+        self._logger.debug(
             "compile_waves: done gen=%d compiled=%d replaced=%d skipped=%d failed=%d",
             gen_index,
             len(out),
@@ -368,10 +391,9 @@ class WaveMixin:
         :param replace: If True, allows overwriting an existing readout configuration.
         :return: A dictionary summarizing the upload status and compiled WDW.
         """
-        self.logger.debug("upload_readout_wave: gen=%d replace=%s", gen_index, replace)
-        self.logger.debug("upload_readout_wave: wave=%s", wave)
+        self._logger.debug("upload_readout_wave: gen=%d replace=%s", gen_index, replace)
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
 
         new_entry = WaveEntry(
             envelope=str(wave["envelope"]),
@@ -382,14 +404,14 @@ class WaveMixin:
             wdw=None,
         )
 
-        old_entry = self._readout_wave_store.get(gen_index)
+        old_entry = self._cache.readout_wave_store.get(gen_index)
 
         # SKIP EARLY (same spec, already compiled)
         if old_entry is not None and same_spec(old_entry, new_entry) and (old_entry.wdw is not None):
             new_entry.wdw = old_entry.wdw
-            self._readout_wave_store[gen_index] = new_entry
+            self._cache.readout_wave_store[gen_index] = new_entry
 
-            self.logger.debug(
+            self._logger.debug(
                 "upload_readout_wave: skipped gen=%d (same spec, WDW=0x%X)",
                 gen_index,
                 new_entry.wdw,
@@ -414,7 +436,7 @@ class WaveMixin:
             )
 
         # Compile WDW
-        wdw = self._call(
+        wdw = self._ll.call(
             gen.create_wave_definition_word(
                 new_entry.envelope,
                 new_entry.duration,
@@ -430,7 +452,7 @@ class WaveMixin:
         new_entry.wdw = wdw
 
         # Write to HW
-        self._call(
+        self._ll.call(
             gen.write_readout_wave(wdw),
             operation="write_readout_wave",
             driver_name="GeneratorDriver",
@@ -438,10 +460,10 @@ class WaveMixin:
         )
 
         was_replaced = old_entry is not None
-        self._readout_wave_store[gen_index] = new_entry
+        self._cache.readout_wave_store[gen_index] = new_entry
 
         status = "replaced" if was_replaced else "compiled"
-        self.logger.debug("upload_readout_wave: %s gen=%d WDW=0x%X", status, gen_index, wdw)
+        self._logger.debug("upload_readout_wave: %s gen=%d WDW=0x%X", status, gen_index, wdw)
 
         return {
             "gen_index": gen_index,
@@ -460,7 +482,7 @@ class WaveMixin:
         :param gen_index: Index of the target generator.
         :return: The current WaveEntry or None if not configured.
         """
-        return self._readout_wave_store.get(gen_index)
+        return self._cache.readout_wave_store.get(gen_index)
 
     def program_drive_sequence(
         self,
@@ -476,10 +498,9 @@ class WaveMixin:
         :param start_index: FIFO index to start writing at (default 1).
         :return: A dictionary containing the updated FIFO sequence.
         """
-        self.logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
-        self.logger.debug("program_drive_sequence: wave_id_list=%s", wave_id_list)
+        self._logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
         cache = self.get_wave_cache(gen_index)
         start_index = int(start_index)
         if start_index < 1:
@@ -504,18 +525,18 @@ class WaveMixin:
 
         # set the driver source as FIFO
         self.set_drive_source(gen_index=gen_index, source="fifo")
-        self.logger.debug("program_drive_sequence: set_drive_source(gen=%d, source='fifo')", gen_index)
+        self._logger.debug("program_drive_sequence: set_drive_source(gen=%d, source='fifo')", gen_index)
 
         # Program FIFO
         for i, wave_id in enumerate(wave_id_list, start=start_index):
             wave_addr = gen.wave_memory_dict.get(wave_id, "UNKNOWN")
-            self.logger.debug(
+            self._logger.debug(
                 "program_drive_sequence: FIFO[%d] = wave_id='%s' addr=%s",
                 i,
                 wave_id,
                 wave_addr,
             )
-            self._call(
+            self._ll.call(
                 gen.add_wave_to_drive_wave_sequence(i, wave_id),
                 operation="add_wave_to_drive_wave_sequence",
                 driver_name="GeneratorDriver",
@@ -523,32 +544,27 @@ class WaveMixin:
             )
 
         # Update last FIFO cache
-        prev = self._last_fifo.get(int(gen_index), [])
+        prev = self._cache.last_fifo.get(int(gen_index), [])
         if start_index == 1:
             new_fifo = list(wave_id_list)
         else:
             if len(prev) < (start_index - 1):
                 raise ConfigurationError(
                     f"program_drive_sequence: cannot patch from start_index={start_index} "
-                    f"because _last_fifo has only {len(prev)} entries. "
+                    f"because last_fifo has only {len(prev)} entries. "
                     f"Program from 1 first, then patch."
                 )
             suffix = prev[end_index:] if len(prev) >= end_index else []
             new_fifo = prev[: start_index - 1] + list(wave_id_list) + suffix
 
-        self._last_fifo[int(gen_index)] = new_fifo
+        self._cache.last_fifo[int(gen_index)] = new_fifo
 
-        self.logger.debug(
+        self._logger.debug(
             "program_drive_sequence: done gen=%d fifo_len=%d",
             gen_index,
             len(wave_id_list),
         )
-        self.logger.debug(
-            "program_drive_sequence: final _last_fifo[%d] = %s",
-            gen_index,
-            new_fifo,
-        )
-        return {"gen_index": int(gen_index), "fifo": self._last_fifo[int(gen_index)]}
+        return {"gen_index": int(gen_index), "fifo": self._cache.last_fifo[int(gen_index)]}
 
     def reset_wave_memory(
         self,
@@ -564,16 +580,16 @@ class WaveMixin:
         :param clear_last_fifo: If True, clears the record of the last programmed FIFO.
         :return: A summary of the cache state after reset.
         """
-        self.logger.debug(
+        self._logger.debug(
             "reset_wave_memory: gen=%d preserve_specs=%s clear_last_fifo=%s",
             gen_index,
             preserve_specs,
             clear_last_fifo,
         )
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
 
-        self._call(
+        self._ll.call(
             gen.reset_wave_memory_dict(),
             operation="reset_wave_memory_dict",
             driver_name="GeneratorDriver",
@@ -592,16 +608,16 @@ class WaveMixin:
             hl_action = "cleared_cache"
 
         if clear_last_fifo:
-            self._last_fifo.pop(int(gen_index), None)
+            self._cache.last_fifo.pop(int(gen_index), None)
 
-        readout_entry = self._readout_wave_store.get(gen_index)
+        readout_entry = self._cache.readout_wave_store.get(gen_index)
         if readout_entry is not None:
             if preserve_specs:
                 readout_entry.wdw = None
             else:
-                self._readout_wave_store.pop(gen_index, None)
+                self._cache.readout_wave_store.pop(gen_index, None)
 
-        self.logger.debug(
+        self._logger.debug(
             "reset_wave_memory: done gen=%d hl_action=%s n_before=%d n_after=%d",
             gen_index,
             hl_action,
@@ -631,16 +647,16 @@ class WaveMixin:
         :param clear_last_fifo: If True, clears the record of the last programmed sequence.
         :return: A summary of the actions taken on the cache.
         """
-        self.logger.debug(
+        self._logger.debug(
             "reset_envelopes: gen=%d preserve_wave_specs=%s clear_last_fifo=%s",
             gen_index,
             preserve_wave_specs,
             clear_last_fifo,
         )
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
 
-        self._call(
+        self._ll.call(
             gen.reset_envelope_dict(),
             operation="reset_envelope_dict",
             driver_name="GeneratorDriver",
@@ -659,9 +675,9 @@ class WaveMixin:
             hl_action = "cleared_cache"
 
         if clear_last_fifo:
-            self._last_fifo.pop(int(gen_index), None)
+            self._cache.last_fifo.pop(int(gen_index), None)
 
-        self.logger.debug(
+        self._logger.debug(
             "reset_envelopes: done gen=%d hl_action=%s n_before=%d n_after=%d",
             gen_index,
             hl_action,
@@ -694,9 +710,9 @@ class WaveMixin:
         :param seed: Optional LFSR seed value. Used only when source="lfsr".
         :return: Selected source status (and seed, if applied).
         """
-        self.logger.debug("set_drive_source: gen=%d source=%s seed=%s", gen_index, source, seed)
+        self._logger.debug("set_drive_source: gen=%d source=%s seed=%s", gen_index, source, seed)
 
-        gen = self._get_gen(gen_index)
+        gen = self._ll.get_gen(gen_index)
 
         source_lower = str(source).lower()
         if source_lower == "fifo":
@@ -706,7 +722,7 @@ class WaveMixin:
             source_val = 1
 
             if seed is not None:
-                self._call(
+                self._ll.call(
                     gen.set_lfsr_seed(int(seed)),
                     operation="set_lfsr_seed",
                     driver_name="GeneratorDriver",
@@ -715,19 +731,153 @@ class WaveMixin:
         else:
             raise ConfigurationError(f"set_drive_source: invalid source='{source}'. Use 'fifo' or 'lfsr'.")
 
-        self._call(
+        self._ll.call(
             gen.set_drive_order_source(source_val),
             operation="set_drive_order_source",
             driver_name="GeneratorDriver",
             config_error=True,
         )
 
-        self.logger.debug("set_drive_source: done gen=%d source=%s", gen_index, source_lower)
+        self._logger.debug("set_drive_source: done gen=%d source=%s", gen_index, source_lower)
 
         out = {"gen_index": int(gen_index), "source": source_lower}
         if source_lower == "lfsr" and seed is not None:
             out["seed"] = int(seed)
         return out
 
+    # ========== Generator Modulation ==========
 
-__all__ = ["WaveMixin"]
+    def _configure_modulation(
+        self,
+        label: str | None,
+        gen_index: int,
+        mod: Modulation,
+    ) -> dict:
+        """Unified modulation configuration for generators.
+
+        :param label: For generators: 'drive' or 'readout'.
+        :param gen_index: Index of the generator.
+        :param mod: Modulation parameters (frequency_mhz, phase).
+        :return: Applied configuration summary.
+        """
+        freq_mhz = mod["frequency_mhz"]
+        phase = mod["phase"]
+
+        self._logger.debug(
+            "set_modulation: gen=%d label=%s frequency=%f phase=%s",
+            gen_index,
+            label,
+            freq_mhz,
+            phase,
+        )
+        unit = self._ll.get_gen(gen_index)
+
+        # Configure Mix-Mode via overlay
+        try:
+            mix_info = self._ll.ol.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            if mix_info.get("changed"):
+                self._logger.debug(
+                    "Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+        except ValueError as e:
+            self._logger.debug(f"Mix-mode config skipped: {e}")
+
+        if label == "drive":
+            self._ll.call(
+                unit.set_drive_dds_parameters(
+                    frequency=freq_mhz,
+                    dac_samplerate=self._ll.dac_sr_mhz(),
+                ),
+                operation="set_drive_dds_parameters",
+                driver_name="GeneratorDriver",
+                config_error=True,
+            )
+        elif label == "readout":
+            self._ll.call(
+                unit.set_readout_dds_parameters(
+                    frequency=freq_mhz,
+                    phase=phase,
+                    dac_samplerate=self._ll.dac_sr_mhz(),
+                ),
+                operation="set_readout_dds_parameters",
+                driver_name="GeneratorDriver",
+                config_error=True,
+            )
+        else:
+            raise ConfigurationError("Invalid mode selection!\nHint: select label = 'drive' or 'readout'")
+
+        return {
+            "gen_index": gen_index,
+            "label": label,
+            "frequency_mhz": freq_mhz,
+            "phase": phase,
+        }
+
+    def set_modulation(self, gen_index: int, label: str, mod: Modulation) -> dict:
+        """Configure the Direct Digital Synthesis (DDS) modulation parameters.
+
+        This method handles both the digital frequency synthesis configuration and the
+        analog-domain Mix-Mode settings (Nyquist zone selection) based on the target frequency.
+
+        :param gen_index: The index of the target generator.
+        :type gen_index: int
+        :param label: The modulation context, must be either 'drive' (control) or 'readout' (measurement).
+        :type label: str
+        :param mod: A dictionary containing the modulation parameters (frequency in MHz, phase in degrees).
+        :type mod: Modulation
+        :return: A summary of the applied modulation configuration.
+        :rtype: dict
+        :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
+        """
+        return self._configure_modulation(label, gen_index, mod)
+
+    def set_trigger_listener(self, gen_index: int, trig: TriggerCommand) -> dict:
+        """Configure which trigger channel the generator should listen to.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param trig: Dictionary defining the trigger type and source channel.
+        :type trig: TriggerCommand
+        :return: The applied trigger configuration.
+        :rtype: dict
+        """
+        channel = trig["channel"]
+        ttype = trig["ttype"]
+
+        self._logger.debug(
+            "set_trigger_listener: gen=%d ttype=%s channel=%s",
+            gen_index,
+            ttype,
+            channel,
+        )
+        unit = self._ll.get_gen(gen_index)
+
+        self._ll.call(
+            unit.set_trigger_channel(channel=channel, ttype=ttype),
+            operation="set_trigger_channel",
+            driver_name="GeneratorDriver",
+            config_error=True,
+        )
+
+        if channel == 0:
+            self._logger.debug("Generator %d is deaf to any trigger!", gen_index)
+        else:
+            self._logger.debug(
+                "Generator %d listens to %s_trigger_word channel %d",
+                gen_index,
+                ttype,
+                channel,
+            )
+
+        return {
+            "gen_index": gen_index,
+            "ttype": ttype,
+            "channel": channel,
+        }
+
+
+__all__ = ["GeneratorOps"]

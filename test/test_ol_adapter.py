@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from server import ConfigurationError, OverlayAdapter
-from server.hardware.utils import iq_float_to_cint16
+from server.hardware.ol_adapter.iq import iq_float_to_cint16
 
 try:
     from test.mock_hardware import MockOverlay
@@ -68,7 +68,14 @@ def ctx() -> AdapterContext:
 
     adapter = OverlayAdapter(mock_ol)
     # Mock DMA engine for chunking tests
-    adapter.dma_engine = MagicMock()
+    # Note: Must mock BOTH adapter.dma_engine AND acquisition.dma_engine
+    # because acquisition holds its own reference to the engine
+    mock_dma = MagicMock()
+    mock_dma.set_active_adcs = MagicMock(return_value=None)
+    mock_dma.prepare_sweep = MagicMock(return_value=None)
+    mock_dma.end_sweep = MagicMock(return_value=None)
+    adapter.dma_engine = mock_dma
+    adapter.acquisition.dma_engine = mock_dma
 
     return AdapterContext(adapter, mock_ol, mock_gen, mock_trig, mock_acq)
 
@@ -256,7 +263,7 @@ def test_compile_waves_cache_hit(ctx: AdapterContext) -> None:
 
     # 1. Correct Setup:
     # Perform a real compilation. This populates:
-    # - The HL cache (ctx.adapter._wave_store)
+    # - The HL cache (ctx.adapter._cache.wave_store)
     # - The LL memory (ctx.gen.wave_memory_dict) via internal calls
     ctx.adapter.compile_waves(gen_index=0, waves=[wave_spec], replace=True)
 
@@ -414,7 +421,7 @@ def test_fifo_patching_consistency(ctx: AdapterContext) -> None:
     """Verify that partial FIFO updates maintain consistency in the HL cache."""
     # 1. Initial Setup: Sequence [A, B, C]
     # Mock cache presence to bypass validation
-    ctx.adapter._wave_store[0] = {
+    ctx.adapter._cache.wave_store[0] = {
         "A": MagicMock(wdw=1),
         "B": MagicMock(wdw=2),
         "C": MagicMock(wdw=3),
@@ -425,7 +432,7 @@ def test_fifo_patching_consistency(ctx: AdapterContext) -> None:
 
     # Program base sequence
     ctx.adapter.program_drive_sequence(gen_index=0, wave_id_list=["A", "B", "C"], start_index=1)
-    assert ctx.adapter._last_fifo[0] == ["A", "B", "C"]
+    assert ctx.adapter._cache.last_fifo[0] == ["A", "B", "C"]
 
     # 2. Patching: Replace from index 2 (B -> D) -> Expected Result [A, D, C]
     # Logic: new_fifo = prev[:start-1] + new_list + prev[end:]
@@ -435,12 +442,12 @@ def test_fifo_patching_consistency(ctx: AdapterContext) -> None:
     ctx.gen.add_wave_to_drive_wave_sequence.assert_any_call(2, "D")
 
     # Verify HL cache consistency
-    assert ctx.adapter._last_fifo[0] == ["A", "D", "C"]
+    assert ctx.adapter._cache.last_fifo[0] == ["A", "D", "C"]
 
 
 def test_fifo_patching_out_of_bounds(ctx: AdapterContext) -> None:
     """Verify patching beyond known sequence length raises ConfigurationError."""
-    ctx.adapter._wave_store[0] = {"A": MagicMock(wdw=1)}
+    ctx.adapter._cache.wave_store[0] = {"A": MagicMock(wdw=1)}
     ctx.gen.wave_memory_dict = {"A": 1}
 
     # Attempt to patch index 5 when list is empty/short
@@ -454,16 +461,16 @@ def test_reset_wave_memory_preserve_specs(ctx: AdapterContext) -> None:
     # 1. Populate cache
     entry = MagicMock()
     entry.wdw = 12345
-    ctx.adapter._wave_store[0] = {"test_wave": entry}
+    ctx.adapter._cache.wave_store[0] = {"test_wave": entry}
 
     # 2. Execute reset with preservation
     ctx.adapter.reset_wave_memory(gen_index=0, preserve_specs=True)
 
     # 3. Assertions
     # Entry must still exist
-    assert "test_wave" in ctx.adapter._wave_store[0]
+    assert "test_wave" in ctx.adapter._cache.wave_store[0]
     # WDW must be invalidated (None)
-    assert ctx.adapter._wave_store[0]["test_wave"].wdw is None
+    assert ctx.adapter._cache.wave_store[0]["test_wave"].wdw is None
     # Driver must be reset
     ctx.gen.reset_wave_memory_dict.assert_called_once()
 
@@ -569,18 +576,20 @@ def test_run_multi_acquisition_shot_memoization(ctx: AdapterContext) -> None:
     ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
     ctx.adapter.dma_engine.last_dma_wait_s = 0.001
     ctx.adapter.dma_engine.last_invalidate_s = 0.0001
-    ctx.adapter.tg_set_shots = MagicMock()
+
+    # Mock the actual trigger.set_shots method (used internally during run_multi_acquisition)
+    ctx.adapter.trigger.set_shots = MagicMock()
 
     # First call with 10 shots - should set trigger
     list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
-    assert ctx.adapter.tg_set_shots.call_count == 1
-    ctx.adapter.tg_set_shots.assert_called_with(10)
+    assert ctx.adapter.trigger.set_shots.call_count == 1
+    ctx.adapter.trigger.set_shots.assert_called_with(10)
 
     # Second call with same shots - should NOT reconfigure
     list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
-    assert ctx.adapter.tg_set_shots.call_count == 1  # Still 1
+    assert ctx.adapter.trigger.set_shots.call_count == 1  # Still 1
 
     # Third call with different shots - should reconfigure
     list(ctx.adapter.run_multi_acquisition(adc_indices=[0], mode="raw", shots=20, samp_per_shot=100))
-    assert ctx.adapter.tg_set_shots.call_count == 2
-    ctx.adapter.tg_set_shots.assert_called_with(20)
+    assert ctx.adapter.trigger.set_shots.call_count == 2
+    ctx.adapter.trigger.set_shots.assert_called_with(20)
