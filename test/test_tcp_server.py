@@ -218,7 +218,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
     """
     # 1. Preload dummy data
     gen_idx = 0
-    server_ctx.adapter.ol.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
+    server_ctx.adapter.overlay_driver.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
     server_ctx.adapter.generator.compile_waves(
         gen_index=gen_idx,
         waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}],

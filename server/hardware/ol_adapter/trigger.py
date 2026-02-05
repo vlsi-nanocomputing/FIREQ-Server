@@ -45,14 +45,14 @@ class TriggerOps:
         :return: Dictionary containing the set number of shots.
         :rtype: dict
         """
-        t = self._ctx.ll.get_trig()
-        shots_i = int(shots)
+        trigger_device = self._ctx.ll.get_trig()
+        shots = int(shots)
 
-        if shots_i < 1 or shots_i > int(t.max_hw_repetitions):
-            raise ConfigurationError(f"shots={shots_i} out of range [1..{int(t.max_hw_repetitions)}]")
+        if shots < 1 or shots > int(trigger_device.max_hw_repetitions):
+            raise ConfigurationError(f"shots={shots} out of range [1..{int(trigger_device.max_hw_repetitions)}]")
 
-        t.set_number_of_shots(shots_i)
-        return {"shots": shots_i}
+        trigger_device.set_number_of_shots(shots)
+        return {"shots": shots}
 
     def set_duration(self, duration_cycles: int) -> dict:
         """Set the total duration of the experiment in clock cycles.
@@ -66,13 +66,13 @@ class TriggerOps:
         :raises ConfigurationError: If duration_cycles is less than 1.
         """
         self._ctx.logger.debug("Setting experiment duration. Clock Cycles : %d", duration_cycles)
-        t = self._ctx.ll.get_trig()
-        dur_i = int(duration_cycles)
-        if dur_i < 1:
-            raise ConfigurationError(f"duration={dur_i} is not valid. Must be positive.")
+        trigger_device = self._ctx.ll.get_trig()
+        duration_cycles = int(duration_cycles)
+        if duration_cycles < 1:
+            raise ConfigurationError(f"duration={duration_cycles} is not valid. Must be positive.")
 
-        t.set_experiment_duration(dur_i)
-        return {"experiment_duration": dur_i}
+        trigger_device.set_experiment_duration(duration_cycles)
+        return {"experiment_duration": duration_cycles}
 
     def program_delays(
         self,
@@ -106,75 +106,75 @@ class TriggerOps:
             drive,
             readout,
         )
-        t = self._ctx.ll.get_trig()
+        trigger_device = self._ctx.ll.get_trig()
         drive = drive or {}
         readout = readout or {}
 
         start_idx = int(drive_start_index)
-        if start_idx < 1 or start_idx > int(t.channel_fifo_depth):
+        if start_idx < 1 or start_idx > int(trigger_device.channel_fifo_depth):
             raise ConfigurationError(f"drive_start_index={start_idx} out of range")
 
         # --- readout delays (1 scalar per channel)
-        ro_programmed = []
-        for ch_key, spec in readout.items():
-            ch = int(ch_key)
+        readout_programmed = []
+        for channel_key, spec in readout.items():
+            channel = int(channel_key)
             if not (isinstance(spec, dict) and "delay" in spec):
-                raise ConfigurationError(f"readout[{ch}] must be dict with key 'delay'")
-            ro_delay = int(spec["delay"])
+                raise ConfigurationError(f"readout[{channel}] must be dict with key 'delay'")
+            readout_delay = int(spec["delay"])
             self._ctx.logger.debug(
                 "program_delays: readout ch=%d delay=%d",
-                ch,
-                ro_delay,
+                channel,
+                readout_delay,
             )
 
             self._ctx.ll.call(
-                t.set_readout_delay(ro_delay, ch),
+                trigger_device.set_readout_delay(readout_delay, channel),
                 operation="set_readout_delay",
                 driver_name="TriggerGeneratorDriver",
                 config_error=True,
             )
-            ro_programmed.append(ch)
+            readout_programmed.append(channel)
 
         # --- drive FIFO entries
         drive_report = {}
-        for ch_key, spec in drive.items():
-            ch = int(ch_key)
+        for channel_key, spec in drive.items():
+            channel = int(channel_key)
             if not (isinstance(spec, dict) and "delay" in spec):
-                raise ConfigurationError(f"drive[{ch}] must be dict with key 'delay'")
+                raise ConfigurationError(f"drive[{channel}] must be dict with key 'delay'")
 
             entries_list = list(spec["delay"])  # list of pairs
 
             # check capacity relative to start index
-            max_writable = int(t.channel_fifo_depth) - (start_idx - 1)
+            max_writable = int(trigger_device.channel_fifo_depth) - (start_idx - 1)
             if len(entries_list) > max_writable:
                 raise ConfigurationError(
-                    f"drive[{ch}] too long for start_index={start_idx}: " f"{len(entries_list)} > {max_writable}"
+                    f"drive[{channel}] too long for start_index={start_idx}: " f"{len(entries_list)} > {max_writable}"
                 )
 
             # program the requested block (patching supported via start_idx)
             self._ctx.logger.debug(
                 "program_delays: drive ch=%d entries_list=%s",
-                ch,
+                channel,
                 entries_list,
             )
             for k, pair in enumerate(entries_list):
                 if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
-                    raise ConfigurationError(f"drive[{ch}] entry #{k} must be (delay, gen_bit), got: {pair}")
+                    raise ConfigurationError(f"drive[{channel}] entry #{k} must be (delay, gen_bit), got: {pair}")
 
-                delay, gen = pair
-                delay_i = int(delay)
-                gen_i = 1 if int(gen) else 0
+                delay, generator_bit = pair
+                delay = int(delay)
+                generator_bit = 1 if int(generator_bit) else 0
 
                 fifo_index = start_idx + k  # LL index is 1-based
                 self._ctx.logger.debug(
-                    "program_delays: drive ch=%d FIFO[%d] delay=%d gen_bit=%d",
-                    ch,
+                    "program_delays: drive ch=%d FIFO[%d] delay=%d generator_bit=%d",
+                    channel,
                     fifo_index,
-                    delay_i,
-                    gen_i,
+                    delay,
+                    generator_bit,
                 )
                 self._ctx.ll.call(
-                    t.insert_drive_delay(ch, fifo_index, delay_i, gen_i),
+                    trigger_device.insert_drive_delay(channel, fifo_index, delay, generator_bit),
                     operation="insert_drive_delay",
                     driver_name="TriggerGeneratorDriver",
                     config_error=True,
@@ -182,26 +182,26 @@ class TriggerOps:
 
             # Lazy FIFO cleanup: only clear slots that previously contained data.
             # This optimization avoids thousands of unnecessary AXI transactions during sweeps.
-            new_hwm = start_idx + len(entries_list) - 1  # last written index (1-based)
-            prev_hwm = self._ctx.cache.tg_drive_hwm.get(ch, 0)
+            new_high_water_mark = start_idx + len(entries_list) - 1  # last written index (1-based)
+            previous_high_water_mark = self._ctx.cache.trigger_drive_fifo_hwm.get(channel, 0)
 
             # Clear only if the new sequence is shorter than the previous one
-            if prev_hwm > new_hwm:
-                for fifo_index in range(new_hwm + 1, prev_hwm + 1):
+            if previous_high_water_mark > new_high_water_mark:
+                for fifo_index in range(new_high_water_mark + 1, previous_high_water_mark + 1):
                     self._ctx.ll.call(
-                        t.insert_drive_delay(ch, fifo_index, int(t.drive_delay_max), 0),
+                        trigger_device.insert_drive_delay(channel, fifo_index, int(trigger_device.drive_delay_max), 0),
                         operation="insert_drive_delay",
                         driver_name="TriggerGeneratorDriver",
                         config_error=True,
                     )
-                cleared_count = prev_hwm - new_hwm
+                cleared_count = previous_high_water_mark - new_high_water_mark
             else:
                 cleared_count = 0
 
             # Update the high water mark for this channel
-            self._ctx.cache.tg_drive_hwm[ch] = new_hwm
+            self._ctx.cache.trigger_drive_fifo_hwm[channel] = new_high_water_mark
 
-            drive_report[ch] = {
+            drive_report[channel] = {
                 "start_index": start_idx,
                 "n_entries": len(entries_list),
                 "padded": cleared_count,
@@ -209,11 +209,11 @@ class TriggerOps:
 
         self._ctx.logger.debug(
             "program_delays: DONE readout_channels=%s drive_report=%s",
-            sorted(ro_programmed),
+            sorted(readout_programmed),
             drive_report,
         )
         return {
-            "readout_channels_programmed": sorted(ro_programmed),
+            "readout_channels_programmed": sorted(readout_programmed),
             "drive_programmed": drive_report,
         }
 
@@ -229,7 +229,7 @@ class TriggerOps:
         on the next program_delays call. This is useful when the FIFO state is
         unknown or when switching between different experiment configurations.
         """
-        self._ctx.cache.tg_drive_hwm.clear()
+        self._ctx.cache.trigger_drive_fifo_hwm.clear()
         self._ctx.logger.debug("reset_drive_tracking: cleared HWM state")
 
 

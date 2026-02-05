@@ -48,6 +48,13 @@ class OverlayAdapter:
     - enable fast paths correctly,
     - detect and stop inconsistencies early.
 
+    Architecture
+    ------------
+    Operation classes share an AdapterContext containing all dependencies.
+    Operation objects are stored in the context to enable cross-dependencies:
+    - AcquisitionOps calls TriggerOps for hardware trigger coordination
+    - ExperimentOps calls AcquisitionOps for sweep orchestration
+
     Attributes
     ----------
     generator : GeneratorOps
@@ -60,43 +67,42 @@ class OverlayAdapter:
         High-level experiment orchestration.
     """
 
-    def __init__(self, ol: object, *, logger: logging.Logger | None = None) -> None:
+    def __init__(self, overlay_driver: object, *, logger: logging.Logger | None = None) -> None:
         """Initialize the High-Level Adapter using composition with shared context.
 
-        This implementation follows the professor's suggested pattern with a shared
-        AdapterContext that is passed to all operation classes, enabling clean
-        dependency injection with minimal code.
+        Uses a shared AdapterContext passed to all operation classes, enabling
+        dependency injection with minimal constructor parameters.
 
-        :param ol: The low-level overlay driver instance.
-        :type ol: fireq_soc
+        :param overlay_driver: The low-level overlay driver instance.
+        :type overlay_driver: fireq_soc
         :param logger: Optional logger instance for telemetry. If None, a default logger
             is created.
         :type logger: Optional[logging.Logger]
         """
         # Fail-fast sanity check:
-        if not ol.is_healthy:
+        if not overlay_driver.is_healthy:
             raise HardwareStateError("Unexpected Error: overlay upload failed!")
 
-        self.ol = ol
+        self.overlay_driver = overlay_driver
         self.logger = logger or logging.getLogger(__name__)
 
         # DMA engine (needed for acquisition)
-        if self.ol.dma is None or self.ol.axis_switch is None:
+        if self.overlay_driver.dma is None or self.overlay_driver.axis_switch is None:
             raise HardwareStateError("DMA or AXI-Stream switch missing in overlay")
 
         # The DMA engine is constructed once as a long-lived resource.
         dma_engine = AcquisitionEngine(
-            self.ol.dma,
-            self.ol.axis_switch,
+            self.overlay_driver.dma,
+            self.overlay_driver.axis_switch,
             logger=self.logger,
-            hw_specs=self.ol.hw_specs,
+            hw_specs=self.overlay_driver.hw_specs,
         )
 
         # Create shared context with all dependencies
         # This replaces verbose individual parameter passing to operation classes
         self._ctx = AdapterContext(
-            ol=self.ol,
-            ll=LowLevelAccess(self.ol, self.logger),
+            overlay_driver=self.overlay_driver,
+            ll=LowLevelAccess(self.overlay_driver, self.logger),
             cache=CacheContainers(),
             logger=self.logger,
             dma_engine=dma_engine,
@@ -108,7 +114,9 @@ class OverlayAdapter:
         self.acquisition = AcquisitionOps(self._ctx)
         self.experiment = ExperimentOps(self._ctx)
 
-        # Store operation references in context for cross-dependencies
+        # Store operation references in context to enable cross-dependencies.
+        # AcquisitionOps calls TriggerOps methods during DMA execution.
+        # ExperimentOps calls AcquisitionOps methods for sweep orchestration.
         self._ctx.trigger = self.trigger
         self._ctx.generator = self.generator
         self._ctx.acquisition = self.acquisition
@@ -150,7 +158,7 @@ class OverlayAdapter:
         :rtype: object
         :raises AttributeError: If the attribute is not found in either the adapter or the underlying driver.
         """
-        return getattr(self.ol, name)
+        return getattr(self.overlay_driver, name)
 
     # ========== Public Properties ==========
 

@@ -61,7 +61,7 @@ class ModulationOps:
 
         # Configure Mix-Mode via overlay
         try:
-            mix_info = self._ctx.ll.ol.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
+            mix_info = self._ctx.ll.overlay_driver.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
             if mix_info.get("changed"):
                 self._ctx.logger.debug(
                     "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",

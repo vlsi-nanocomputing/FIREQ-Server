@@ -23,15 +23,15 @@ class LowLevelAccess:
     - Hardware specifications are accessible in a standard format
     """
 
-    def __init__(self, ol: object, logger: logging.Logger) -> None:
+    def __init__(self, overlay_driver: object, logger: logging.Logger) -> None:
         """Initialize the low-level access helper.
 
-        :param ol: The low-level overlay driver (FIREQ_SoC instance).
-        :type ol: object
+        :param overlay_driver: The low-level overlay driver (FIREQ_SoC instance).
+        :type overlay_driver: object
         :param logger: Logger instance for error reporting.
         :type logger: logging.Logger
         """
-        self.ol = ol
+        self.overlay_driver = overlay_driver
         self.logger = logger
 
     def get_gen(self, gen_index: int) -> object:
@@ -47,7 +47,7 @@ class LowLevelAccess:
         :raises ConfigurationError: If the index is out of bounds or invalid.
         """
         try:
-            return self.ol.generators[int(gen_index)]
+            return self.overlay_driver.generators[int(gen_index)]
         except Exception as e:
             raise ConfigurationError(f"Invalid gen_index={gen_index}") from e
 
@@ -64,7 +64,7 @@ class LowLevelAccess:
         :raises ConfigurationError: If the index is out of bounds or invalid.
         """
         try:
-            return self.ol.acquisitions[int(acq_index)]
+            return self.overlay_driver.acquisitions[int(acq_index)]
         except Exception as e:
             raise ConfigurationError(f"Invalid acq_index={acq_index}") from e
 
@@ -78,9 +78,9 @@ class LowLevelAccess:
         :rtype: object
         :raises ConfigurationError: If no trigger generator is available.
         """
-        if self.ol.trigger is None:
+        if self.overlay_driver.trigger is None:
             raise ConfigurationError("No trigger generator available in overlay")
-        return self.ol.trigger
+        return self.overlay_driver.trigger
 
     def dac_sr_mhz(self) -> float:
         """Retrieve the DAC sampling rate from hardware specifications and convert it to MHz.
@@ -88,7 +88,7 @@ class LowLevelAccess:
         :return: The DAC sampling rate in MHz.
         :rtype: float
         """
-        return float(self.ol.hw_specs["summary"]["dac_sr_hz"]) / 1e6
+        return float(self.overlay_driver.hw_specs["summary"]["dac_sr_hz"]) / 1e6
 
     def adc_sr_mhz(self) -> float:
         """Retrieve the ADC sampling rate from hardware specifications and convert it to MHz.
@@ -96,7 +96,7 @@ class LowLevelAccess:
         :return: The ADC sampling rate in MHz.
         :rtype: float
         """
-        return float(self.ol.hw_specs["summary"]["adc_sr_hz"]) / 1e6
+        return float(self.overlay_driver.hw_specs["summary"]["adc_sr_hz"]) / 1e6
 
     def call(
         self,

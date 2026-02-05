@@ -35,7 +35,7 @@ class CacheContainers:
     - Wave domain: wave_store, last_fifo, readout_wave_store
     - Acquisition domain: sweep_prepared, last_hw_shots, last_timing_stats
     - Modulation domain: acq_trigger_channel
-    - Trigger domain: tg_drive_hwm
+    - Trigger domain: trigger_drive_fifo_hwm
     """
 
     # Wave management state (per-generator caches)
@@ -70,7 +70,7 @@ class CacheContainers:
     """Track acquisition trigger channels for diagnostics."""
 
     # Trigger state
-    tg_drive_hwm: dict[int, int] = field(default_factory=dict)
+    trigger_drive_fifo_hwm: dict[int, int] = field(default_factory=dict)
     """Track high water mark for trigger generator drive FIFOs (per channel)."""
 
 
@@ -78,13 +78,15 @@ class CacheContainers:
 class AdapterContext:
     """Shared context for all operation classes following composition pattern.
 
-    This context object centralizes all dependencies and shared state,
-    providing a single parameter to each operation class constructor.
-    This follows the professor's suggested pattern for clean, minimal code.
+    Centralizes all dependencies and shared state, providing a single
+    parameter to each operation class constructor for clean dependency injection.
+
+    Operation object references (trigger, generator, acquisition) are stored
+    after initialization to enable cross-dependencies between operation classes.
 
     Attributes
     ----------
-    ol : object
+    overlay_driver : object
         The low-level FIREQ SoC overlay driver instance.
     ll : LowLevelAccess
         Low-level access helper for driver calls and error handling.
@@ -95,14 +97,14 @@ class AdapterContext:
     dma_engine : AcquisitionEngine
         DMA orchestration engine for multi-ADC acquisition.
     trigger : object | None
-        Reference to TriggerOps instance (set after initialization).
+        Reference to TriggerOps instance (set after initialization for cross-dependency).
     generator : object | None
-        Reference to GeneratorOps instance (set after initialization).
+        Reference to GeneratorOps instance (set after initialization for cross-dependency).
     acquisition : object | None
-        Reference to AcquisitionOps instance (set after initialization).
+        Reference to AcquisitionOps instance (set after initialization for cross-dependency).
     """
 
-    ol: object
+    overlay_driver: object
     ll: LowLevelAccess  # type: ignore  # noqa: F821
     cache: CacheContainers
     logger: logging.Logger

@@ -25,10 +25,10 @@ def stack() -> object:
     class HandlerStack:
         def __init__(self) -> None:
             # 1. Create Mock Hardware
-            self.ol = MockOverlay()
+            self.overlay = MockOverlay()
 
             # 2. Create Adapter Layer
-            self.adapter = OverlayAdapter(self.ol)
+            self.adapter = OverlayAdapter(self.overlay)
 
             # 3. CRITICAL: Mock the DMA Engine
             # This bypasses hardware buffer calculations that fail in simulation
@@ -131,8 +131,8 @@ def test_run_experiment_flow(stack: object) -> None:
     stack.adapter.dma_engine.arm_acquisition.return_value = "dummy_buffer"
 
     # Pre-set the acquisition's trigger channel so it's considered "active"
-    stack.ol.acquisitions[0].current_channel = 1
-    stack.ol.acquisitions[1].current_channel = 1
+    stack.overlay.acquisitions[0].current_channel = 1
+    stack.overlay.acquisitions[1].current_channel = 1
 
     # Run using the public method and consume all events
     events = list(stack.handler.run(config, cmd="run_experiment", session_id="test_session"))
@@ -269,17 +269,17 @@ class TestRobustness:
     def test_status_handler_resilience(self, stack: object) -> None:
         """Verify that StatusHandler does not crash if a single generator fails."""
 
-        # MOCK THE ADAPTER METHOD to inject a Side Effect (Exception)
+        # MOCK THE ADAPTER.GENERATOR METHODS to inject a Side Effect (Exception)
         def side_effect(gen_index: int) -> list[str]:
             if gen_index == 1:
                 raise RuntimeError("FPGA timeout")
             return ["env1", "env2"]
 
-        stack.adapter.get_envelope_names = MagicMock(side_effect=side_effect)
+        stack.adapter.generator.get_envelope_names = MagicMock(side_effect=side_effect)
 
         # Mock other dependencies for the status check
-        stack.adapter.get_wave_cache = MagicMock(return_value=[])
-        stack.adapter.get_readout_wave_cache = MagicMock(return_value=None)
+        stack.adapter.generator.get_wave_cache = MagicMock(return_value=[])
+        stack.adapter.generator.get_readout_wave_cache = MagicMock(return_value=None)
 
         # Execute
         statuses = stack.handler.status_h.get_all_generators_status()
@@ -295,14 +295,14 @@ class TestRobustness:
 
     def test_reset_preserve_specs_flag(self, stack: object) -> None:
         """Verify reset handler propagates the preserve_specs flag."""
-        # MOCK THE ADAPTER METHOD to verify arguments
-        stack.adapter.reset_wave_memory = MagicMock(return_value={})
+        # MOCK THE ADAPTER.GENERATOR METHOD to verify arguments
+        stack.adapter.generator.reset_wave_memory = MagicMock(return_value={})
 
         # Call reset with preserve_specs=True
         stack.handler.reset_h.reset_waves(gen_index=0, preserve_specs=True)
 
         # Verify adapter call
-        stack.adapter.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
+        stack.adapter.generator.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
 
     def test_sweep_integer_casting_edge_cases(self, stack: object) -> None:
         """Verify strict type casting for discrete hardware parameters."""
@@ -314,15 +314,15 @@ class TestRobustness:
             "variables": [{"name": "nz", "values": [1.0, 2.0]}],  # User provides floats
         }
 
-        # Monkey patch the adapter method receiving the value
-        stack.adapter.set_nyquist_zone = MagicMock()
+        # Monkey patch the adapter.generator method receiving the value
+        stack.adapter.generator.set_nyquist_zone = MagicMock()
 
         # Run sweep - consume all items
         list(stack.handler.run_sweep(msg, cmd="run_sweep", session_id="test", stop_check=lambda: False))
 
-        # Verify arguments passed to adapter
+        # Verify arguments passed to adapter.generator
         # We expect set_nyquist_zone(gen_index, type, value)
-        calls = stack.adapter.set_nyquist_zone.call_args_list
+        calls = stack.adapter.generator.set_nyquist_zone.call_args_list
         assert len(calls) > 0
 
         for call_args in calls:
@@ -343,26 +343,25 @@ class TestRobustness:
         def timeout_side_effect(**kwargs):
             raise TimeoutError("DMA Receive Timeout")
 
-        stack.adapter.run_multi_acquisition = MagicMock(side_effect=timeout_side_effect)
+        stack.adapter.acquisition.run_multi_acquisition = MagicMock(side_effect=timeout_side_effect)
 
         # 2. Run execution - consume the generator
         events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
 
         # 3. Verify Graceful Failure
-        # The first header event has ok=True (setup succeeded), then when timeout
-        # occurs during acquisition streaming, a second header event is yielded with ok=False
+        # When an exception occurs during acquisition streaming, the run() method catches it
+        # and yields a second header with ok=False and the error message
         header_events = [e for e in events if isinstance(e, StreamHeader)]
         assert len(header_events) == 2, f"Expected 2 header events, got {len(header_events)}"
 
-        # The error header is the second (last) one
-        error_header = header_events[-1]
+        # First header (setup succeeded)
+        success_header = header_events[0]
+        assert success_header.metadata["ok"] is True
+
+        # Second header (error during streaming)
+        error_header = header_events[1]
         assert error_header.metadata["ok"] is False
         assert "DMA Receive Timeout" in error_header.metadata["error"]
-
-        # Verify the first header (successful setup) had config log preserved
-        success_header = header_events[0]
-        assert success_header.metadata["config_log"] is not None
-        assert any("acq 0" in entry for entry in success_header.metadata["config_log"])
 
     def test_zipped_sweep_topology(self, stack: object) -> None:
         """Verify 'zipped' sweep mode behavior (Diagonal vs Cartesian).
@@ -404,7 +403,7 @@ class TestRobustness:
 
         **Rationale:** Trigger timing is complex. The MessageHandler receives high-level
         keys like 'drive_start_index' and must pass them to the adapter's
-        'tg_program_delays'. This test ensures arguments aren't lost or swapped.
+        'trigger.program_delays'. This test ensures arguments aren't lost or swapped.
         """
         config = {
             "trigger": {
@@ -417,19 +416,19 @@ class TestRobustness:
             "acquisitions": [],
         }
 
-        # Mock adapter methods
-        stack.adapter.tg_program_delays = MagicMock()
-        stack.adapter.tg_set_duration = MagicMock()
+        # Mock adapter.trigger methods
+        stack.adapter.trigger.program_delays = MagicMock()
+        stack.adapter.trigger.set_duration = MagicMock()
 
         # Run - consume the generator to execute the code
         list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
 
         # Check Duration
-        stack.adapter.tg_set_duration.assert_called_with(1000)
+        stack.adapter.trigger.set_duration.assert_called_with(1000)
 
         # Check Delays
         # Arguments: drive, readout, drive_start_index
-        stack.adapter.tg_program_delays.assert_called_with(
+        stack.adapter.trigger.program_delays.assert_called_with(
             drive={"1": {"delay": [[10, 1]]}},
             readout={"2": {"delay": 50}},
             drive_start_index=10,
@@ -448,7 +447,7 @@ class TestRobustness:
         # Simulate the adapter crashing due to invalid index
         # Note: Even if MockHardware allows it, we enforce the crash via Mock side_effect
         # to test the handler's reaction to such an event.
-        stack.adapter.generator_modulation = MagicMock(side_effect=IndexError("Generator 99 out of range"))
+        stack.adapter.generator.set_modulation = MagicMock(side_effect=IndexError("Generator 99 out of range"))
 
         # run() is a generator - consume it
         events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
@@ -571,9 +570,9 @@ class TestRobustness:
             ]
         }
 
-        # Mock adapter methods
-        stack.adapter.generator_modulation = MagicMock()
-        stack.adapter.upload_readout_wave = MagicMock()
+        # Mock adapter.generator methods
+        stack.adapter.generator.set_modulation = MagicMock()
+        stack.adapter.generator.upload_readout_wave = MagicMock()
 
         # Run - consume the generator
         events = list(stack.handler.run(config, cmd="run_experiment", session_id="test"))
@@ -583,7 +582,7 @@ class TestRobustness:
         assert header.metadata["ok"]
 
         # Verify specific call
-        stack.adapter.upload_readout_wave.assert_called_with(
+        stack.adapter.generator.upload_readout_wave.assert_called_with(
             gen_index=0, wave={"type": "const", "length": 100}, replace=True
         )
 

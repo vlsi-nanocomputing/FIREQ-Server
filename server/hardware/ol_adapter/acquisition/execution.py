@@ -134,10 +134,10 @@ class ExecutionOps:
             # --- Input Validation ---
             if not adc_indices:
                 raise ConfigurationError("No ADC indices provided.")
-            if len(adc_indices) > len(self._ctx.ll.ol.hw_specs["acquisitions"]):
+            if len(adc_indices) > len(self._ctx.ll.overlay_driver.hw_specs["acquisitions"]):
                 raise ConfigurationError(
                     f"Requested {len(adc_indices)} ADCs, "
-                    f"but only {len(self._ctx.ll.ol.hw_specs['acquisitions'])} available."
+                    f"but only {len(self._ctx.ll.overlay_driver.hw_specs['acquisitions'])} available."
                 )
 
         # Compute hardware buffer limits (Required for chunking logic)

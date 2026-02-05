@@ -46,8 +46,8 @@ class SweepOps:
         :param adc_indices: List of active ADC indices involved in the sweep.
         """
         # Pre-config acquisition IPs
-        for adc_i in adc_indices:
-            acq = self._ctx.ll.get_acq(adc_i)
+        for adc_index in adc_indices:
+            acq = self._ctx.ll.get_acq(adc_index)
             if mode in ("decimated", "accumulated"):
                 acq.set_decimated_output_type(mode)
 

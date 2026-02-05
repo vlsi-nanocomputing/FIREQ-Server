@@ -85,7 +85,7 @@ def ctx() -> AdapterTestContext:
 
 def test_initialization_success(ctx: AdapterTestContext) -> None:
     """Verify that the adapter initializes correctly with a healthy overlay."""
-    assert ctx.adapter.ol.is_healthy
+    assert ctx.adapter.overlay_driver.is_healthy
 
 
 def test_upload_envelopes_success(ctx: AdapterTestContext) -> None:

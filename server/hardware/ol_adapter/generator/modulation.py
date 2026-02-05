@@ -54,7 +54,7 @@ class ModulationOps:
 
         # Configure Mix-Mode via overlay
         try:
-            mix_info = self._ctx.ll.ol.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
             if mix_info.get("changed"):
                 self._ctx.logger.debug(
                     "Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
@@ -135,14 +135,14 @@ class ModulationOps:
 
         try:
             try:
-                dac_nyquist_hz = self._ctx.ll.ol.hw_specs["summary"]["dac_nyquist_hz"]
+                dac_nyquist_hz = self._ctx.ll.overlay_driver.hw_specs["summary"]["dac_nyquist_hz"]
             except (KeyError, TypeError, AttributeError):
                 dac_nyquist_hz = 2.0e9  # Default 2 GHz Nyquist
 
             freq_mhz = gu.compute_frequency_for_zone(zone, dac_nyquist_hz)
 
             try:
-                mix_info = self._ctx.ll.ol.configure_dac_mix_mode(gen_index, label, freq_mhz)
+                mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
                 result = {
                     "gen_index": gen_index,
                     "label": label,
