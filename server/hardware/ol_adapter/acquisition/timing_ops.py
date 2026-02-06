@@ -34,8 +34,12 @@ class TimingOps:
         """
         self._ctx = ctx
 
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
+
     def set_timing(self, acq_index: int, tof: int, duration: int) -> dict:
-        """Configure the timing parameters (Time of Flight and Duration).
+        """Configure the timing parameters (Time of Flight and acquisition duration).
 
         :param acq_index: Index of the acquisition unit.
         :type acq_index: int

@@ -36,6 +36,10 @@ class SweepOps:
         """
         self._ctx = ctx
 
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
+
     def prepare_sweep(self, mode: str, acq_indices: list[int]) -> None:
         """Prepare acquisition IPs and DMA engine for sweep-optimized execution.
 

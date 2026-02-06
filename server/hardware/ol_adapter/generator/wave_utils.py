@@ -1,14 +1,11 @@
-"""Generator utility functions for wave compilation and envelope processing.
+"""Utility functions for wave compilation and envelope processing.
 
-This module provides pure functions extracted from GeneratorOps to improve
-code organization, testability, and file length. Functions are organized by
-responsibility:
+This module provides pure functions used by WaveEnvelopeOps:
 
 - Wave entry construction and validation
 - Wave compilation policy determination
 - Envelope processing and validation
-- FIFO sequence management
-- Nyquist zone frequency computation
+- Readout wave caching
 """
 
 import numpy as np
@@ -212,111 +209,6 @@ def check_readout_wave_cache(
     return old_entry, "replace" if old_entry is not None else "compile"
 
 
-# =============================================================================
-# FIFO Validation
-# =============================================================================
-
-
-def validate_fifo_capacity(
-    gen_fifo_depth: int,
-    start_index: int,
-    sequence_length: int,
-) -> None:
-    """Validate FIFO capacity and raise if overflow would occur.
-
-    :param gen_fifo_depth: FIFO segment depth (from hardware).
-    :param start_index: FIFO write start index.
-    :param sequence_length: Length of sequence to write.
-    :raises ConfigurationError: If FIFO would overflow.
-    """
-    max_entries = int(gen_fifo_depth // 4)
-    end_index = start_index + sequence_length - 1
-    if end_index > max_entries:
-        raise ConfigurationError(
-            f"program_drive_sequence: overflow: end_index={end_index} > " f"max_entries={max_entries}"
-        )
-
-
-def validate_wave_ids_in_cache(
-    cache: dict[str, WaveEntry],
-    wave_id_list: list[str],
-    gen_wave_memory: dict,
-) -> None:
-    """Validate all wave_ids exist in HL cache and LL memory.
-
-    :param cache: High-level wave cache.
-    :param wave_id_list: List of wave IDs to check.
-    :param gen_wave_memory: Generator wave memory dictionary (from HW).
-    :raises ConfigurationError: If any wave_id is missing.
-    """
-    missing_wave_id_hl = [wid for wid in wave_id_list if (wid not in cache) or (cache[wid].wdw) is None]
-    missing_wave_id_ll = [wid for wid in wave_id_list if wid not in gen_wave_memory]
-
-    if missing_wave_id_hl:
-        raise ConfigurationError(f"program_drive_sequence: wave_id not in HL cache: {missing_wave_id_hl}")
-    if missing_wave_id_ll:
-        raise ConfigurationError(f"program_drive_sequence: wave_id was never compiled (LL): " f"{missing_wave_id_ll}")
-
-
-def update_fifo_cache(
-    gen_index: int,
-    wave_id_list: list[str],
-    start_index: int,
-    prev_fifo: list[str],
-    max_fifo_entries: int,
-) -> list[str]:
-    """Update FIFO cache with new sequence and return complete FIFO.
-
-    :param gen_index: Generator index.
-    :param wave_id_list: Wave IDs being programmed.
-    :param start_index: FIFO write start index.
-    :param prev_fifo: Previous FIFO sequence from cache.
-    :param max_fifo_entries: Maximum FIFO entries (for validation).
-    :return: Updated complete FIFO sequence.
-    :raises ConfigurationError: If patching from non-1 start_index with
-        insufficient cache.
-    """
-    if start_index == 1:
-        new_fifo = list(wave_id_list)
-    else:
-        # Patching: need to preserve earlier entries
-        if len(prev_fifo) < start_index - 1:
-            raise ConfigurationError(
-                f"program_drive_sequence: cannot patch from start_index={start_index} "
-                f"without prior FIFO sequence (prev_len={len(prev_fifo)})"
-            )
-        new_fifo = prev_fifo[: start_index - 1] + list(wave_id_list)
-
-    # Validate final FIFO doesn't exceed capacity
-    if len(new_fifo) > max_fifo_entries:
-        raise ConfigurationError(
-            f"program_drive_sequence: new FIFO length {len(new_fifo)} exceeds " f"max_entries={max_fifo_entries}"
-        )
-
-    return new_fifo
-
-
-# =============================================================================
-# Nyquist Zone Frequency Computation
-# =============================================================================
-
-
-def compute_frequency_for_zone(
-    zone: int,
-    dac_nyquist_hz: float,
-) -> float:
-    """Compute frequency (MHz) that maps to target Nyquist zone.
-
-    :param zone: Target Nyquist zone (1 for baseband, 2+ for mixing mode).
-    :param dac_nyquist_hz: DAC Nyquist frequency in Hz.
-    :return: Frequency in MHz.
-    """
-    if zone == 1:
-        return dac_nyquist_hz / 1e6 * 0.5  # Baseband: 50% of Nyquist
-    else:
-        return dac_nyquist_hz / 1e6 * (zone - 0.5)  # Mixing mode: (zone-0.5)*Nyquist
-
-
 __all__ = [
     "build_wave_entry",
     "check_wave_replacement_policy",
@@ -324,8 +216,4 @@ __all__ = [
     "validate_envelope_symmetry",
     "process_envelope_samples",
     "check_readout_wave_cache",
-    "validate_fifo_capacity",
-    "validate_wave_ids_in_cache",
-    "update_fifo_cache",
-    "compute_frequency_for_zone",
 ]

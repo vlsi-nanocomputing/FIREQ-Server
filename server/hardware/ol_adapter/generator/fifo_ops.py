@@ -11,10 +11,56 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from ....models.exceptions import ConfigurationError
-from . import wave_utils as gu
+from ..adapter_types import WaveEntry
 
 if TYPE_CHECKING:
     from ..cache import AdapterContext
+
+
+# =============================================================================
+# FIFO Validation Helpers
+# =============================================================================
+
+
+def _validate_fifo_capacity(
+    gen_fifo_depth: int,
+    start_index: int,
+    sequence_length: int,
+) -> None:
+    """Validate FIFO capacity and raise if overflow would occur.
+
+    :param gen_fifo_depth: FIFO segment depth (from hardware).
+    :param start_index: FIFO write start index.
+    :param sequence_length: Length of sequence to write.
+    :raises ConfigurationError: If FIFO would overflow.
+    """
+    max_entries = int(gen_fifo_depth // 4)
+    end_index = start_index + sequence_length - 1
+    if end_index > max_entries:
+        raise ConfigurationError(
+            f"program_drive_sequence: overflow: end_index={end_index} > " f"max_entries={max_entries}"
+        )
+
+
+def _validate_wave_ids_in_cache(
+    cache: dict[str, WaveEntry],
+    wave_id_list: list[str],
+    gen_wave_memory: dict,
+) -> None:
+    """Validate all wave_ids exist in HL cache and LL memory.
+
+    :param cache: High-level wave cache.
+    :param wave_id_list: List of wave IDs to check.
+    :param gen_wave_memory: Generator wave memory dictionary (from HW).
+    :raises ConfigurationError: If any wave_id is missing.
+    """
+    missing_wave_id_hl = [wid for wid in wave_id_list if (wid not in cache) or (cache[wid].wdw) is None]
+    missing_wave_id_ll = [wid for wid in wave_id_list if wid not in gen_wave_memory]
+
+    if missing_wave_id_hl:
+        raise ConfigurationError(f"program_drive_sequence: wave_id not in HL cache: {missing_wave_id_hl}")
+    if missing_wave_id_ll:
+        raise ConfigurationError(f"program_drive_sequence: wave_id was never compiled (LL): " f"{missing_wave_id_ll}")
 
 
 class FIFOOps:
@@ -74,20 +120,20 @@ class FIFOOps:
         :return: A dictionary containing the updated FIFO sequence.
         """
         # Import here to avoid circular dependency
-        from .wave_ops import WaveOps  # noqa: PLC0415
+        from .wave_envelope_ops import WaveEnvelopeOps  # noqa: PLC0415
 
         self._ctx.logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
 
         gen = self._ctx.ll.get_gen(gen_index)
-        wave_ops = WaveOps(self._ctx)
+        wave_ops = WaveEnvelopeOps(self._ctx)
         cache = wave_ops.get_wave_cache(gen_index)
         start_index = int(start_index)
 
         if start_index < 1:
             raise ConfigurationError(f"program_drive_sequence: start_index must be >= 1, got {start_index}")
 
-        gu.validate_fifo_capacity(int(gen.memory_mapped_fifo_segment_depth), start_index, len(wave_id_list))
-        gu.validate_wave_ids_in_cache(cache, wave_id_list, gen.wave_memory_dict)
+        _validate_fifo_capacity(int(gen.memory_mapped_fifo_segment_depth), start_index, len(wave_id_list))
+        _validate_wave_ids_in_cache(cache, wave_id_list, gen.wave_memory_dict)
 
         self.set_drive_source(gen_index=gen_index, source="fifo")
         self._ctx.logger.debug("program_drive_sequence: set_drive_source(gen=%d, source='fifo')", gen_index)

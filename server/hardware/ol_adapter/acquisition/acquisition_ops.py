@@ -2,7 +2,7 @@
 
 This module provides the AcquisitionOps class that coordinates all acquisition-related
 operations by delegating to specialized submodule classes (DMAOrchestrator, SweepOps,
-ModulationOps, TimingOps).
+ModulationOps, TriggerOps, TimingOps).
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from .dma_orchestrator import DMAOrchestrator
 from .modulation_ops import ModulationOps
 from .sweep_ops import SweepOps
 from .timing_ops import TimingOps
+from .trigger_ops import TriggerOps
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -27,10 +28,11 @@ class AcquisitionOps:
     """Operation class for DMA acquisition control.
 
     This class handles all acquisition-related operations by orchestrating
-    four specialized operation classes:
+    five specialized operation classes:
     - DMAOrchestrator: DMA execution with chunking and pipelining
     - SweepOps: Sweep mode optimization and state management
-    - ModulationOps: DDS modulation and trigger listener configuration
+    - ModulationOps: DDS modulation and Mix-Mode configuration
+    - TriggerOps: Trigger channel assignment
     - TimingOps: Time-of-flight and duration timing configuration
 
     The public API delegates to these submodules transparently.
@@ -44,7 +46,9 @@ class AcquisitionOps:
     _sweep : SweepOps
         Handles sweep mode preparation and finalization.
     _modulation : ModulationOps
-        Handles DDS and trigger configuration.
+        Handles DDS modulation configuration.
+    _trigger : TriggerOps
+        Handles trigger channel assignment.
     _timing : TimingOps
         Handles timing parameter configuration.
     """
@@ -59,6 +63,7 @@ class AcquisitionOps:
         self._dma = DMAOrchestrator(ctx)
         self._sweep = SweepOps(ctx)
         self._modulation = ModulationOps(ctx)
+        self._trigger = TriggerOps(ctx)
         self._timing = TimingOps(ctx)
 
     # ========== Acquisition Execution Delegation ==========
@@ -129,19 +134,21 @@ class AcquisitionOps:
         """
         return self._modulation.set_modulation(acq_index, mod)
 
+    # ========== Trigger Listener Delegation ==========
+
     def set_trigger_listener(self, acq_index: int, trig: TriggerCommand) -> dict:
         """Configure which trigger channel the acquisition should listen to.
 
-        Delegates to ModulationOps.set_trigger_listener().
+        Delegates to TriggerOps.set_trigger_listener().
 
         :param acq_index: Index of the target acquisition unit.
         :type acq_index: int
-        :param trig: Dictionary defining the trigger type and source channel.
+        :param trig: Dictionary defining the trigger source channel.
         :type trig: TriggerCommand
         :return: The applied trigger configuration.
         :rtype: dict
         """
-        return self._modulation.set_trigger_listener(acq_index, trig)
+        return self._trigger.set_trigger_listener(acq_index, trig)
 
     # ========== Timing Delegation ==========
 

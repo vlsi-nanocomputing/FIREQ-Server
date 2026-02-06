@@ -1,34 +1,22 @@
-"""DDS modulation and trigger listener configuration for acquisition.
+"""DDS modulation configuration for acquisition.
 
-This module provides the ModulationOps class that handles:
-- DDS modulation parameter configuration
-- Acquisition trigger channel selection
-- Mix-mode configuration for ADC units
+This module handles:
+- DDS modulation parameter configuration (frequency, phase)
+- ADC Mix-Mode configuration for Nyquist zone selection
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ....models.config_types import Modulation, TriggerCommand
+from ....models.config_types import Modulation
 
 if TYPE_CHECKING:
     from .cache import AdapterContext
 
 
 class ModulationOps:
-    """Operation class for acquisition modulation configuration.
-
-    Handles DDS and trigger configuration including:
-    - DDS frequency and phase setting
-    - Mix-mode configuration for Nyquist zones
-    - Trigger channel assignment for acquisitions
-
-    Attributes:
-    -----------
-    _ctx : AdapterContext
-        Shared context containing ll, cache, logger, and other dependencies.
-    """
+    """Operation class for acquisition DDS modulation configuration."""
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
         """Initialize ModulationOps.
@@ -38,8 +26,15 @@ class ModulationOps:
         """
         self._ctx = ctx
 
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
+
     def set_modulation(self, acq_index: int, mod: Modulation) -> dict:
         """Configure the DDS modulation parameters for an acquisition unit.
+
+        Handles both the digital frequency synthesis configuration and the
+        analog-domain Mix-Mode settings (Nyquist zone) based on the target frequency.
 
         :param acq_index: Index of the acquisition unit.
         :type acq_index: int
@@ -59,19 +54,7 @@ class ModulationOps:
         )
         unit = self._ctx.ll.get_acq(acq_index)
 
-        # Configure Mix-Mode via overlay
-        try:
-            mix_info = self._ctx.ll.overlay_driver.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
-            if mix_info.get("changed"):
-                self._ctx.logger.debug(
-                    "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
-                    mix_info["nyquist_zone"],
-                    mix_info["amd_zone"],
-                    mix_info["tile"],
-                    mix_info["block"],
-                )
-        except ValueError as e:
-            self._ctx.logger.warning(f"ADC Mix-mode config skipped: {e}")
+        self._configure_adc_mix_mode(acq_index, freq_mhz)
 
         self._ctx.ll.call(
             unit.set_acquisition_dds_parameters(
@@ -91,42 +74,30 @@ class ModulationOps:
             "phase": phase,
         }
 
-    def set_trigger_listener(self, acq_index: int, trig: TriggerCommand) -> dict:
-        """Configure which trigger channel the acquisition should listen to.
+    # ========================================================================
+    # INTERNAL HELPERS
+    # ========================================================================
 
-        :param acq_index: Index of the target acquisition unit.
+    def _configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> None:
+        """Configure the ADC Mix-Mode (Nyquist zone) based on target frequency.
+
+        :param acq_index: Index of the acquisition unit.
         :type acq_index: int
-        :param trig: Dictionary defining the trigger type and source channel.
-        :type trig: TriggerCommand
-        :return: The applied trigger configuration.
-        :rtype: dict
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
         """
-        channel = trig["channel"]
-
-        self._ctx.logger.debug("set_trigger_listener: acq=%d channel=%s", acq_index, channel)
-        unit = self._ctx.ll.get_acq(acq_index)
-
-        self._ctx.ll.call(
-            unit.set_trigger_channel(channel=channel),
-            operation="set_trigger_channel",
-            driver_name="AcquisitionDriver",
-            config_error=True,
-        )
-
-        if channel == 0:
-            self._ctx.logger.debug("Acquisition %d is deaf to any trigger!", acq_index)
-        else:
-            self._ctx.logger.debug(
-                "Acquisition %d listens to trigger_word channel %d",
-                acq_index,
-                channel,
-            )
-        self._ctx.cache.acq_trigger_channel[int(acq_index)] = int(channel)
-
-        return {
-            "acq_index": acq_index,
-            "channel": channel,
-        }
+        try:
+            mix_info = self._ctx.ll.overlay_driver.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
+            if mix_info.get("changed"):
+                self._ctx.logger.debug(
+                    "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+        except ValueError as e:
+            self._ctx.logger.warning(f"ADC Mix-mode config skipped: {e}")
 
 
 __all__ = ["ModulationOps"]

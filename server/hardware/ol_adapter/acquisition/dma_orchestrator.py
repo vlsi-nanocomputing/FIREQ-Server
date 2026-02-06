@@ -47,17 +47,9 @@ class DMAOrchestrator:
         """
         self._ctx = ctx
 
-    def _configure_acq_output_mode(self, acq_indices: list[int], mode: str) -> None:
-        """Pre-configure acquisition IP output type when not in sweep mode.
-
-        In sweep mode the output type is already locked by SweepOps.prepare_sweep(),
-        so this step is skipped to avoid redundant hardware writes.
-        """
-        if not self._ctx.cache.sweep_prepared:
-            for acq_i in acq_indices:
-                acq = self._ctx.ll.get_acq(acq_i)
-                if mode in ("decimated", "accumulated"):
-                    acq.set_decimated_output_type(mode)
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
 
     def compute_max_hw_shots(
         self,
@@ -77,40 +69,9 @@ class DMAOrchestrator:
         :param acq_index: Index of the acquisition unit.
         :return: The maximum allowable shots for a single atomic execution.
         """
-        TRIGGER_MAX_SHOTS = 1024  # 10-bit register limit
+        TRIGGER_MAX_SHOTS = 1024  # 10-bit register limit, hardcoded
         buffer_max = self._ctx.dma_engine.get_max_shots(mode, samp_per_shot, acq_index)
         return min(TRIGGER_MAX_SHOTS, buffer_max)
-
-    @contextmanager
-    def _dma_timeout_context(self, timeout_sec: float | None) -> Iterator[None]:
-        """Context manager for DMA timeout using SIGALRM (Unix only).
-
-        Sets up a signal-based timeout once for an entire multi-acquisition
-        operation, avoiding per-chunk syscall overhead.
-
-        :param timeout_sec: Total timeout in seconds. If None or <= 0, no timeout.
-        :yields: None
-        :raises TimeoutError: If the timeout expires during the context.
-        """
-        if timeout_sec is None or timeout_sec <= 0:
-            yield
-            return
-
-        if not hasattr(signal, "SIGALRM"):
-            yield
-            return
-
-        def _timeout_handler(signum: int, frame: types.FrameType | None) -> NoReturn:
-            raise TimeoutError("DMA acquisition timeout")
-
-        old_handler = signal.getsignal(signal.SIGALRM)
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.setitimer(signal.ITIMER_REAL, timeout_sec)
-        try:
-            yield
-        finally:
-            signal.setitimer(signal.ITIMER_REAL, 0.0)
-            signal.signal(signal.SIGALRM, old_handler)
 
     def run_multi_acquisition(
         self,
@@ -282,6 +243,53 @@ class DMAOrchestrator:
             "sw_overhead_ms": sw_overhead * 1000.0,
         }
 
+    # ========================================================================
+    # INTERNAL HELPERS
+    # ========================================================================
+
+    def _configure_acq_output_mode(self, acq_indices: list[int], mode: str) -> None:
+        """Pre-configure acquisition IP output type when not in sweep mode.
+
+        In sweep mode the output type is already locked by SweepOps.prepare_sweep(),
+        so this step is skipped to avoid redundant hardware writes.
+        """
+        if not self._ctx.cache.sweep_prepared:
+            for acq_i in acq_indices:
+                acq = self._ctx.ll.get_acq(acq_i)
+                if mode in ("decimated", "accumulated"):
+                    acq.set_decimated_output_type(mode)
+
+    @contextmanager
+    def _dma_timeout_context(self, timeout_sec: float | None) -> Iterator[None]:
+        """Context manager for DMA timeout using SIGALRM (Unix only).
+
+        Sets up a signal-based timeout once for an entire multi-acquisition
+        operation, avoiding per-chunk syscall overhead.
+
+        :param timeout_sec: Total timeout in seconds. If None or <= 0, no timeout.
+        :yields: None
+        :raises TimeoutError: If the timeout expires during the context.
+        """
+        if timeout_sec is None or timeout_sec <= 0:
+            yield
+            return
+
+        if not hasattr(signal, "SIGALRM"):
+            yield
+            return
+
+        def _timeout_handler(signum: int, frame: types.FrameType | None) -> NoReturn:
+            raise TimeoutError("DMA acquisition timeout")
+
+        old_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.setitimer(signal.ITIMER_REAL, timeout_sec)
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, old_handler)
+
     def _run_single_hw_acquisition(
         self,
         *,
@@ -292,7 +300,7 @@ class DMAOrchestrator:
         timeout: float | None = 1.0,
         skip_timeout: bool = False,
     ) -> tuple[dict[int, np.ndarray], float, float]:
-        """Execute a single hardware acquisition cycle (ARM → TRIGGER → RETRIEVE).
+        """Execute a single hardware acquisition cycle (ARM -> TRIGGER -> RETRIEVE).
 
         Returns raw DMA buffers. Client computes valid_words from request params.
 

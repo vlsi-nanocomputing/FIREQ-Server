@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from .fifo_ops import FIFOOps
 from .modulation_ops import ModulationOps
 from .trigger_listener_ops import TriggerListenerOps
-from .wave_ops import WaveOps
+from .wave_envelope_ops import WaveEnvelopeOps
 
 if TYPE_CHECKING:
     from ..adapter_types import WaveEntry
@@ -21,7 +21,7 @@ class GeneratorOps:
     """High-level generator operations combining wave, FIFO, modulation, and triggering.
 
     This class orchestrates four specialized operation classes:
-    - WaveOps: Wave definition, compilation, and envelope management
+    - WaveEnvelopeOps: Wave definition, compilation, and envelope management
     - FIFOOps: Drive sequence FIFO programming
     - ModulationOps: DDS modulation configuration
     - TriggerListenerOps: Generator trigger listener configuration
@@ -33,7 +33,7 @@ class GeneratorOps:
         :param ctx: Shared adapter context with all dependencies.
         """
         self._ctx = ctx
-        self._waves = WaveOps(ctx)
+        self._waves = WaveEnvelopeOps(ctx)
         self._fifo = FIFOOps(ctx)
         self._modulation = ModulationOps(ctx)
         self._listener = TriggerListenerOps(ctx)

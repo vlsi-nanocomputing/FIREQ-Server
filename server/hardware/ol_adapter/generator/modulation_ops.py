@@ -11,10 +11,30 @@ from typing import TYPE_CHECKING
 
 from ....models.config_types import Modulation
 from ....models.exceptions import ConfigurationError
-from . import wave_utils as gu
 
 if TYPE_CHECKING:
     from ..cache import AdapterContext
+
+
+# =============================================================================
+# Nyquist Zone Frequency Computation
+# =============================================================================
+
+
+def _compute_frequency_for_zone(
+    zone: int,
+    dac_nyquist_hz: float,
+) -> float:
+    """Compute frequency (MHz) that maps to target Nyquist zone.
+
+    :param zone: Target Nyquist zone (1 for baseband, 2+ for mixing mode).
+    :param dac_nyquist_hz: DAC Nyquist frequency in Hz.
+    :return: Frequency in MHz.
+    """
+    if zone == 1:
+        return dac_nyquist_hz / 1e6 * 0.5  # Baseband: 50% of Nyquist
+    else:
+        return dac_nyquist_hz / 1e6 * (zone - 0.5)  # Mixing mode: (zone-0.5)*Nyquist
 
 
 class ModulationOps:
@@ -139,7 +159,7 @@ class ModulationOps:
             except (KeyError, TypeError, AttributeError):
                 dac_nyquist_hz = 2.0e9  # Default 2 GHz Nyquist
 
-            freq_mhz = gu.compute_frequency_for_zone(zone, dac_nyquist_hz)
+            freq_mhz = _compute_frequency_for_zone(zone, dac_nyquist_hz)
 
             try:
                 mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)

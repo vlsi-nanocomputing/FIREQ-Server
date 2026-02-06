@@ -26,11 +26,11 @@ if TYPE_CHECKING:
     from ..cache import AdapterContext
 
 
-class WaveOps:
+class WaveEnvelopeOps:
     """Wave and envelope management operations."""
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
-        """Initialize WaveOps.
+        """Initialize WaveEnvelopeOps.
 
         :param ctx: Shared adapter context with all dependencies.
         """
@@ -530,4 +530,4 @@ class WaveOps:
         }
 
 
-__all__ = ["WaveOps"]
+__all__ = ["WaveEnvelopeOps"]
