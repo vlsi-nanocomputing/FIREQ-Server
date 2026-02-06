@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from .fifo_ops import FIFOOps
 from .modulation_ops import ModulationOps
-from .trigger_listener_ops import TriggerListenerOps
+from .trigger_ops import TriggerOps
 from .wave_envelope_ops import WaveEnvelopeOps
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ class GeneratorOps:
     - WaveEnvelopeOps: Wave definition, compilation, and envelope management
     - FIFOOps: Drive sequence FIFO programming
     - ModulationOps: DDS modulation configuration
-    - TriggerListenerOps: Generator trigger listener configuration
+    - TriggerOps: Generator trigger configuration
     """
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
@@ -36,7 +36,7 @@ class GeneratorOps:
         self._waves = WaveEnvelopeOps(ctx)
         self._fifo = FIFOOps(ctx)
         self._modulation = ModulationOps(ctx)
-        self._listener = TriggerListenerOps(ctx)
+        self._trigger = TriggerOps(ctx)
 
     # ========== Wave Management Delegation ==========
 
@@ -72,13 +72,13 @@ class GeneratorOps:
         self,
         *,
         gen_index: int,
-        preserve_specs: bool = True,
+        preserve_wave_specs: bool = True,
         clear_last_fifo: bool = True,
     ) -> dict:
         """Reset the generator wave memory and synchronize the High-Level cache."""
         return self._waves.reset_wave_memory(
             gen_index=gen_index,
-            preserve_specs=preserve_specs,
+            preserve_wave_specs=preserve_wave_specs,
             clear_last_fifo=clear_last_fifo,
         )
 
@@ -130,7 +130,7 @@ class GeneratorOps:
 
     def set_trigger_listener(self, gen_index: int, trig: dict) -> dict:
         """Configure which trigger channel the generator should listen to."""
-        return self._listener.set_trigger_listener(gen_index=gen_index, trig=trig)
+        return self._trigger.set_trigger_listener(gen_index=gen_index, trig=trig)
 
 
 __all__ = ["GeneratorOps"]

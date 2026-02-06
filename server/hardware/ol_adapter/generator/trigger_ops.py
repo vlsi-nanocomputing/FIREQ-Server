@@ -1,4 +1,4 @@
-"""Generator trigger listener configuration.
+"""Generator trigger configuration.
 
 This module handles:
 - Generator trigger channel assignment
@@ -15,19 +15,23 @@ if TYPE_CHECKING:
     from ..cache import AdapterContext
 
 
-class TriggerListenerOps:
-    """Generator trigger listener configuration.
+class TriggerOps:
+    """Generator trigger configuration.
 
-    Note: This handles generator trigger listening (which trigger to respond to).
-    This is distinct from the global TriggerOps class which controls the trigger generator hardware.
+    Note: This handles generator-side trigger configuration (which trigger to respond to).
+    This is distinct from the global TriggerOps class which controls the TriggerGenerator IP.
     """
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
-        """Initialize TriggerListenerOps.
+        """Initialize TriggerOps.
 
         :param ctx: Shared adapter context with all dependencies.
         """
         self._ctx = ctx
+
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
 
     def set_trigger_listener(self, gen_index: int, trig: TriggerCommand) -> dict:
         """Configure which trigger channel the generator should listen to.
@@ -71,4 +75,4 @@ class TriggerListenerOps:
         }
 
 
-__all__ = ["TriggerListenerOps"]
+__all__ = ["TriggerOps"]

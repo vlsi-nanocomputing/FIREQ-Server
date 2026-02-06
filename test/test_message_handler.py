@@ -294,15 +294,15 @@ class TestRobustness:
         assert "FPGA timeout" in statuses[1]["error"]
 
     def test_reset_preserve_specs_flag(self, stack: object) -> None:
-        """Verify reset handler propagates the preserve_specs flag."""
+        """Verify reset handler propagates the preserve_wave_specs flag."""
         # MOCK THE ADAPTER.GENERATOR METHOD to verify arguments
         stack.adapter.generator.reset_wave_memory = MagicMock(return_value={})
 
-        # Call reset with preserve_specs=True
-        stack.handler.reset_h.reset_waves(gen_index=0, preserve_specs=True)
+        # Call reset with preserve_wave_specs=True
+        stack.handler.reset_h.reset_waves(gen_index=0, preserve_wave_specs=True)
 
         # Verify adapter call
-        stack.adapter.generator.reset_wave_memory.assert_called_with(gen_index=0, preserve_specs=True)
+        stack.adapter.generator.reset_wave_memory.assert_called_with(gen_index=0, preserve_wave_specs=True)
 
     def test_sweep_integer_casting_edge_cases(self, stack: object) -> None:
         """Verify strict type casting for discrete hardware parameters."""

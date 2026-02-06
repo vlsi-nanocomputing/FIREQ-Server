@@ -73,37 +73,9 @@ class FIFOOps:
         """
         self._ctx = ctx
 
-    def _update_fifo_cache(
-        self,
-        gen_index: int,
-        wave_id_list: list[str],
-        start_index: int,
-    ) -> list[str]:
-        """Update FIFO cache with new sequence and return complete FIFO.
-
-        :param gen_index: Generator index.
-        :param wave_id_list: Wave IDs being programmed.
-        :param start_index: FIFO write start index.
-        :return: Updated complete FIFO sequence.
-        :raises ConfigurationError: If patching from non-1 start_index with insufficient cache.
-        """
-        end_index = start_index + len(wave_id_list) - 1
-        prev = self._ctx.cache.last_fifo.get(int(gen_index), [])
-
-        if start_index == 1:
-            new_fifo = list(wave_id_list)
-        else:
-            if len(prev) < (start_index - 1):
-                raise ConfigurationError(
-                    f"program_drive_sequence: cannot patch from start_index={start_index} "
-                    f"because last_fifo has only {len(prev)} entries. "
-                    f"Program from 1 first, then patch."
-                )
-            suffix = prev[end_index:] if len(prev) >= end_index else []
-            new_fifo = prev[: start_index - 1] + list(wave_id_list) + suffix
-
-        self._ctx.cache.last_fifo[int(gen_index)] = new_fifo
-        return new_fifo
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
 
     def program_drive_sequence(
         self,
@@ -213,6 +185,42 @@ class FIFOOps:
         if source_lower == "lfsr" and seed is not None:
             out["seed"] = int(seed)
         return out
+
+    # ========================================================================
+    # INTERNAL HELPERS
+    # ========================================================================
+
+    def _update_fifo_cache(
+        self,
+        gen_index: int,
+        wave_id_list: list[str],
+        start_index: int,
+    ) -> list[str]:
+        """Update FIFO cache with new sequence and return complete FIFO.
+
+        :param gen_index: Generator index.
+        :param wave_id_list: Wave IDs being programmed.
+        :param start_index: FIFO write start index.
+        :return: Updated complete FIFO sequence.
+        :raises ConfigurationError: If patching from non-1 start_index with insufficient cache.
+        """
+        end_index = start_index + len(wave_id_list) - 1
+        prev = self._ctx.cache.last_fifo.get(int(gen_index), [])
+
+        if start_index == 1:
+            new_fifo = list(wave_id_list)
+        else:
+            if len(prev) < (start_index - 1):
+                raise ConfigurationError(
+                    f"program_drive_sequence: cannot patch from start_index={start_index} "
+                    f"because last_fifo has only {len(prev)} entries. "
+                    f"Program from 1 first, then patch."
+                )
+            suffix = prev[end_index:] if len(prev) >= end_index else []
+            new_fifo = prev[: start_index - 1] + list(wave_id_list) + suffix
+
+        self._ctx.cache.last_fifo[int(gen_index)] = new_fifo
+        return new_fifo
 
 
 __all__ = ["FIFOOps"]

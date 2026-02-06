@@ -252,6 +252,11 @@ class DMAOrchestrator:
 
         In sweep mode the output type is already locked by SweepOps.prepare_sweep(),
         so this step is skipped to avoid redundant hardware writes.
+
+        :param acq_indices: List of acquisition unit indices to configure.
+        :type acq_indices: list[int]
+        :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
+        :type mode: str
         """
         if not self._ctx.cache.sweep_prepared:
             for acq_i in acq_indices:

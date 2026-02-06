@@ -247,8 +247,8 @@ class FIREQServer:
 
             elif cmd == "reset_waves":
                 gen_index = msg.get("gen_index", 0)
-                preserve_specs = msg.get("preserve_specs", True)
-                result = self.handler.reset_h.reset_waves(gen_index, preserve_specs)
+                preserve_wave_specs = msg.get("preserve_wave_specs", True)
+                result = self.handler.reset_h.reset_waves(gen_index, preserve_wave_specs)
                 self.queue_out.put(self._build_response(cmd, session_id, result))
 
             elif cmd == "reset_envelopes":

@@ -457,14 +457,14 @@ def test_fifo_patching_out_of_bounds(ctx: AdapterTestContext) -> None:
 
 
 def test_reset_wave_memory_preserve_specs(ctx: AdapterTestContext) -> None:
-    """Verify that 'preserve_specs' clears WDW compilation but keeps the WaveEntry."""
+    """Verify that 'preserve_wave_specs' clears WDW compilation but keeps the WaveEntry."""
     # 1. Populate cache
     entry = MagicMock()
     entry.wdw = 12345
     ctx.adapter._ctx.cache.wave_store[0] = {"test_wave": entry}
 
     # 2. Execute reset with preservation
-    ctx.adapter.generator.reset_wave_memory(gen_index=0, preserve_specs=True)
+    ctx.adapter.generator.reset_wave_memory(gen_index=0, preserve_wave_specs=True)
 
     # 3. Assertions
     # Entry must still exist

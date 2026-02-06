@@ -47,6 +47,111 @@ class ModulationOps:
         """
         self._ctx = ctx
 
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
+
+    def set_modulation(self, gen_index: int, label: str, mod: Modulation) -> dict:
+        """Configure the Direct Digital Synthesis (DDS) modulation parameters.
+
+        This method handles both the digital frequency synthesis configuration and the
+        analog-domain Mix-Mode settings (Nyquist zone selection) based on the target frequency.
+
+        :param gen_index: The index of the target generator.
+        :type gen_index: int
+        :param label: The modulation context, must be either 'drive' or 'readout'.
+        :type label: str
+        :param mod: A dictionary containing the modulation parameters (frequency in MHz, phase in degrees).
+        :type mod: Modulation
+        :return: A summary of the applied modulation configuration.
+        :rtype: dict
+        :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
+        """
+        return self._configure_modulation(label, gen_index, mod)
+
+    def set_nyquist_zone(self, gen_index: int, label: str, zone: int) -> dict:
+        """Set the Nyquist zone for a generator's modulation.
+
+        This method explicitly sets the Mix-Mode Nyquist zone for a generator's
+        drive or readout path. The zone determines which Nyquist band is used for
+        the analog Mix-Mode configuration in the RF frontend.
+
+        Note: The zone is set by configuring an appropriate frequency. For even zones,
+        a mixing mode frequency is used; for odd zones, the frequency is in the baseband.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param label: Modulation context ('drive' or 'readout').
+        :type label: str
+        :param zone: Target Nyquist zone (typically 1 or 2).
+        :type zone: int
+        :return: Summary of applied zone configuration.
+        :rtype: dict
+        """
+        self._ctx.logger.debug(
+            "set_nyquist_zone: gen=%d label=%s zone=%d",
+            gen_index,
+            label,
+            zone,
+        )
+
+        try:
+            try:
+                dac_nyquist_hz = self._ctx.ll.overlay_driver.hw_specs["summary"]["dac_nyquist_hz"]
+            except (KeyError, TypeError, AttributeError):
+                dac_nyquist_hz = 2.0e9  # Default 2 GHz Nyquist
+
+            freq_mhz = _compute_frequency_for_zone(zone, dac_nyquist_hz)
+            mix_info = self._configure_dac_mix_mode(gen_index, label, freq_mhz)
+
+            if mix_info is not None:
+                return {
+                    "gen_index": gen_index,
+                    "label": label,
+                    "nyquist_zone": mix_info.get("nyquist_zone", zone),
+                    "amd_zone": mix_info.get("amd_zone"),
+                }
+            return {
+                "gen_index": gen_index,
+                "label": label,
+                "nyquist_zone": zone,
+                "status": "mocked",
+            }
+        except (ValueError, KeyError, AttributeError) as e:
+            self._ctx.logger.error(f"Failed to set Nyquist zone: {e}")
+            raise
+
+    # ========================================================================
+    # INTERNAL HELPERS
+    # ========================================================================
+
+    def _configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict | None:
+        """Configure the DAC Mix-Mode (Nyquist zone) based on target frequency.
+
+        :param gen_index: Index of the generator.
+        :type gen_index: int
+        :param label: Modulation context ('drive' or 'readout').
+        :type label: str
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
+        :return: Mix-mode info dict if configured, None if unavailable.
+        :rtype: dict | None
+        """
+        try:
+            mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            if mix_info.get("changed"):
+                self._ctx.logger.debug(
+                    "DAC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+            return mix_info
+        except (ValueError, AttributeError, TypeError, KeyError) as e:
+            self._ctx.logger.debug(f"DAC Mix-mode config skipped: {e}")
+            return None
+
     def _configure_modulation(
         self,
         label: str | None,
@@ -72,19 +177,7 @@ class ModulationOps:
         )
         unit = self._ctx.ll.get_gen(gen_index)
 
-        # Configure Mix-Mode via overlay
-        try:
-            mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
-            if mix_info.get("changed"):
-                self._ctx.logger.debug(
-                    "Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
-                    mix_info["nyquist_zone"],
-                    mix_info["amd_zone"],
-                    mix_info["tile"],
-                    mix_info["block"],
-                )
-        except ValueError as e:
-            self._ctx.logger.debug(f"Mix-mode config skipped: {e}")
+        self._configure_dac_mix_mode(gen_index, label, freq_mhz)
 
         if label == "drive":
             self._ctx.ll.call(
@@ -116,78 +209,6 @@ class ModulationOps:
             "frequency_mhz": freq_mhz,
             "phase": phase,
         }
-
-    def set_modulation(self, gen_index: int, label: str, mod: Modulation) -> dict:
-        """Configure the Direct Digital Synthesis (DDS) modulation parameters.
-
-        This method handles both the digital frequency synthesis configuration and the
-        analog-domain Mix-Mode settings (Nyquist zone selection) based on the target frequency.
-
-        :param gen_index: The index of the target generator.
-        :param label: The modulation context, must be either 'drive' or 'readout'.
-        :param mod: A dictionary containing the modulation parameters (frequency in MHz, phase in degrees).
-        :return: A summary of the applied modulation configuration.
-        :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
-        """
-        return self._configure_modulation(label, gen_index, mod)
-
-    def set_nyquist_zone(self, gen_index: int, label: str, zone: int) -> dict:
-        """Set the Nyquist zone for a generator's modulation.
-
-        This method explicitly sets the Mix-Mode Nyquist zone for a generator's
-        drive or readout path. The zone determines which Nyquist band is used for
-        the analog Mix-Mode configuration in the RF frontend.
-
-        Note: The zone is set by configuring an appropriate frequency. For even zones,
-        a mixing mode frequency is used; for odd zones, the frequency is in the baseband.
-
-        :param gen_index: Index of the target generator.
-        :param label: Modulation context ('drive' or 'readout').
-        :param zone: Target Nyquist zone (typically 1 or 2).
-        :return: Summary of applied zone configuration.
-        """
-        self._ctx.logger.debug(
-            "set_nyquist_zone: gen=%d label=%s zone=%d",
-            gen_index,
-            label,
-            zone,
-        )
-
-        try:
-            try:
-                dac_nyquist_hz = self._ctx.ll.overlay_driver.hw_specs["summary"]["dac_nyquist_hz"]
-            except (KeyError, TypeError, AttributeError):
-                dac_nyquist_hz = 2.0e9  # Default 2 GHz Nyquist
-
-            freq_mhz = _compute_frequency_for_zone(zone, dac_nyquist_hz)
-
-            try:
-                mix_info = self._ctx.ll.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
-                result = {
-                    "gen_index": gen_index,
-                    "label": label,
-                    "nyquist_zone": mix_info.get("nyquist_zone", zone),
-                    "amd_zone": mix_info.get("amd_zone"),
-                }
-                if mix_info.get("nyquist_zone"):
-                    self._ctx.logger.debug(
-                        "Nyquist zone configured: Zone %d (AMD=%d) on tile=%d block=%d",
-                        mix_info["nyquist_zone"],
-                        mix_info.get("amd_zone"),
-                        mix_info.get("tile"),
-                        mix_info.get("block"),
-                    )
-                return result
-            except (AttributeError, TypeError, KeyError):
-                return {
-                    "gen_index": gen_index,
-                    "label": label,
-                    "nyquist_zone": zone,
-                    "status": "mocked",
-                }
-        except (ValueError, KeyError, AttributeError) as e:
-            self._ctx.logger.error(f"Failed to set Nyquist zone: {e}")
-            raise
 
 
 __all__ = ["ModulationOps"]
