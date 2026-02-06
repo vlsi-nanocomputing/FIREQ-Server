@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from server import ConfigurationError, OverlayAdapter
-from server.hardware.ol_adapter.generator.iq import iq_float_to_cint16
+from server.hardware.ol_adapter.generator.iq_conversion import iq_float_to_cint16
 
 try:
     from test.mock_hardware import MockOverlay
@@ -332,7 +332,7 @@ def test_run_multi_acquisition_single_adc(ctx: AdapterTestContext) -> None:
     # Consume iterator to get result
     results = list(
         ctx.adapter.acquisition.run_multi_acquisition(
-            adc_indices=[0],
+            acq_indices=[0],
             mode="raw",
             shots=10,
             samp_per_shot=100,
@@ -389,10 +389,10 @@ def test_run_multi_acquisition_multi_adc(ctx: AdapterTestContext) -> None:
     ctx.adapter.dma_engine.last_dma_wait_s = 0.001
     ctx.adapter.dma_engine.last_invalidate_s = 0.0001
 
-    # Run acquisition for both ADCs
+    # Run acquisition for both acquisition units
     results = list(
         ctx.adapter.acquisition.run_multi_acquisition(
-            adc_indices=[0, 1],
+            acq_indices=[0, 1],
             mode="raw",
             shots=10,
             samp_per_shot=100,
@@ -487,7 +487,7 @@ def test_run_multi_acquisition_dma_failure(ctx: AdapterTestContext) -> None:
     with pytest.raises(TimeoutError, match="DMA Timeout"):
         list(
             ctx.adapter.acquisition.run_multi_acquisition(
-                adc_indices=[0],
+                acq_indices=[0],
                 mode="raw",
                 shots=10,
                 samp_per_shot=100,
@@ -507,12 +507,12 @@ def test_sweep_lifecycle(ctx: AdapterTestContext) -> None:
     # Explicitly Mock the ACQ driver method (since it's a real function in mock_hardware)
     ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
 
-    adc_list = [0]
+    acq_list = [0]
 
     # 1. Preparation
     ctx.adapter.experiment.prepare_sweep(
         mode="decimated",
-        adc_indices=adc_list,
+        acq_indices=acq_list,
     )
 
     # Assert driver call
@@ -581,15 +581,15 @@ def test_run_multi_acquisition_shot_memoization(ctx: AdapterTestContext) -> None
     ctx.adapter.trigger.set_shots = MagicMock()
 
     # First call with 10 shots - should set trigger
-    list(ctx.adapter.acquisition.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=10, samp_per_shot=100))
     assert ctx.adapter.trigger.set_shots.call_count == 1
     ctx.adapter.trigger.set_shots.assert_called_with(10)
 
     # Second call with same shots - should NOT reconfigure
-    list(ctx.adapter.acquisition.run_multi_acquisition(adc_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=10, samp_per_shot=100))
     assert ctx.adapter.trigger.set_shots.call_count == 1  # Still 1
 
     # Third call with different shots - should reconfigure
-    list(ctx.adapter.acquisition.run_multi_acquisition(adc_indices=[0], mode="raw", shots=20, samp_per_shot=100))
+    list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=20, samp_per_shot=100))
     assert ctx.adapter.trigger.set_shots.call_count == 2
     ctx.adapter.trigger.set_shots.assert_called_with(20)

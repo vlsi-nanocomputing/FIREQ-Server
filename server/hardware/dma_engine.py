@@ -21,8 +21,8 @@ which MMIO registers to poke, how PYNQ behaves when DMA is wedged, how buffers
 must be aligned/allocated, or how firmware packs I/Q samples. This module centralizes those
 concerns and exposes a small, explicit contract:
 
-1) `AcquisitionEngine.arm_acquisition` to configure routing + allocate buffers + start DMA
-2) `AcquisitionEngine.retrieve_acquisition` to wait + recover on failure + parse output
+1) `DMAEngine.arm_acquisition` to configure routing + allocate buffers + start DMA
+2) `DMAEngine.retrieve_acquisition` to wait + recover on failure + parse output
 
 Invariants and assumptions
 --------------------------
@@ -71,7 +71,7 @@ from ..models.exceptions import DMAError, DMATimeoutError
 assert sys.byteorder == "little", "Zero-copy DMA parsing requires little-endian system"
 
 
-class AcquisitionEngine:
+class DMAEngine:
     """High-level manager for DMA acquisitions.
 
     The intended call sequence is:
@@ -859,4 +859,4 @@ class AcquisitionEngine:
         return buffer
 
 
-__all__ = ["AcquisitionEngine"]
+__all__ = ["DMAEngine"]

@@ -7,7 +7,7 @@ This package contains:
 - Custom exception hierarchy for hardware errors
 """
 
-from ..hardware.ol_adapter.types import (
+from ..hardware.ol_adapter.adapter_types import (
     EnvelopeSpec,
     WaveEntry,
     WaveKind,

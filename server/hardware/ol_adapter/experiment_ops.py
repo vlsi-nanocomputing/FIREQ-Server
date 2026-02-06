@@ -34,17 +34,17 @@ class ExperimentOps:
         """
         self._ctx = ctx
 
-    def prepare_sweep(self, mode: str, adc_indices: list[int]) -> None:
+    def prepare_sweep(self, mode: str, acq_indices: list[int]) -> None:
         """Prepare the experiment for sweep-mode operation.
 
         This configuration optimizes both acquisition and trigger hardware for
         multiple repeated experiments with consistent settings.
 
         :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
-        :param adc_indices: List of active ADC indices for the sweep.
+        :param acq_indices: List of active acquisition unit indices for the sweep.
         """
-        self._ctx.logger.debug("Preparing experiment for sweep mode: mode=%s, adc_indices=%s", mode, adc_indices)
-        self._ctx.acquisition.prepare_sweep(mode=mode, adc_indices=adc_indices)
+        self._ctx.logger.debug("Preparing experiment for sweep mode: mode=%s, acq_indices=%s", mode, acq_indices)
+        self._ctx.acquisition.prepare_sweep(mode=mode, acq_indices=acq_indices)
         self._ctx.logger.debug("Experiment sweep preparation complete")
 
     def end_sweep(self) -> None:

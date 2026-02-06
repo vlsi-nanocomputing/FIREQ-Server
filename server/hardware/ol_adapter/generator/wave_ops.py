@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from ....models.exceptions import ConfigurationError
+from ..adapter_types import WaveEntry
 from ..cache import get_wave_cache as _get_wave_cache_util
-from ..types import WaveEntry
-from .utils import (
+from .wave_utils import (
     build_wave_entry,
     check_readout_wave_cache,
     check_wave_replacement_policy,
@@ -166,7 +166,7 @@ class WaveOps:
         :param auto_pad: If True, auto-pad non-interpolated envelopes.
         :return: Processed envelope data.
         """
-        from . import utils as gu  # noqa: PLC0415
+        from . import wave_utils as gu  # noqa: PLC0415
 
         env, original_size = gu.process_envelope_samples(
             samples_iq, for_interp, int(gen.sample_size), int(gen.number_of_channels), auto_pad
@@ -196,7 +196,7 @@ class WaveOps:
         :param auto_pad_noninterp: If True, automatically zero-pads non-interpolated envelopes.
         :return: A summary dictionary containing lists of loaded, skipped, and failed names.
         """
-        from . import utils as gu  # noqa: PLC0415
+        from . import wave_utils as gu  # noqa: PLC0415
 
         self._ctx.logger.debug(
             "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s",

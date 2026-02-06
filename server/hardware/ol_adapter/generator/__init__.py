@@ -1,14 +1,17 @@
 """Generator control submodule.
 
 Organizes generator operations into focused components:
-- waves.py: Wave definition, compilation, envelope management
-- fifo.py: Drive sequence FIFO programming
-- modulation.py: DDS modulation and trigger configuration
-- ops.py: Main GeneratorOps orchestrator
+- wave_ops.py: Wave definition, compilation, envelope management
+- fifo_ops.py: Drive sequence FIFO programming
+- modulation_ops.py: DDS modulation and trigger configuration
+- trigger_listener_ops.py: Generator trigger listener configuration
+- wave_utils.py: Pure utility functions for wave compilation and envelope processing
+- iq_conversion.py: IQ signal conversion utilities
+- generator_ops.py: Main GeneratorOps facade
 
 The GeneratorOps class provides the public API.
 """
 
-from .ops import GeneratorOps
+from .generator_ops import GeneratorOps
 
 __all__ = ["GeneratorOps"]

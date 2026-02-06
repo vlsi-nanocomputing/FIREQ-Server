@@ -1,8 +1,8 @@
 """Adapter-specific types for hardware operation classes.
 
 This module contains data structures used by the OverlayAdapter for:
-- Wave definition and caching (WaveEntry)
 - Envelope specifications (EnvelopeSpec)
+- Wave definition and caching (WaveEntry)
 - Type aliases for wave kinds (WaveKind)
 
 These types are internal to the hardware adapter layer and represent
@@ -81,7 +81,7 @@ class WaveEntry:
     kind: WaveKind = "env"
     # --- env waves(X/Y/readout)
     envelope: str = ""
-    duration: int = 1
+    duration: int = 0
     gain: float = 0.0
     switch_iq: bool = False
     keep_last: bool = False

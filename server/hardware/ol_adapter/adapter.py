@@ -1,20 +1,19 @@
 """High-level composition-based adapter for FIREQ hardware.
 
-This module implements the OverlayAdapter using composition of operation classes
-instead of mixins, providing a cleaner, more maintainable architecture.
+This module implements the OverlayAdapter using composition of operation classes.
 """
 
 import logging
 from typing import Any
 
 from ...models.exceptions import HardwareStateError
-from ..dma_engine import AcquisitionEngine
+from ..dma_engine import DMAEngine
 from .acquisition import AcquisitionOps
 from .cache import AdapterContext, CacheContainers
-from .experiment import ExperimentOps
+from .experiment_ops import ExperimentOps
 from .generator import GeneratorOps
 from .ll_access import LowLevelAccess
-from .trigger import TriggerOps
+from .trigger_ops import TriggerOps
 
 
 class OverlayAdapter:
@@ -91,7 +90,7 @@ class OverlayAdapter:
             raise HardwareStateError("DMA or AXI-Stream switch missing in overlay")
 
         # The DMA engine is constructed once as a long-lived resource.
-        dma_engine = AcquisitionEngine(
+        dma_engine = DMAEngine(
             self.overlay_driver.dma,
             self.overlay_driver.axis_switch,
             logger=self.logger,

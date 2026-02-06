@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from ....models.config_types import Modulation
 from ....models.exceptions import ConfigurationError
-from . import utils as gu
+from . import wave_utils as gu
 
 if TYPE_CHECKING:
     from ..cache import AdapterContext

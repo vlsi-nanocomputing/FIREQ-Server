@@ -105,8 +105,8 @@ def stack() -> object:
 
             self.adapter.run_multi_acquisition = MagicMock(side_effect=run_multi_acquisition_side_effect)
 
-            # Mock _compute_max_hw_shots to return a high limit (no chunking by default)
-            self.adapter.acquisition._compute_max_hw_shots = MagicMock(return_value=999999)
+            # Mock compute_max_hw_shots on the DMAOrchestrator to return a high limit (no chunking)
+            self.adapter.acquisition._dma.compute_max_hw_shots = MagicMock(return_value=999999)
 
             # 4. Initialize Handler
             self.handler = MessageHandler(self.adapter)

@@ -7,14 +7,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .fifo import FIFOOps
-from .listener import TriggerListenerOps
-from .modulation import ModulationOps
-from .waves import WaveOps
+from .fifo_ops import FIFOOps
+from .modulation_ops import ModulationOps
+from .trigger_listener_ops import TriggerListenerOps
+from .wave_ops import WaveOps
 
 if TYPE_CHECKING:
+    from ..adapter_types import WaveEntry
     from ..cache import AdapterContext
-    from ..types import WaveEntry
 
 
 class GeneratorOps:

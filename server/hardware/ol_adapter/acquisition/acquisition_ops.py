@@ -1,7 +1,7 @@
 """Main orchestrator for acquisition operations.
 
 This module provides the AcquisitionOps class that coordinates all acquisition-related
-operations by delegating to specialized submodule classes (ExecutionOps, SweepOps,
+operations by delegating to specialized submodule classes (DMAOrchestrator, SweepOps,
 ModulationOps, TimingOps).
 """
 
@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 
 from ....models.config_types import Modulation, TriggerCommand
-from .execution import ExecutionOps
-from .modulation import ModulationOps
-from .sweep import SweepOps
-from .timing import TimingOps
+from .dma_orchestrator import DMAOrchestrator
+from .modulation_ops import ModulationOps
+from .sweep_ops import SweepOps
+from .timing_ops import TimingOps
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -28,7 +28,7 @@ class AcquisitionOps:
 
     This class handles all acquisition-related operations by orchestrating
     four specialized operation classes:
-    - ExecutionOps: DMA execution with chunking and pipelining
+    - DMAOrchestrator: DMA execution with chunking and pipelining
     - SweepOps: Sweep mode optimization and state management
     - ModulationOps: DDS modulation and trigger listener configuration
     - TimingOps: Time-of-flight and duration timing configuration
@@ -39,7 +39,7 @@ class AcquisitionOps:
     -----------
     _ctx : AdapterContext
         Shared context containing ll, cache, logger, dma_engine, trigger, and other dependencies.
-    _execution : ExecutionOps
+    _dma : DMAOrchestrator
         Handles DMA execution and chunking.
     _sweep : SweepOps
         Handles sweep mode preparation and finalization.
@@ -56,7 +56,7 @@ class AcquisitionOps:
         :type ctx: AdapterContext
         """
         self._ctx = ctx
-        self._execution = ExecutionOps(ctx)
+        self._dma = DMAOrchestrator(ctx)
         self._sweep = SweepOps(ctx)
         self._modulation = ModulationOps(ctx)
         self._timing = TimingOps(ctx)
@@ -66,18 +66,18 @@ class AcquisitionOps:
     def run_multi_acquisition(
         self,
         *,
-        adc_indices: list[int],
+        acq_indices: list[int],
         mode: Literal["raw", "decimated", "accumulated"],
         shots: int,
         samp_per_shot: int,
         timeout: float | None = 1.0,
         validate_chunk: bool = True,
     ) -> Iterator[dict[int, np.ndarray]]:
-        """Execute a multi-ADC acquisition with automatic hardware chunking.
+        """Execute a multi-acquisition with automatic hardware chunking.
 
-        Delegates to ExecutionOps.run_multi_acquisition().
+        Delegates to DMAOrchestrator.run_multi_acquisition().
 
-        :param adc_indices: List of ADC indices to acquire from.
+        :param acq_indices: List of acquisition unit indices to acquire from.
         :param mode: Acquisition mode.
         :param shots: Total number of shots to acquire.
         :param samp_per_shot: Number of samples per shot.
@@ -85,8 +85,8 @@ class AcquisitionOps:
         :param validate_chunk: If True, perform input validation and compute chunk sizes.
         :return: Iterator yielding data_dict for each chunk.
         """
-        return self._execution.run_multi_acquisition(
-            adc_indices=adc_indices,
+        return self._dma.run_multi_acquisition(
+            acq_indices=acq_indices,
             mode=mode,
             shots=shots,
             samp_per_shot=samp_per_shot,
@@ -96,15 +96,15 @@ class AcquisitionOps:
 
     # ========== Sweep Mode Delegation ==========
 
-    def prepare_sweep(self, mode: str, adc_indices: list[int]) -> None:
+    def prepare_sweep(self, mode: str, acq_indices: list[int]) -> None:
         """Prepare acquisition IPs and DMA engine for sweep-optimized execution.
 
         Delegates to SweepOps.prepare_sweep().
 
         :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
-        :param adc_indices: List of active ADC indices involved in the sweep.
+        :param acq_indices: List of active acquisition unit indices involved in the sweep.
         """
-        return self._sweep.prepare_sweep(mode, adc_indices)
+        return self._sweep.prepare_sweep(mode, acq_indices)
 
     def end_sweep(self) -> None:
         """Finalize the sweep execution and release DMA engine resources.

@@ -107,21 +107,20 @@ class MessageHandler:
             self._configure_trigger(config.get("trigger", {}), log)
 
             self._reset_dma_before_run()
-            adc_indices = self._normalize_acq_configs(config)
-            adc_indices, mode, shots, samp_per_shot, timeout = self._extract_acq_stream_params(config, adc_indices)
+            acq_indices = self._normalize_acq_configs(config)
+            acq_indices, mode, shots, samp_per_shot, timeout = self._extract_acq_stream_params(config, acq_indices)
 
             # Pre-calculate chunk count (same logic as sweep protocol)
             n_chunks = 1
-            if adc_indices and shots > 0:
+            if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._execution.compute_max_hw_shots(mode, samp_per_shot, adc)
-                    for adc in adc_indices
+                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, adc) for adc in acq_indices
                 )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
 
             # Yield header with n_chunks included (header_binary protocol)
             header_metadata = self._build_stream_metadata(
-                adc_indices,
+                acq_indices,
                 mode,
                 shots,
                 samp_per_shot,
@@ -133,9 +132,9 @@ class MessageHandler:
             yield StreamHeader(type="experiment_header", metadata=header_metadata)
 
             # Stream binary-only chunks (no per-chunk JSON)
-            if adc_indices:
+            if acq_indices:
                 for chunk in self._stream_acquisition_only(
-                    adc_indices=adc_indices,
+                    acq_indices=acq_indices,
                     mode=mode,
                     shots=shots,
                     samp_per_shot=samp_per_shot,
@@ -237,19 +236,18 @@ class MessageHandler:
 
             timing.setup_ms = (time.perf_counter() - t_setup_start) * 1000.0
 
-            adc_indices = self._normalize_acq_configs(current_config)
-            adc_indices, mode, shots, samp_per_shot, timeout = self._extract_acq_stream_params(
-                current_config, adc_indices
+            acq_indices = self._normalize_acq_configs(current_config)
+            acq_indices, mode, shots, samp_per_shot, timeout = self._extract_acq_stream_params(
+                current_config, acq_indices
             )
-            self.logger.debug(f"Extracted adc_indices={adc_indices}, mode={mode}, shots={shots}")
+            self.logger.debug(f"Extracted acq_indices={acq_indices}, mode={mode}, shots={shots}")
 
-            metadata_payload = self._build_stream_metadata(adc_indices, mode, shots, samp_per_shot)
+            metadata_payload = self._build_stream_metadata(acq_indices, mode, shots, samp_per_shot)
 
             # Compute chunks_per_point based on hardware buffer limits
-            if adc_indices and shots > 0:
+            if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._execution.compute_max_hw_shots(mode, samp_per_shot, adc)
-                    for adc in adc_indices
+                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, adc) for adc in acq_indices
                 )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
             else:
@@ -274,9 +272,9 @@ class MessageHandler:
             _n_timed = 0
 
             # Point 0 acquisition
-            if adc_indices:
+            if acq_indices:
                 for item in self._stream_sweep_point_items(
-                    adc_indices, mode, shots, samp_per_shot, timeout, validate=True
+                    acq_indices, mode, shots, samp_per_shot, timeout, validate=True
                 ):
                     if _has_timing:
                         stats = self.adapter.last_timing_stats
@@ -307,8 +305,8 @@ class MessageHandler:
             # Prepare fast-path for points 1+
             t_prepare_start = time.perf_counter()
 
-            if adc_indices:
-                self.adapter.experiment.prepare_sweep(mode, adc_indices)
+            if acq_indices:
+                self.adapter.experiment.prepare_sweep(mode, acq_indices)
 
             sweep_config = current_config
             if not plan.has_envelope_vars:
@@ -339,7 +337,7 @@ class MessageHandler:
                 apply_sweep_point(sweep_config, plan.var_paths_by_name, point)
                 self._apply_sweep_updates(sweep_config, plan.flags, tracker)
 
-                if adc_indices:
+                if acq_indices:
                     sh = int(sweep_config["trigger"]["shots"]) if plan.has_shots_var else fixed_shots
                     sp = (
                         int(sweep_config["acquisitions"][0]["duration"])
@@ -347,7 +345,7 @@ class MessageHandler:
                         else fixed_samp_per_shot
                     )
                     to = float(sweep_config["timeout"]) if plan.has_timeout_var else fixed_timeout
-                    for item in self._stream_sweep_point_items(adc_indices, fixed_mode, sh, sp, to, validate=False):
+                    for item in self._stream_sweep_point_items(acq_indices, fixed_mode, sh, sp, to, validate=False):
                         if _has_timing:
                             stats = self.adapter.last_timing_stats
                             _hw_ms += stats.get("fpga_wait_ms", 0.0)
@@ -613,7 +611,7 @@ class MessageHandler:
     def _stream_acquisition_only(
         self,
         *,
-        adc_indices: list[int],
+        acq_indices: list[int],
         mode: str,
         shots: int,
         samp_per_shot: int,
@@ -622,8 +620,8 @@ class MessageHandler:
     ) -> Iterator[dict[int, np.ndarray]]:
         """Stream acquisition chunks using run_multi_acquisition().
 
-        :param adc_indices: ADC indices to capture.
-        :type adc_indices: list[int]
+        :param acq_indices: ADC indices to capture.
+        :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
         :param shots: Number of shots.
@@ -637,11 +635,11 @@ class MessageHandler:
         :return: Iterator over data_dict.
         :rtype: Iterator[dict[int, np.ndarray]]
         """
-        if not adc_indices or shots <= 0:
+        if not acq_indices or shots <= 0:
             return
 
         yield from self.adapter.acquisition.run_multi_acquisition(
-            adc_indices=adc_indices,
+            acq_indices=acq_indices,
             mode=mode,
             shots=shots,
             samp_per_shot=samp_per_shot,
@@ -651,7 +649,7 @@ class MessageHandler:
 
     def _stream_sweep_point_items(
         self,
-        adc_indices: list[int],
+        acq_indices: list[int],
         mode: str,
         shots: int,
         samp_per_shot: int,
@@ -660,8 +658,8 @@ class MessageHandler:
     ) -> Iterator[BinaryChunk]:
         """Stream acquisition for one sweep point, yielding BinaryChunk items.
 
-        :param adc_indices: ADC indices to capture.
-        :type adc_indices: list[int]
+        :param acq_indices: ADC indices to capture.
+        :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
         :param shots: Number of shots.
@@ -676,7 +674,7 @@ class MessageHandler:
         :rtype: Iterator[BinaryChunk]
         """
         for chunk in self._stream_acquisition_only(
-            adc_indices=adc_indices,
+            acq_indices=acq_indices,
             mode=mode,
             shots=shots,
             samp_per_shot=samp_per_shot,
@@ -734,33 +732,33 @@ class MessageHandler:
     def _extract_acq_stream_params(
         self,
         config: dict,
-        adc_indices: list[int] | None = None,
+        acq_indices: list[int] | None = None,
     ) -> tuple[list[int], str, int, int, float]:
         """Extract acquisition stream parameters from config.
 
         :param config: Experiment configuration.
         :type config: dict
-        :param adc_indices: Optional precomputed ADC indices.
-        :type adc_indices: list[int] | None
-        :return: Tuple (adc_indices, mode, shots, samp_per_shot, timeout).
+        :param acq_indices: Optional precomputed ADC indices.
+        :type acq_indices: list[int] | None
+        :return: Tuple (acq_indices, mode, shots, samp_per_shot, timeout).
         :rtype: tuple[list[int], str, int, int, float]
         """
         acquisitions = config.get("acquisitions", [])
         if not acquisitions:
             return [], "decimated", 0, 0, float(config.get("timeout", 10.0))
 
-        if adc_indices is None:
-            adc_indices = [acq["acq_index"] for acq in acquisitions]
+        if acq_indices is None:
+            acq_indices = [acq["acq_index"] for acq in acquisitions]
         mode = acquisitions[0].get("output_type", "decimated")
         trigger_cfg = config.get("trigger", {})
         shots = int(trigger_cfg.get("shots", 1))
         samp_per_shot = int(acquisitions[0].get("duration", 256))
         timeout = float(config.get("timeout", 10.0))
-        return adc_indices, mode, shots, samp_per_shot, timeout
+        return acq_indices, mode, shots, samp_per_shot, timeout
 
     def _build_stream_metadata(
         self,
-        adc_indices: list[int],
+        acq_indices: list[int],
         mode: str,
         shots: int,
         samp_per_shot: int,
@@ -773,8 +771,8 @@ class MessageHandler:
     ) -> dict:
         """Build metadata payload emitted before streaming chunks.
 
-        :param adc_indices: ADC indices to capture.
-        :type adc_indices: list[int]
+        :param acq_indices: ADC indices to capture.
+        :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
         :param shots: Number of shots.
@@ -795,7 +793,7 @@ class MessageHandler:
         :rtype: dict
         """
         adc_metadata: dict[int, dict[str, object]] = {}
-        for adc_idx in adc_indices:
+        for adc_idx in acq_indices:
             shape = self._compute_expected_shape(mode, shots, samp_per_shot, adc_idx)
             dtype = "iq_int32" if mode == "accumulated" else "iq_int16"
             adc_metadata[adc_idx] = {"dtype": dtype, "shape": shape}

@@ -3,7 +3,7 @@
 
 This package provides:
 - OverlayAdapter: Server-facing composition-based adapter for FIREQ hardware
-- AcquisitionEngine: High-level DMA acquisition manager
+- DMAEngine: High-level DMA acquisition manager
 - Data structures: WaveEntry, Modulation, TriggerCommand, EnvelopeSpec
 
 The OverlayAdapter composes four operation classes:
@@ -14,13 +14,13 @@ The OverlayAdapter composes four operation classes:
 """
 
 from ..models.config_types import Modulation, TriggerCommand
-from .dma_engine import AcquisitionEngine
+from .dma_engine import DMAEngine
 from .ol_adapter import OverlayAdapter
-from .ol_adapter.types import EnvelopeSpec, WaveEntry
+from .ol_adapter.adapter_types import EnvelopeSpec, WaveEntry
 
 __all__ = [
     "OverlayAdapter",
-    "AcquisitionEngine",
+    "DMAEngine",
     # Re-export from types for backwards compatibility
     "WaveEntry",
     "Modulation",

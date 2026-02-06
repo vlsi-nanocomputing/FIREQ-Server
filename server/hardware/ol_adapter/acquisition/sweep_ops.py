@@ -36,23 +36,23 @@ class SweepOps:
         """
         self._ctx = ctx
 
-    def prepare_sweep(self, mode: str, adc_indices: list[int]) -> None:
+    def prepare_sweep(self, mode: str, acq_indices: list[int]) -> None:
         """Prepare acquisition IPs and DMA engine for sweep-optimized execution.
 
         This configuration locks the acquisition hardware into the specified mode to
         guarantee invariant behavior across the sweep duration.
 
         :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
-        :param adc_indices: List of active ADC indices involved in the sweep.
+        :param acq_indices: List of active acquisition unit indices involved in the sweep.
         """
         # Pre-config acquisition IPs
-        for adc_index in adc_indices:
-            acq = self._ctx.ll.get_acq(adc_index)
+        for acq_index in acq_indices:
+            acq = self._ctx.ll.get_acq(acq_index)
             if mode in ("decimated", "accumulated"):
                 acq.set_decimated_output_type(mode)
 
-        # Update active ADCs - frees buffers for ADCs not in use
-        self._ctx.dma_engine.set_active_adcs(adc_indices)
+        # Update active acquisition units - frees buffers for units not in use
+        self._ctx.dma_engine.set_active_adcs(acq_indices)
 
         # Prepare DMA engine
         self._ctx.dma_engine.prepare_sweep(mode)

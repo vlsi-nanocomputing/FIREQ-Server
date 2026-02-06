@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from ....models.exceptions import ConfigurationError
-from . import utils as gu
+from . import wave_utils as gu
 
 if TYPE_CHECKING:
     from ..cache import AdapterContext
@@ -74,7 +74,7 @@ class FIFOOps:
         :return: A dictionary containing the updated FIFO sequence.
         """
         # Import here to avoid circular dependency
-        from .waves import WaveOps  # noqa: PLC0415
+        from .wave_ops import WaveOps  # noqa: PLC0415
 
         self._ctx.logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
 

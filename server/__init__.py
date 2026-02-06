@@ -5,7 +5,7 @@ class for the FIREQ system.
 """
 
 from .execution.message_handler import MessageHandler
-from .hardware import AcquisitionEngine, OverlayAdapter
+from .hardware import DMAEngine, OverlayAdapter
 from .models import EnvelopeSpec, Modulation, TriggerCommand, WaveEntry
 from .models.exceptions import (
     ConfigurationError,
@@ -27,7 +27,7 @@ __all__ = [
     "FIREQServer",
     # Adapters and Engines
     "OverlayAdapter",
-    "AcquisitionEngine",
+    "DMAEngine",
     "MessageHandler",
     # Data Structures & Enums
     "WaveEntry",

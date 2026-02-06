@@ -17,10 +17,10 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .types import WaveEntry
+from .adapter_types import WaveEntry
 
 if TYPE_CHECKING:
-    from ..dma_engine import AcquisitionEngine
+    from ..dma_engine import DMAEngine
     from .ll_access import LowLevelAccess
 
 
@@ -94,7 +94,7 @@ class AdapterContext:
         Shared cache containers for all state.
     logger : logging.Logger
         Logger instance for debug/error reporting.
-    dma_engine : AcquisitionEngine
+    dma_engine : DMAEngine
         DMA orchestration engine for multi-ADC acquisition.
     trigger : object | None
         Reference to TriggerOps instance (set after initialization for cross-dependency).
@@ -108,7 +108,7 @@ class AdapterContext:
     ll: LowLevelAccess  # type: ignore  # noqa: F821
     cache: CacheContainers
     logger: logging.Logger
-    dma_engine: AcquisitionEngine  # type: ignore  # noqa: F821
+    dma_engine: DMAEngine  # type: ignore  # noqa: F821
     trigger: object | None = None
     generator: object | None = None
     acquisition: object | None = None
