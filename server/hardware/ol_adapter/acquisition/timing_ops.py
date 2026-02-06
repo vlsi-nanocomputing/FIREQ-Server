@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
 
 class TimingOps:
-    """Operation class for acquisition timing configuration.
+    """Acquisition timing configuration.
 
     Handles timing parameters including:
     - Time-of-flight (delay before acquisition starts)

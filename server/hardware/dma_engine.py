@@ -3,7 +3,7 @@
 
 Purpose
 -------
-This module provides a *high-level*, review-oriented abstraction for FPGA data acquisition
+This module provides a *high-level*, abstraction for FPGA data acquisition
 using a Xilinx AXI DMA controlled through PYNQ.
 
 It exists to isolate hardware-coupled acquisition into one place:

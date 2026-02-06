@@ -25,10 +25,10 @@ if TYPE_CHECKING:
 
 
 class AcquisitionOps:
-    """Operation class for DMA acquisition control.
+    """DMA acquisition control facade.
 
-    This class handles all acquisition-related operations by orchestrating
-    five specialized operation classes:
+    Orchestrates five specialized operation classes:
+
     - DMAOrchestrator: DMA execution with chunking and pipelining
     - SweepOps: Sweep mode optimization and state management
     - ModulationOps: DDS modulation and Mix-Mode configuration

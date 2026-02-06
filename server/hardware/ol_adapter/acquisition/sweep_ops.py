@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 class SweepOps:
-    """Operation class for sweep mode management.
+    """Sweep mode management.
 
     Handles sweep-specific optimizations including:
     - Pre-configuration of acquisition hardware for mode invariance

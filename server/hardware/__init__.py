@@ -8,7 +8,7 @@ This package provides:
 
 The OverlayAdapter composes four operation classes:
 - GeneratorOps: Wave management and generator modulation/triggering
-- TriggerOps: Trigger generator control
+- TriggerGeneratorOps: Trigger generator control
 - AcquisitionOps: DMA-based multi-ADC acquisition with chunking
 - ExperimentOps: High-level experiment orchestration
 """
@@ -16,7 +16,7 @@ The OverlayAdapter composes four operation classes:
 from ..models.config_types import Modulation, TriggerCommand
 from .dma_engine import DMAEngine
 from .ol_adapter import OverlayAdapter
-from .ol_adapter.adapter_types import EnvelopeSpec, WaveEntry
+from .ol_adapter.overlay_adapter_types import EnvelopeSpec, WaveEntry
 
 __all__ = [
     "OverlayAdapter",

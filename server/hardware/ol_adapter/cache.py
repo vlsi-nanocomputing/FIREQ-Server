@@ -17,11 +17,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .adapter_types import WaveEntry
+from .overlay_adapter_types import WaveEntry
 
 if TYPE_CHECKING:
     from ..dma_engine import DMAEngine
-    from .ll_access import LowLevelAccess
+    from .low_level_access import LowLevelAccess
 
 
 @dataclass
@@ -97,7 +97,7 @@ class AdapterContext:
     dma_engine : DMAEngine
         DMA orchestration engine for multi-ADC acquisition.
     trigger : object | None
-        Reference to TriggerOps instance (set after initialization for cross-dependency).
+        Reference to TriggerGeneratorOps instance (set after initialization for cross-dependency).
     generator : object | None
         Reference to GeneratorOps instance (set after initialization for cross-dependency).
     acquisition : object | None
@@ -115,10 +115,7 @@ class AdapterContext:
 
 
 def get_wave_cache(cache: CacheContainers, gen_index: int) -> dict[str, WaveEntry]:
-    """Retrieve the High-Level wave cache for a specific generator.
-
-    This utility employs lazy initialization: if the cache for the requested
-    generator does not exist, an empty dictionary is created, stored, and returned.
+    """Retrieve the HL wave cache for a generator (lazy-initialized).
 
     :param cache: The cache containers object.
     :param gen_index: Index of the target generator.
@@ -131,34 +128,8 @@ def get_wave_cache(cache: CacheContainers, gen_index: int) -> dict[str, WaveEntr
     return wave_cache
 
 
-def reset_cache_for_generator(cache: CacheContainers, gen_index: int) -> None:
-    """Reset all cache entries for a specific generator.
-
-    Clears wave memory, envelope cache, FIFO tracking, and readout configuration.
-
-    :param cache: The cache containers object.
-    :param gen_index: Index of the target generator.
-    """
-    cache.wave_store.pop(gen_index, None)
-    cache.last_fifo.pop(gen_index, None)
-    cache.readout_wave_store.pop(gen_index, None)
-
-
-def reset_sweep_state(cache: CacheContainers) -> None:
-    """Reset sweep mode state and associated memoization.
-
-    Called when transitioning out of sweep mode.
-
-    :param cache: The cache containers object.
-    """
-    cache.sweep_prepared = False
-    cache.last_hw_shots = None
-
-
 __all__ = [
     "AdapterContext",
     "CacheContainers",
     "get_wave_cache",
-    "reset_cache_for_generator",
-    "reset_sweep_state",
 ]

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class ModulationOps:
-    """Operation class for acquisition DDS modulation configuration."""
+    """Acquisition DDS modulation configuration."""
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
         """Initialize ModulationOps.

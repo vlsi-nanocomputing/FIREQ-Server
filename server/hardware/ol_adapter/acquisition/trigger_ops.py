@@ -3,9 +3,8 @@
 This module handles:
 - Acquisition trigger channel assignment
 
-Note: This handles acquisition-side trigger configuration (which trigger channel
-to respond to). This is distinct from the global TriggerOps class which controls
-the TriggerGenerator IP.
+Configures which trigger channel each acquisition unit responds to.
+Not to be confused with TriggerGeneratorOps (trigger generator IP control).
 """
 
 from __future__ import annotations

@@ -4,7 +4,6 @@ This module implements the OverlayAdapter using composition of operation classes
 """
 
 import logging
-from typing import Any
 
 from ...models.exceptions import HardwareStateError
 from ..dma_engine import DMAEngine
@@ -12,8 +11,8 @@ from .acquisition import AcquisitionOps
 from .cache import AdapterContext, CacheContainers
 from .experiment_ops import ExperimentOps
 from .generator import GeneratorOps
-from .ll_access import LowLevelAccess
-from .trigger_ops import TriggerOps
+from .low_level_access import LowLevelAccess
+from .trigger_generator_ops import TriggerGeneratorOps
 
 
 class OverlayAdapter:
@@ -22,7 +21,7 @@ class OverlayAdapter:
     This class composes four operation classes to provide a server-facing
     interface on top of the low-level FIREQ hardware drivers:
     - GeneratorOps: Wave management and generator modulation
-    - TriggerOps: Trigger generator control
+    - TriggerGeneratorOps: Trigger generator control
     - AcquisitionOps: DMA acquisition execution
     - ExperimentOps: High-level experiment orchestration
 
@@ -58,7 +57,7 @@ class OverlayAdapter:
     ----------
     generator : GeneratorOps
         Wave and generator modulation operations.
-    trigger : TriggerOps
+    trigger : TriggerGeneratorOps
         Trigger generator operations.
     acquisition : AcquisitionOps
         DMA acquisition operations.
@@ -108,7 +107,7 @@ class OverlayAdapter:
         )
 
         # Compose operation classes with single context parameter
-        self.trigger = TriggerOps(self._ctx)
+        self.trigger = TriggerGeneratorOps(self._ctx)
         self.generator = GeneratorOps(self._ctx)
         self.acquisition = AcquisitionOps(self._ctx)
         self.experiment = ExperimentOps(self._ctx)
@@ -119,27 +118,6 @@ class OverlayAdapter:
         self._ctx.trigger = self.trigger
         self._ctx.generator = self.generator
         self._ctx.acquisition = self.acquisition
-
-    # ========== Proxy Pattern for Driver Access ==========
-
-    def _call(self, obj: object, method_name: str, *args: Any, **kwargs: Any) -> int:  # noqa: ANN401
-        """Unified error handling wrapper for low-level driver calls.
-
-        This method delegates to the LowLevelAccess helper for consistent
-        error translation and handling.
-
-        :param obj: The hardware object to call the method on.
-        :type obj: object
-        :param method_name: The name of the method to call.
-        :type method_name: str
-        :param args: Positional arguments to pass to the method.
-        :type args: tuple
-        :param kwargs: Keyword arguments to pass to the method.
-        :type kwargs: dict
-        :return: The return code from the method call.
-        :rtype: int
-        """
-        return self._ctx.ll.call(obj, method_name, *args, **kwargs)
 
     def __getattr__(self, name: str) -> object:
         """Delegate attribute access to the underlying low-level overlay driver.

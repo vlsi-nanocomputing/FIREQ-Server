@@ -17,7 +17,7 @@ Architecture
 ------------
 The OverlayAdapter uses composition to integrate four operation classes:
 - GeneratorOps: Wave management, envelope upload, FIFO programming
-- TriggerOps: Trigger generator configuration and execution
+- TriggerGeneratorOps: Trigger generator configuration and execution
 - AcquisitionOps: DMA-based acquisition with chunking and sweep optimization
 - ExperimentOps: High-level multi-acquisition orchestration
 
@@ -28,6 +28,6 @@ Key design principles
 - Expose JSON-serializable outputs suitable for logging and remote control.
 """
 
-from .adapter import OverlayAdapter
+from .overlay_adapter import OverlayAdapter
 
 __all__ = ["OverlayAdapter"]

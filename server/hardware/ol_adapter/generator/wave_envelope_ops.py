@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..adapter_types import WaveEntry
 from ..cache import get_wave_cache as _get_wave_cache_util
+from ..overlay_adapter_types import WaveEntry
 from .wave_utils import (
     build_wave_entry,
     check_readout_wave_cache,

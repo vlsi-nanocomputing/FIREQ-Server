@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from ....models.exceptions import ConfigurationError
-from ..adapter_types import WaveEntry
+from ..overlay_adapter_types import WaveEntry
 
 if TYPE_CHECKING:
     from ..cache import AdapterContext

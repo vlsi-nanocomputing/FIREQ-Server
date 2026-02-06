@@ -1,6 +1,6 @@
 """Trigger generator operations for OverlayAdapter.
 
-This module provides the TriggerOps class that handles:
+This module provides the TriggerGeneratorOps class that handles:
 - Trigger generator shots configuration
 - Experiment duration settings
 - Drive and readout delay programming
@@ -17,11 +17,8 @@ if TYPE_CHECKING:
     from .cache import AdapterContext
 
 
-class TriggerOps:
-    """Operation class for trigger generator control.
-
-    This class handles all trigger-related hardware operations, including
-    shot configuration, timing delays, and experiment execution.
+class TriggerGeneratorOps:
+    """Trigger generator control: shots, timing delays, and experiment execution.
 
     Attributes:
     -----------
@@ -30,12 +27,16 @@ class TriggerOps:
     """
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
-        """Initialize the TriggerOps class.
+        """Initialize the TriggerGeneratorOps class.
 
         :param ctx: Shared adapter context with all dependencies.
         :type ctx: AdapterContext
         """
         self._ctx = ctx
+
+    # ========================================================================
+    # PUBLIC METHODS
+    # ========================================================================
 
     def set_shots(self, shots: int) -> dict:
         """Set the number of hardware repetitions (shots) for the trigger generator.
@@ -55,9 +56,7 @@ class TriggerOps:
         return {"shots": shots}
 
     def set_duration(self, duration_cycles: int) -> dict:
-        """Set the total duration of the experiment in clock cycles.
-
-        This parameter defines the repetition period of the global trigger sequence.
+        """Set the experiment duration (repetition period) in clock cycles.
 
         :param duration_cycles: The duration of the experiment in FPGA clock cycles.
         :type duration_cycles: int
@@ -114,8 +113,47 @@ class TriggerOps:
         if start_idx < 1 or start_idx > int(trigger_device.channel_fifo_depth):
             raise ConfigurationError(f"drive_start_index={start_idx} out of range")
 
-        # --- readout delays (1 scalar per channel)
-        readout_programmed = []
+        readout_programmed = self._program_readout_delays(trigger_device, readout)
+        drive_report = self._program_drive_delays(trigger_device, drive, start_idx)
+
+        self._ctx.logger.debug(
+            "program_delays: DONE readout_channels=%s drive_report=%s",
+            sorted(readout_programmed),
+            drive_report,
+        )
+        return {
+            "readout_channels_programmed": sorted(readout_programmed),
+            "drive_programmed": drive_report,
+        }
+
+    def trigger_experiment(self) -> None:
+        """Trigger the experiment."""
+        trigger = self._ctx.ll.get_trig()
+        trigger.start_experiment()
+
+    def reset_drive_tracking(self) -> None:
+        """Reset the high-water-mark tracking for drive FIFOs.
+
+        Forces a full FIFO clear on the next ``program_delays`` call.
+        """
+        self._ctx.cache.trigger_drive_fifo_hwm.clear()
+        self._ctx.logger.debug("reset_drive_tracking: cleared HWM state")
+
+    # ========================================================================
+    # INTERNAL HELPERS
+    # ========================================================================
+
+    def _program_readout_delays(self, trigger_device: object, readout: dict) -> list[int]:
+        """Program readout delay for each channel.
+
+        :param trigger_device: The low-level trigger generator driver.
+        :type trigger_device: object
+        :param readout: Dictionary mapping channel indices to delay specs.
+        :type readout: dict
+        :return: List of programmed readout channel indices.
+        :rtype: list[int]
+        """
+        programmed = []
         for channel_key, spec in readout.items():
             channel = int(channel_key)
             if not (isinstance(spec, dict) and "delay" in spec):
@@ -133,10 +171,22 @@ class TriggerOps:
                 driver_name="TriggerGeneratorDriver",
                 config_error=True,
             )
-            readout_programmed.append(channel)
+            programmed.append(channel)
+        return programmed
 
-        # --- drive FIFO entries
-        drive_report = {}
+    def _program_drive_delays(self, trigger_device: object, drive: dict, start_idx: int) -> dict:
+        """Program drive FIFO entries for each channel with lazy cleanup.
+
+        :param trigger_device: The low-level trigger generator driver.
+        :type trigger_device: object
+        :param drive: Dictionary mapping channel indices to delay specs.
+        :type drive: dict
+        :param start_idx: FIFO index to start writing (1-based).
+        :type start_idx: int
+        :return: Report dictionary mapping channels to programming summaries.
+        :rtype: dict
+        """
+        report = {}
         for channel_key, spec in drive.items():
             channel = int(channel_key)
             if not (isinstance(spec, dict) and "delay" in spec):
@@ -180,8 +230,7 @@ class TriggerOps:
                     config_error=True,
                 )
 
-            # Lazy FIFO cleanup: only clear slots that previously contained data.
-            # This optimization avoids thousands of unnecessary AXI transactions during sweeps.
+            # Only clear slots that previously contained data (avoids unnecessary AXI transactions).
             new_high_water_mark = start_idx + len(entries_list) - 1  # last written index (1-based)
             previous_high_water_mark = self._ctx.cache.trigger_drive_fifo_hwm.get(channel, 0)
 
@@ -201,36 +250,13 @@ class TriggerOps:
             # Update the high water mark for this channel
             self._ctx.cache.trigger_drive_fifo_hwm[channel] = new_high_water_mark
 
-            drive_report[channel] = {
+            report[channel] = {
                 "start_index": start_idx,
                 "n_entries": len(entries_list),
                 "padded": cleared_count,
             }
 
-        self._ctx.logger.debug(
-            "program_delays: DONE readout_channels=%s drive_report=%s",
-            sorted(readout_programmed),
-            drive_report,
-        )
-        return {
-            "readout_channels_programmed": sorted(readout_programmed),
-            "drive_programmed": drive_report,
-        }
-
-    def trigger_experiment(self) -> None:
-        """Trigger the experiment."""
-        trigger = self._ctx.ll.get_trig()
-        trigger.start_experiment()
-
-    def reset_drive_tracking(self) -> None:
-        """Reset the high water mark tracking for trigger generator drive FIFOs.
-
-        Call this after a hardware reset or when you want to force a full FIFO clear
-        on the next program_delays call. This is useful when the FIFO state is
-        unknown or when switching between different experiment configurations.
-        """
-        self._ctx.cache.trigger_drive_fifo_hwm.clear()
-        self._ctx.logger.debug("reset_drive_tracking: cleared HWM state")
+        return report
 
 
-__all__ = ["TriggerOps"]
+__all__ = ["TriggerGeneratorOps"]

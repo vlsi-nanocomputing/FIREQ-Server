@@ -15,10 +15,7 @@ if TYPE_CHECKING:
 
 
 class ExperimentOps:
-    """Operation class for high-level experiment coordination.
-
-    This class provides experiment-level orchestration, coordinating between
-    trigger, generator, and acquisition operations.
+    """High-level experiment coordination across trigger, generator, and acquisition.
 
     Attributes:
     -----------

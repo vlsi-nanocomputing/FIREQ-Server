@@ -13,8 +13,8 @@ from .trigger_ops import TriggerOps
 from .wave_envelope_ops import WaveEnvelopeOps
 
 if TYPE_CHECKING:
-    from ..adapter_types import WaveEntry
     from ..cache import AdapterContext
+    from ..overlay_adapter_types import WaveEntry
 
 
 class GeneratorOps:

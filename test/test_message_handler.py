@@ -41,8 +41,7 @@ def stack() -> object:
                 timeout: object = None,
                 skip_timeout: bool = False,
             ) -> np.ndarray:
-                # Return compact I/Q format (structured array)
-                # Note: In tests, we create dummy data; real shape comes from buffer
+                # Return compact I/Q format (structured array with dummy data)
                 dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
                 data = np.zeros((10, 256), dtype=dtype)
                 return data
@@ -444,9 +443,7 @@ class TestRobustness:
         """
         config = {"generators": [{"gen_index": 99, "drive": {"frequency_mhz": 100.0}}]}
 
-        # Simulate the adapter crashing due to invalid index
-        # Note: Even if MockHardware allows it, we enforce the crash via Mock side_effect
-        # to test the handler's reaction to such an event.
+        # Force the adapter to crash on invalid index
         stack.adapter.generator.set_modulation = MagicMock(side_effect=IndexError("Generator 99 out of range"))
 
         # run() is a generator - consume it

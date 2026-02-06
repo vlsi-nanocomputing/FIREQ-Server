@@ -14,10 +14,8 @@ from .errors import ERROR_HINTS, handle_error_result
 
 
 class LowLevelAccess:
-    """Unified interface for accessing low-level drivers with error handling.
+    """Unified interface for accessing low-level FIREQ_SoC drivers with error handling.
 
-    This class provides safe access to the underlying FIREQ_SoC drivers,
-    ensuring that:
     - Invalid indices raise ConfigurationError immediately
     - All driver return codes are normalized through handle_error_result
     - Hardware specifications are accessible in a standard format

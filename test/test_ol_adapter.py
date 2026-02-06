@@ -68,7 +68,6 @@ def ctx() -> AdapterTestContext:
 
     adapter = OverlayAdapter(mock_ol)
     # Mock DMA engine for chunking tests
-    # Note: With AdapterContext pattern, DMA engine is accessed through context
     mock_dma = MagicMock()
     mock_dma.set_active_adcs = MagicMock(return_value=None)
     mock_dma.prepare_sweep = MagicMock(return_value=None)

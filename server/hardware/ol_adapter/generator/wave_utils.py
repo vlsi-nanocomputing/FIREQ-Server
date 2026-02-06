@@ -11,7 +11,7 @@ This module provides pure functions used by WaveEnvelopeOps:
 import numpy as np
 
 from ....models.exceptions import ConfigurationError
-from ..adapter_types import WaveEntry, same_spec
+from ..overlay_adapter_types import WaveEntry, same_spec
 from .iq_conversion import iq_float_to_cint16
 
 # =============================================================================

@@ -16,10 +16,10 @@ if TYPE_CHECKING:
 
 
 class TriggerOps:
-    """Generator trigger configuration.
+    """Generator-side trigger listener configuration.
 
-    Note: This handles generator-side trigger configuration (which trigger to respond to).
-    This is distinct from the global TriggerOps class which controls the TriggerGenerator IP.
+    Configures which trigger channel each generator responds to.
+    Not to be confused with TriggerGeneratorOps (trigger generator IP control).
     """
 
     def __init__(self, ctx: AdapterContext) -> None:  # type: ignore  # noqa: F821
