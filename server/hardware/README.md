@@ -9,7 +9,7 @@ hardware/
  ├── ol_adapter/          – OverlayAdapter: server-facing adapter (composition-based)
  │    ├── generator/      – wave, envelope, FIFO, modulation operations
  │    └── acquisition/    – DMA acquisition, sweep, timing operations
- └── dma_engine.py        – low-level DMA buffer management and I/Q unpacking
+ └── dma_engine.py        – low-level DMA buffer management
 ```
 
 ## Files

@@ -38,7 +38,7 @@ OverlayAdapter
 
 ## Note on `trigger_ops.py` naming
 
-Two subpackage files share the name `trigger_ops.py` — this is intentional, as they handle trigger *listener* configuration at different levels. The root-level file has a distinct name to clarify it controls the Trigger Generator IP itself.
+Two subpackage files share the name `trigger_ops.py` — this is intentional, as they handle which trigger channel the Acquisition IP and Generator IP should listen to, respectively. The root-level file `trigger_generator_ops.py` controls the Trigger Generator IP itself.
 
 | Location | Class | Controls |
 |----------|-------|----------|
