@@ -21,7 +21,7 @@ from .overlay_adapter_types import WaveEntry
 
 if TYPE_CHECKING:
     from ..dma_engine import DMAEngine
-    from .low_level_access import LowLevelAccess
+    from ._low_level_access import LowLevelAccess
 
 
 @dataclass

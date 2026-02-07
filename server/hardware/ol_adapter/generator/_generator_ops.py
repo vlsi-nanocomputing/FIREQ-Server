@@ -7,13 +7,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .fifo_ops import FIFOOps
-from .modulation_ops import ModulationOps
-from .trigger_ops import TriggerOps
-from .wave_envelope_ops import WaveEnvelopeOps
+from ._fifo_ops import FIFOOps
+from ._modulation_ops import ModulationOps
+from ._trigger_ops import TriggerOps
+from ._wave_envelope_ops import WaveEnvelopeOps
 
 if TYPE_CHECKING:
-    from ..cache import AdapterContext
+    from .._cache import AdapterContext
     from ..overlay_adapter_types import WaveEntry
 
 

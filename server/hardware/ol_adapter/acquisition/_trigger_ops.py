@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from ....models.config_types import TriggerCommand
 
 if TYPE_CHECKING:
-    from .cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 class TriggerOps:

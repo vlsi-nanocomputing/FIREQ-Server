@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from ...models.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    from .cache import AdapterContext
+    from ._cache import AdapterContext
 
 
 class TriggerGeneratorOps:

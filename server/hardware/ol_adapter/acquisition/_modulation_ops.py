@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from ....models.config_types import Modulation
 
 if TYPE_CHECKING:
-    from .cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 class ModulationOps:

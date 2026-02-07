@@ -13,7 +13,7 @@ from ....models.config_types import Modulation
 from ....models.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    from ..cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 # =============================================================================

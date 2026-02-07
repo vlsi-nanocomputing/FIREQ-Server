@@ -12,7 +12,7 @@ import numpy as np
 
 from ....models.exceptions import ConfigurationError
 from ..overlay_adapter_types import WaveEntry, same_spec
-from .iq_conversion import iq_float_to_cint16
+from ._iq_conversion import iq_float_to_cint16
 
 # =============================================================================
 # Wave Entry Construction

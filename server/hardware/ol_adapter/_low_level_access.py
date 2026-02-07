@@ -10,7 +10,7 @@ integrated error handling and validation, including:
 import logging
 
 from ...models.exceptions import ConfigurationError
-from .errors import ERROR_HINTS, handle_error_result
+from ._errors import ERROR_HINTS, handle_error_result
 
 
 class LowLevelAccess:

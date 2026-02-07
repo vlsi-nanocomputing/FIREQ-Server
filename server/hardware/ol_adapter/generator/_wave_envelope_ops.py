@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..cache import get_wave_cache as _get_wave_cache_util
+from .._cache import get_wave_cache as _get_wave_cache_util
 from ..overlay_adapter_types import WaveEntry
-from .wave_utils import (
+from ._wave_utils import (
     build_wave_entry,
     check_readout_wave_cache,
     check_wave_replacement_policy,
@@ -23,7 +23,7 @@ from .wave_utils import (
 )
 
 if TYPE_CHECKING:
-    from ..cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 class WaveEnvelopeOps:

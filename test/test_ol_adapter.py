@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from server import ConfigurationError, OverlayAdapter
-from server.hardware.ol_adapter.generator.iq_conversion import iq_float_to_cint16
+from server.hardware.ol_adapter.generator._iq_conversion import iq_float_to_cint16
 
 try:
     from test.mock_hardware import MockOverlay

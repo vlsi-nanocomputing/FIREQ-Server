@@ -33,14 +33,14 @@ class StreamHeader:
 
 @dataclass
 class BinaryChunk:
-    """Binary data chunk - sender calls _send_binary_frame() for each ADC.
+    """Binary data chunk - sender calls _send_binary_frame() for each Acq IP.
 
     The binary_data arrays are already copied in ol_adapter.py:2241,2264
     to avoid race conditions between main and sender threads.
 
     :param type: Message type ("experiment_binary_chunk" or "sweep_binary_point").
     :type type: str
-    :param binary_data: Mapping of ADC index to numpy array data.
+    :param binary_data: Mapping of Acq IP index to numpy array data.
     :type binary_data: dict[int, np.ndarray]
     :param timing: Optional (fpga_wait_ms, sw_overhead_ms) for experiments.
     :type timing: tuple[float, float] | None

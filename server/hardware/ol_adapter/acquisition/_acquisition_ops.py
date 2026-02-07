@@ -10,18 +10,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from ....models.config_types import Modulation, TriggerCommand
-from .dma_orchestrator import DMAOrchestrator
-from .modulation_ops import ModulationOps
-from .sweep_ops import SweepOps
-from .timing_ops import TimingOps
-from .trigger_ops import TriggerOps
+from ._dma_orchestrator import DMAOrchestrator
+from ._modulation_ops import ModulationOps
+from ._sweep_ops import SweepOps
+from ._timing_ops import TimingOps
+from ._trigger_ops import TriggerOps
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
     import numpy as np
 
-    from .cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 class AcquisitionOps:
@@ -39,7 +39,7 @@ class AcquisitionOps:
 
     Attributes:
     -----------
-    _dma : DMAOrchestrator
+    dma : DMAOrchestrator
         Handles DMA execution and chunking.
     _sweep : SweepOps
         Handles sweep mode preparation and finalization.
@@ -57,7 +57,7 @@ class AcquisitionOps:
         :param ctx: Shared adapter context with all dependencies.
         :type ctx: AdapterContext
         """
-        self._dma = DMAOrchestrator(ctx)
+        self.dma = DMAOrchestrator(ctx)
         self._sweep = SweepOps(ctx)
         self._modulation = ModulationOps(ctx)
         self._trigger = TriggerOps(ctx)
@@ -87,7 +87,7 @@ class AcquisitionOps:
         :param validate_chunk: If True, perform input validation and compute chunk sizes.
         :return: Iterator yielding data_dict for each chunk.
         """
-        return self._dma.run_multi_acquisition(
+        return self.dma.run_multi_acquisition(
             acq_indices=acq_indices,
             mode=mode,
             shots=shots,

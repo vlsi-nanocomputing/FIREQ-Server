@@ -21,7 +21,7 @@ import numpy as np
 from ....models.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    from .cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 class DMAOrchestrator:

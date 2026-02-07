@@ -7,12 +7,12 @@ import logging
 
 from ...models.exceptions import HardwareStateError
 from ..dma_engine import DMAEngine
+from ._cache import AdapterContext, CacheContainers
+from ._experiment_ops import ExperimentOps
+from ._low_level_access import LowLevelAccess
+from ._trigger_generator_ops import TriggerGeneratorOps
 from .acquisition import AcquisitionOps
-from .cache import AdapterContext, CacheContainers
-from .experiment_ops import ExperimentOps
 from .generator import GeneratorOps
-from .low_level_access import LowLevelAccess
-from .trigger_generator_ops import TriggerGeneratorOps
 
 
 class OverlayAdapter:
@@ -156,6 +156,17 @@ class OverlayAdapter:
         :type value: dict
         """
         self._ctx.cache.last_timing_stats = value
+
+    @property
+    def acq_trigger_channels(self) -> dict[int, int]:
+        """Mapping of acquisition IP index to its currently assigned trigger channel.
+
+        A channel value of 0 means the acquisition unit is deaf (not listening).
+
+        :return: Copy of the trigger channel assignment map.
+        :rtype: dict[int, int]
+        """
+        return dict(self._ctx.cache.acq_trigger_channel)
 
 
 __all__ = ["OverlayAdapter"]

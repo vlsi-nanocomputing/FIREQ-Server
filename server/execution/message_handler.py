@@ -107,7 +107,7 @@ class MessageHandler:
             n_chunks = 1
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
+                    self.adapter.acquisition.dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
                     for acq_ip in acq_indices
                 )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
@@ -240,7 +240,7 @@ class MessageHandler:
             # Compute chunks_per_point based on hardware buffer limits
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
+                    self.adapter.acquisition.dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
                     for acq_ip in acq_indices
                 )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
@@ -709,7 +709,7 @@ class MessageHandler:
         all_indices = [acq["acq_index"] for acq in acquisitions]
 
         # Filter out deaf acquisitions (channel == 0)
-        active_indices = [idx for idx in all_indices if self.adapter._ctx.cache.acq_trigger_channel.get(idx, 0) != 0]
+        active_indices = [idx for idx in all_indices if self.adapter.acq_trigger_channels.get(idx, 0) != 0]
 
         if len(active_indices) < len(all_indices):
             deaf = set(all_indices) - set(active_indices)

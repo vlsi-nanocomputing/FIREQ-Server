@@ -14,7 +14,7 @@ from ....models.exceptions import ConfigurationError
 from ..overlay_adapter_types import WaveEntry
 
 if TYPE_CHECKING:
-    from ..cache import AdapterContext
+    from .._cache import AdapterContext
 
 
 # =============================================================================
@@ -92,7 +92,7 @@ class FIFOOps:
         :return: A dictionary containing the updated FIFO sequence.
         """
         # Import here to avoid circular dependency
-        from .wave_envelope_ops import WaveEnvelopeOps  # noqa: PLC0415
+        from ._wave_envelope_ops import WaveEnvelopeOps  # noqa: PLC0415
 
         self._ctx.logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
 
