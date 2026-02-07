@@ -9,8 +9,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-import numpy as np
-
 from ....models.config_types import Modulation, TriggerCommand
 from .dma_orchestrator import DMAOrchestrator
 from .modulation_ops import ModulationOps
@@ -20,6 +18,8 @@ from .trigger_ops import TriggerOps
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+    import numpy as np
 
     from .cache import AdapterContext
 
@@ -39,8 +39,6 @@ class AcquisitionOps:
 
     Attributes:
     -----------
-    _ctx : AdapterContext
-        Shared context containing ll, cache, logger, dma_engine, trigger, and other dependencies.
     _dma : DMAOrchestrator
         Handles DMA execution and chunking.
     _sweep : SweepOps
@@ -59,7 +57,6 @@ class AcquisitionOps:
         :param ctx: Shared adapter context with all dependencies.
         :type ctx: AdapterContext
         """
-        self._ctx = ctx
         self._dma = DMAOrchestrator(ctx)
         self._sweep = SweepOps(ctx)
         self._modulation = ModulationOps(ctx)

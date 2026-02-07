@@ -36,17 +36,6 @@ class MemoryBoundedQueue:
         self._current_bytes = 0
         self._closed = False
 
-    @property
-    def current_memory_mb(self) -> float:
-        """Current memory usage in MB."""
-        with self._lock:
-            return self._current_bytes / (1024 * 1024)
-
-    @property
-    def max_memory_mb(self) -> float:
-        """Maximum memory limit in MB."""
-        return self._max_bytes / (1024 * 1024)
-
     def put(self, item: object, timeout: float | None = None) -> None:
         """Put item into queue, blocking if memory limit reached.
 
@@ -119,16 +108,6 @@ class MemoryBoundedQueue:
             self._closed = True
             self._not_full.notify_all()
             self._not_empty.notify_all()
-
-    def qsize(self) -> int:
-        """Return number of items in queue."""
-        with self._lock:
-            return len(self._queue)
-
-    def empty(self) -> bool:
-        """Return True if queue is empty."""
-        with self._lock:
-            return len(self._queue) == 0
 
     def _estimate_size(self, item: object) -> int:
         """Estimate memory footprint of an item.

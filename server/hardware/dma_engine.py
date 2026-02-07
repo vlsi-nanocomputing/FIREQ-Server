@@ -6,7 +6,7 @@ Purpose
 This module provides a *high-level*, abstraction for FPGA data acquisition
 using a Xilinx AXI DMA controlled through PYNQ.
 
-It exists to isolate hardware-coupled acquisition into one place:
+It exists to isolate hardware acquisition in a single class:
 
 - stream routing via an AXI Stream Switch ("raw" vs "decimated/accumulated" path),
 - contiguous DDR buffer allocation through :func:`pynq.allocate`,
@@ -16,9 +16,9 @@ It exists to isolate hardware-coupled acquisition into one place:
 
 Architectural intent
 --------------------
-The orchestration layer (e.g., server/experiment logic) should *not* need to know:
+The orchestration layer (e.g., server/experiment logic) does *not* need to know:
 which MMIO registers to poke, how PYNQ behaves when DMA is wedged, how buffers
-must be aligned/allocated, or how firmware packs I/Q samples. This module centralizes those
+must be aligned/allocated and how firmware packs I/Q samples. This module centralizes those
 concerns and exposes a small, explicit contract:
 
 1) `DMAEngine.arm_acquisition` to configure routing + allocate buffers + start DMA
@@ -30,7 +30,7 @@ Invariants and assumptions
   consistently with the loaded bitstream.
 - ``dma`` is a valid PYNQ DMA instance exposing ``recvchannel`` and ``mmio``.
 - The DMA direction is S2MM (stream-to-memory);
-- Buffer sizing assumes a firmware contract about output packing:
+- Buffer sizing assumes the output packing as:
   - decimated/raw: one 32-bit word per complex sample (I16|Q16 packed),
   - accumulated: two 32-bit words per shot (I32 then Q32).
 - This module is intentionally *fail-fast* on invalid modes/specs because silent truncation
@@ -47,12 +47,13 @@ when TLAST never arrives). The policy here is:
 
 Performance trade-offs
 ----------------------
-The engine can reuse persistent DMA buffers across acquisitions to avoid repeated allocations.
+The engine reuses persistent DMA buffers across acquisitions to avoid repeated allocations.
 A "sweep fast path" exists to skip repeated validation/logging when the caller guarantees that
 the configuration is invariant across iterations.
 
 The sweep fast path is *unsafe* if the caller changes sample counts, shot counts, mode, or the
-hardware configuration without ending the sweep and re-arming through the full path.
+hardware configuration without ending the sweep and re-arming through the full path. However, the
+message_handler classes are built to ensure such usage is safe.
 """
 
 
@@ -132,7 +133,6 @@ class DMAEngine:
         self.switch = switch
         self.logger = logger or logging.getLogger(__name__)
         self.hw_specs = hw_specs
-        self._inflight = False
         self._persistent_buffers = {}
         # sweep mode flags
         self._sweep_mode = None
@@ -161,7 +161,8 @@ class DMAEngine:
         # --- DMA (S2MM) registers for "emergency" reset ---
         self.REG_S2MM_DMACR = 0x30
         self.REG_S2MM_DMASR = 0x34
-        self.MASK_RESET = 0x00000004  # bit Reset
+        self.MASK_RS = 0x00000001  # Run/Stop bit
+        self.MASK_RESET = 0x00000004  # Soft Reset bit
         self.MASK_IRQ_CLEAR = 0x00007000  # W1C on IOC, DM, ERR
 
     # ------------------------------------------------------------------
@@ -780,22 +781,17 @@ class DMAEngine:
         self.logger.warning("Initiating DMA S2MM Hard Reset Sequence...")
         mmio = self.dma.mmio
 
-        # --- Constants defined locally to ensure compatibility ---
-        MASK_RS = 0x00000001  # Run/Stop bit
-        MASK_RESET = 0x00000004  # Soft Reset bit
-        MASK_IRQ_ALL = 0x00007000  # All Interrupt flags (IOC, Dly, Err)
-
         # 1. BYPASS PYNQ stop() because it hangs if HW is stuck.
         # Instead, manually clear the Run/Stop bit (Halt).
         try:
             cr = mmio.read(self.REG_S2MM_DMACR)
-            mmio.write(self.REG_S2MM_DMACR, cr & ~MASK_RS)
+            mmio.write(self.REG_S2MM_DMACR, cr & ~self.MASK_RS)
         except Exception as e:
             self.logger.error(f"Failed to halt DMA manually: {e}")
 
         try:
             # 2. Trigger Soft Reset (Write Reset bit = 1)
-            mmio.write(self.REG_S2MM_DMACR, MASK_RESET)
+            mmio.write(self.REG_S2MM_DMACR, self.MASK_RESET)
 
             # 3. Wait for Reset to clear (with strict Timeout)
             # Timeout is intentionally short: a reset that cannot complete
@@ -804,14 +800,14 @@ class DMAEngine:
             timeout = 0.5  # 500ms safety limit
             start = time.time()
 
-            while mmio.read(self.REG_S2MM_DMACR) & MASK_RESET:
+            while mmio.read(self.REG_S2MM_DMACR) & self.MASK_RESET:
                 if (time.time() - start) > timeout:
                     self.logger.critical("DMA Hardware Reset TIMEOUT. Reset bit stuck high.")
                     raise DMAError("Hardware Reset Failed (Bit Stuck). Clock missing?")
                 time.sleep(0.001)
 
             # 4. Clear Interrupts/Errors (Write 1 to clear)
-            mmio.write(self.REG_S2MM_DMASR, MASK_IRQ_ALL)
+            mmio.write(self.REG_S2MM_DMASR, self.MASK_IRQ_CLEAR)
 
             # 5. Re-synchronize PYNQ Object
             # Since we bypassed stop(), we force a start.

@@ -25,7 +25,7 @@ pip install -e .
 ### Start the server
 
 ```bash
-python API.py
+python3 API.py
 ```
 
 ### Startup Procedure

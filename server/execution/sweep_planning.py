@@ -1,15 +1,11 @@
-# file: fireq-utils/server/sweep_engine.py
+# file: fireq-utils/server/execution/sweep_planning.py
 """Sweep infrastructure for FIREQ experiments.
 
-This module provides path-based navigation for sweep variable discovery
-and substitution, enabling the sweep engine to:
+Path-based navigation for sweep variable discovery and substitution:
 
 1. Find all ``$variable`` placeholders in a nested dict/list config
 2. Track their locations using simple tuple paths
 3. Replace placeholder values with actual sweep point values
-
-The ``SweepEngine`` class encapsulates sweep planning and fast-path task generation
-for optimized multi-point experiments.
 """
 
 from __future__ import annotations
@@ -27,17 +23,23 @@ import numpy as np
 SimplePath = tuple[str | int, ...]
 """Simple path through a nested config: e.g., ("generators", 0, "drive", "frequency_mhz")"""
 
+# SweepFlags is a simple dict structure:
+# {
+#     "generators": {0: {"drive_mod", ...}, 1: {...}},  # gen_list_index -> flag set
+#     "acquisitions": {0: {"acq_mod", ...}},            # acq_list_index -> flag set
+#     "trigger": {"trig_shots", ...},                   # trigger flag set
+#     "waves": {"waves_compile", ...},                  # waves section flag set
+# }
+SweepFlagsDict = dict[str, dict[int, set[str]] | set[str]]
+
 
 # ====================================================
-#        VALUE CHANGE TRACKING
+#        CLASSES
 # ====================================================
 
 
 class ValueTracker:
-    """Tracks last-applied values for sweep fast-path optimization.
-
-    Used to skip redundant hardware calls when sweep variable values
-    are unchanged between consecutive sweep points.
+    """Tracks last-applied values to skip redundant hardware calls.
 
     :ivar _cache: Internal cache mapping keys to their last-applied values.
     :vartype _cache: dict[tuple, object]
@@ -65,30 +67,50 @@ class ValueTracker:
         return False
 
 
-def extract_mod_value(cfg: dict) -> tuple[float, float]:
-    """Extract modulation comparison value from config.
+@dataclass
+class SweepPlan:
+    """Sweep execution plan with precomputed metadata."""
 
-    :param cfg: Configuration dict containing frequency_mhz and optional phase.
-    :type cfg: dict
-    :return: Tuple of (frequency_mhz, phase) for comparison.
-    :rtype: tuple[float, float]
-    """
-    return (float(cfg["frequency_mhz"]), float(cfg.get("phase", 0.0)))
+    variables: list[dict]
+    sweep_mode: str
+    n_points: int
+    var_paths_by_name: dict[str, tuple[SimplePath, ...]]
+    flags: SweepFlagsDict
+    _variable_paths: frozenset[SimplePath]
 
+    def iter_points(self) -> Iterator[dict]:
+        """Lazy iterator over sweep points."""
+        return iter_sweep_points(self.variables, self.sweep_mode)
 
-def make_hashable(obj: object) -> object:
-    """Convert a nested structure to a hashable representation for comparison.
+    @property
+    def has_envelope_vars(self) -> bool:
+        """True if any sweep variable is in the 'envelopes' section."""
+        return any(p[0] == "envelopes" for p in self._variable_paths)
 
-    :param obj: Any object (dict, list, or scalar).
-    :type obj: object
-    :return: Hashable representation (tuples for containers, scalars unchanged).
-    :rtype: object
-    """
-    if isinstance(obj, dict):
-        return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
-    if isinstance(obj, list):
-        return tuple(make_hashable(item) for item in obj)
-    return obj
+    @property
+    def has_timeout_var(self) -> bool:
+        """True if any sweep variable path ends with 'timeout'."""
+        return any(len(p) > 0 and p[-1] == "timeout" for p in self._variable_paths)
+
+    @property
+    def has_shots_var(self) -> bool:
+        """True if any sweep variable is a 'shots' field in 'trigger'."""
+        return any(len(p) > 0 and p[-1] == "shots" and p[0] == "trigger" for p in self._variable_paths)
+
+    @property
+    def has_duration_var(self) -> bool:
+        """True if any sweep variable is a 'duration' field in 'acquisitions'."""
+        return any(len(p) > 0 and p[-1] == "duration" and p[0] == "acquisitions" for p in self._variable_paths)
+
+    @property
+    def has_waves_section_vars(self) -> bool:
+        """True if any sweep variable is directly in the 'waves' section."""
+        return any(p[0] == "waves" for p in self._variable_paths)
+
+    @property
+    def has_waves_changes(self) -> bool:
+        """True if waves section has variables."""
+        return self.has_waves_section_vars
 
 
 # ====================================================
@@ -126,7 +148,7 @@ FLAG_RULES: dict[tuple, str] = {
 
 
 def _detect_flags_from_path(path: SimplePath) -> set[str]:
-    """Determine which flags are affected by a single variable path.
+    """Detect which flags are affected by a variable path.
 
     :param path: Simple tuple path like ("generators", 0, "drive", "frequency_mhz").
     :type path: SimplePath
@@ -167,18 +189,8 @@ def _detect_flags_from_path(path: SimplePath) -> set[str]:
     return flags
 
 
-# SweepFlags is a simple dict structure:
-# {
-#     "generators": {0: {"drive_mod", ...}, 1: {...}},  # gen_list_index -> flag set
-#     "acquisitions": {0: {"acq_mod", ...}},            # acq_list_index -> flag set
-#     "trigger": {"trig_shots", ...},                   # trigger flag set
-#     "waves": {"waves_compile", ...},                  # waves section flag set
-# }
-SweepFlagsDict = dict[str, dict[int, set[str]] | set[str]]
-
-
 def compute_sweep_flags(variable_paths: set[SimplePath]) -> SweepFlagsDict:
-    """Compute all sweep flags from discovered variable paths in a single pass.
+    """Compute sweep flags from variable paths.
 
     :param variable_paths: Set of paths where sweep variables appear.
     :type variable_paths: set[SimplePath]
@@ -224,19 +236,12 @@ def compute_sweep_flags(variable_paths: set[SimplePath]) -> SweepFlagsDict:
 
 
 # ====================================================
-#        SWEEP PATH DISCOVERY
+#        PATH DISCOVERY
 # ====================================================
 
 
 def find_variable_paths(obj: object, var_names: set[str], path: SimplePath = ()) -> dict[str, set[SimplePath]]:
-    """Discover where sweep variables are used inside a nested config structure.
-
-    A "variable use" is detected when a string equals ``"$<name>"`` where ``name`` is
-    one of ``var_names``. The function returns a mapping:
-
-        var_name -> set(paths)
-
-    where each path is a simple tuple of keys and indices.
+    """Find all ``$variable`` placeholders in nested config and return their paths.
 
     :param obj: Arbitrary nested structure (dict/list/scalars) representing the base config.
     :type obj: object
@@ -295,6 +300,11 @@ def _set_by_path(root: object, path: SimplePath, value: object) -> None:
         cur[last] = value
 
 
+# ====================================================
+#        SWEEP POINT GENERATION
+# ====================================================
+
+
 def _extract_var_values(variables: list[dict]) -> tuple[list[str], list[list[object]]]:
     """Extract variable names and values from variable specifications.
 
@@ -327,7 +337,7 @@ def _extract_var_values(variables: list[dict]) -> tuple[list[str], list[list[obj
 
 
 def compute_sweep_size(variables: list[dict], mode: str = "cartesian") -> int:
-    """Compute total sweep points without materializing them.
+    """Compute total sweep points.
 
     :param variables: List of variable specifications.
     :type variables: list[dict]
@@ -398,10 +408,9 @@ def generate_sweep_points(
 ) -> list[dict[str, object]]:
     """Generate the list of sweep points from variable specifications.
 
-    Supported variable formats
-    --------------------------
-    Each variable spec supports either:
-    - explicit list: ``{"name": "X", "values": [...]}`` , or
+    Supported variable formats:
+
+    - explicit list: ``{"name": "X", "values": [...]}``, or
     - linspace spec: ``{"name": "X", "start": a, "stop": b, "num": n}``.
 
     :param variables: List of variable specifications.
@@ -411,71 +420,8 @@ def generate_sweep_points(
     :return: List of points; each point is ``{var_name: value}``.
     :rtype: list[dict[str, object]]
     :raises ValueError: If ``mode`` is unknown or zipped lengths are inconsistent.
-
-    .. note::
-        For large sweeps, consider using :func:`iter_sweep_points` to avoid
-        materializing all points in memory at once.
     """
     return list(iter_sweep_points(variables, mode))
-
-
-# ====================================================
-#        SWEEP PLAN DATA STRUCTURE
-# ====================================================
-
-
-@dataclass
-class SweepPlan:
-    """Sweep execution plan with computed properties.
-
-    Contains all precomputed information needed to execute a sweep:
-    - The variable specifications and sweep mode (for lazy point generation)
-    - The precomputed total number of points
-    - The paths where each variable is used in the config
-    - Pre-computed flags indicating which hardware to reconfigure
-    - Cached variable paths for efficient property lookups
-    """
-
-    variables: list[dict]
-    sweep_mode: str
-    n_points: int
-    var_paths_by_name: dict[str, tuple[SimplePath, ...]]
-    flags: SweepFlagsDict
-    _variable_paths: frozenset[SimplePath]
-
-    def iter_points(self) -> Iterator[dict]:
-        """Lazy iterator over sweep points."""
-        return iter_sweep_points(self.variables, self.sweep_mode)
-
-    @property
-    def has_envelope_vars(self) -> bool:
-        """True if any sweep variable is in the 'envelopes' section."""
-        return any(p[0] == "envelopes" for p in self._variable_paths)
-
-    @property
-    def has_timeout_var(self) -> bool:
-        """True if any sweep variable path ends with 'timeout'."""
-        return any(len(p) > 0 and p[-1] == "timeout" for p in self._variable_paths)
-
-    @property
-    def has_shots_var(self) -> bool:
-        """True if any sweep variable is a 'shots' field in 'trigger'."""
-        return any(len(p) > 0 and p[-1] == "shots" and p[0] == "trigger" for p in self._variable_paths)
-
-    @property
-    def has_duration_var(self) -> bool:
-        """True if any sweep variable is a 'duration' field in 'acquisitions'."""
-        return any(len(p) > 0 and p[-1] == "duration" and p[0] == "acquisitions" for p in self._variable_paths)
-
-    @property
-    def has_waves_section_vars(self) -> bool:
-        """True if any sweep variable is directly in the 'waves' section."""
-        return any(p[0] == "waves" for p in self._variable_paths)
-
-    @property
-    def has_waves_changes(self) -> bool:
-        """True if waves section has variables."""
-        return self.has_waves_section_vars
 
 
 # ====================================================
@@ -483,11 +429,34 @@ class SweepPlan:
 # ====================================================
 
 
-def apply_gen_type(adapter: object, gi: int, cfg: dict, flags: set, ttype: str, tracker: ValueTracker) -> None:
-    """Apply generator updates for a single type (drive or readout).
+def extract_mod_value(cfg: dict) -> tuple[float, float]:
+    """Extract (frequency_mhz, phase) tuple for comparison.
 
-    Only calls adapter methods when values have actually changed from
-    the previous sweep point, using the tracker for comparison.
+    :param cfg: Configuration dict containing frequency_mhz and optional phase.
+    :type cfg: dict
+    :return: Tuple of (frequency_mhz, phase).
+    :rtype: tuple[float, float]
+    """
+    return (float(cfg["frequency_mhz"]), float(cfg.get("phase", 0.0)))
+
+
+def make_hashable(obj: object) -> object:
+    """Convert nested structure to hashable representation.
+
+    :param obj: Any object (dict, list, or scalar).
+    :type obj: object
+    :return: Hashable representation (tuples for containers, scalars unchanged).
+    :rtype: object
+    """
+    if isinstance(obj, dict):
+        return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+    if isinstance(obj, list):
+        return tuple(make_hashable(item) for item in obj)
+    return obj
+
+
+def apply_gen_type(adapter: object, gi: int, cfg: dict, flags: set, ttype: str, tracker: ValueTracker) -> None:
+    """Apply generator updates for drive or readout, skipping unchanged values.
 
     :param adapter: Hardware adapter.
     :type adapter: object
@@ -534,7 +503,7 @@ def apply_gen_type(adapter: object, gi: int, cfg: dict, flags: set, ttype: str, 
 
 
 # ====================================================
-#        SWEEP PLANNING FUNCTIONS
+#        SWEEP PLANNING
 # ====================================================
 
 
@@ -543,7 +512,7 @@ def plan_sweep(
     variables: list[dict],
     sweep_mode: str,
 ) -> SweepPlan:
-    """Create a sweep execution plan from base configuration and variables.
+    """Create sweep execution plan from base config and variables.
 
     :param base_config: Base experiment configuration with ``$var`` placeholders.
     :type base_config: dict
@@ -600,7 +569,7 @@ def apply_sweep_point(
     var_paths_by_name: dict[str, tuple[SimplePath, ...]],
     point: dict,
 ) -> None:
-    """Apply sweep variable values to config at their discovered paths.
+    """Apply sweep point values to config at discovered paths.
 
     :param config: Mutable experiment configuration.
     :type config: dict
@@ -619,6 +588,9 @@ __all__ = [
     # Type aliases
     "SimplePath",
     "SweepFlagsDict",
+    # Classes
+    "ValueTracker",
+    "SweepPlan",
     # Flag computation
     "FLAG_RULES",
     "compute_sweep_flags",
@@ -629,11 +601,9 @@ __all__ = [
     "iter_sweep_points",
     "compute_sweep_size",
     # Sweep planning
-    "SweepPlan",
     "plan_sweep",
     "apply_sweep_point",
     # Fast-path helpers
-    "ValueTracker",
     "apply_gen_type",
     "extract_mod_value",
     "make_hashable",

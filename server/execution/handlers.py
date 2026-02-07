@@ -1,7 +1,7 @@
 # file: fireq-utils/server/execution/handlers.py
 """Specialized handlers for FIREQ operations.
 
-This module provides adapter wrappers for specific concerns:
+Adapter wrappers for specific concerns:
 - ``StatusHandler``: Read-only status/inspection operations
 - ``ResetHandler``: Recovery-oriented reset operations
 - ``EnvelopeHandler``: Envelope upload orchestration
@@ -17,14 +17,10 @@ from ..models.results import HardwareStatusResult, ResetResult
 
 
 class StatusHandler:
-    """Status/inspection API over the hardware adapter.
-
-    This handler exists to keep read-only operations separate from experiment execution,
-    so status calls remain safe and do not accidentally mutate hardware state.
-    """
+    """Read-only operations, separated from experiment execution."""
 
     def __init__(self, adapter: object, logger: logging.Logger | None = None) -> None:
-        """Initialize the status handler with an adapter.
+        """Initialize with adapter.
 
         :param adapter: OverlayAdapter instance.
         :type adapter: OverlayAdapter
@@ -46,7 +42,7 @@ class StatusHandler:
 
     @property
     def num_generators(self) -> int:
-        """Return the number of generators reported by the hardware summary.
+        """Number of generators.
 
         :return: Number of generators.
         :rtype: int
@@ -55,7 +51,7 @@ class StatusHandler:
 
     @property
     def num_acquisitions(self) -> int:
-        """Return the number of acquisitions reported by the hardware summary.
+        """Number of acquisitions.
 
         :return: Number of acquisitions.
         :rtype: int
@@ -63,7 +59,7 @@ class StatusHandler:
         return self._hw_summary.get("num_acquisitions", 0)
 
     def get_all_generators_status(self) -> list[dict]:
-        """Get status for ALL generators in one call.
+        """Get status for all generators.
 
         :return: List of generator status dicts.
         :rtype: list[dict]

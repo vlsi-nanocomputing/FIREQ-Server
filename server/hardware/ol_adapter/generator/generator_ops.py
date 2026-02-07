@@ -32,7 +32,6 @@ class GeneratorOps:
 
         :param ctx: Shared adapter context with all dependencies.
         """
-        self._ctx = ctx
         self._waves = WaveEnvelopeOps(ctx)
         self._fifo = FIFOOps(ctx)
         self._modulation = ModulationOps(ctx)

@@ -2,8 +2,7 @@
 """Server-side message orchestration for FIREQ experiments.
 
 Translates JSON experiment configurations into hardware actions via an adapter.
-Provides run() for single experiments and run_sweep() for multi-point sweeps
-with optimized fast-path reconfiguration.
+Provides run() for single experiments and run_sweep() for multi-point sweeps.
 """
 
 import logging
@@ -16,7 +15,7 @@ import numpy as np
 from ..models.queue_items import BinaryChunk, StreamHeader, StreamTiming
 from ..models.results import SweepStatus, SweepTimingStats
 from .handlers import EnvelopeHandler, ResetHandler, StatusHandler, WaveHandler
-from .sweep_engine import (
+from .sweep_planning import (
     ValueTracker,
     apply_gen_type,
     apply_sweep_point,
@@ -34,7 +33,7 @@ class MessageHandler:
     # =========================================================================
 
     def __init__(self, adapter: object, *, logger: logging.Logger | None = None) -> None:
-        """Initialize the orchestrator and its specialized sub-handlers.
+        """Initialize with adapter and sub-handlers.
 
         :param adapter: Hardware adapter implementing the FIREQ control surface.
         :type adapter: object
@@ -54,11 +53,7 @@ class MessageHandler:
     # =========================================================================
 
     def cleanup(self) -> None:
-        """Hardware cleanup for abnormal termination (e.g., client disconnect).
-
-        Called by TCP server as safety net. Normal completion cleanup is handled
-        internally by run() and run_sweep().
-        """
+        """Hardware cleanup for abnormal termination (e.g., client disconnect)."""
         try:
             if hasattr(self.adapter, "end_sweep"):
                 self.adapter.experiment.end_sweep()
@@ -102,11 +97,9 @@ class MessageHandler:
             self._disable_acquisitions(log=log)
             for acq_cfg in config.get("acquisitions", []):
                 self._configure_acquisition(acq_cfg, log)
-            self._disable_acquisitions(config, log)
 
             self._configure_trigger(config.get("trigger", {}), log)
 
-            self._reset_dma_before_run()
             acq_indices = self._normalize_acq_configs(config)
             acq_indices, mode, shots, samp_per_shot, timeout = self._extract_acq_stream_params(config, acq_indices)
 
@@ -231,7 +224,6 @@ class MessageHandler:
             self._disable_acquisitions(log=log)
             for acq_cfg in current_config.get("acquisitions", []):
                 self._configure_acquisition(acq_cfg, log)
-            self._disable_acquisitions(current_config, log)
             self._configure_trigger(current_config.get("trigger", {}), log)
 
             timing.setup_ms = (time.perf_counter() - t_setup_start) * 1000.0
@@ -587,22 +579,18 @@ class MessageHandler:
             msg = "trigger delays programmed" if shots is None else f"trigger delays programmed for {shots} shots"
             self._log(log, msg)
 
-    def _disable_acquisitions(self, config: dict | None = None, log: list | None = None) -> None:
-        """Disable trigger listening on acquisitions. If config given, only unused ones.
+    def _disable_acquisitions(self, log: list | None = None) -> None:
+        """Disable trigger listening on all acquisitions.
 
-        :param config: Optional experiment configuration. If provided, only disables unused acquisitions.
-        :type config: dict | None
         :param log: Optional list for user-visible configuration actions.
         :type log: list | None
         """
         total = self.status_h.num_acquisitions
         if total <= 0:
             return
-        used = {int(acq["acq_index"]) for acq in config.get("acquisitions", [])} if config else set()
         for acq_index in range(total):
-            if acq_index not in used:
-                self.adapter.acquisition.set_trigger_listener(acq_index, {"channel": 0})
-                self._log(log, f"acq {acq_index} disabled (trigger channel 0)")
+            self.adapter.acquisition.set_trigger_listener(acq_index, {"channel": 0})
+            self._log(log, f"acq {acq_index} disabled (trigger channel 0)")
 
     # =========================================================================
     #                       ACQUISITION STREAMING
@@ -808,16 +796,6 @@ class MessageHandler:
         if error:
             payload["error"] = error
         return payload
-
-    def _reset_dma_before_run(self) -> None:
-        """Perform a minimal DMA reset before a new run/sweep point."""
-        try:
-            dma_engine = getattr(self.adapter, "dma_engine", None)
-            if dma_engine is not None and hasattr(dma_engine, "abort"):
-                self.logger.info("Resetting DMA before acquisition run.")
-                dma_engine.abort()
-        except Exception as e:
-            self.logger.warning(f"DMA reset before run failed: {e}")
 
     def _compute_expected_shape(self, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> list[int]:
         """Compute the expected array shape for a given ADC.
