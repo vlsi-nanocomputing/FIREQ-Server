@@ -1,4 +1,4 @@
-# file: fireq-utils/server/exceptions.py
+# file: fireq-utils/server/models/exceptions.py
 """Custom exceptions for the hardware layer.
 
 These exceptions provide a clean, typed error interface for the orchestrator, isolating
@@ -12,17 +12,18 @@ class FireqHardwareError(Exception):
     All exceptions in the hardware layer inherit from this,
     allowing callers to catch all hardware errors with a single except clause.
 
-    Exception Hierarchy:
+    Exception Hierarchy::
+
         FireqHardwareError
         ├── DriverError           (low-level driver failed)
         ├── TimingError           (timing constraints violated)
         ├── ConfigurationError    (invalid configuration)
-        │   └── FrequencyError    (frequency out of range)
-        └── DMAError              (DMA operation failed)
-            ├── DMATimeoutError   (DMA transfer timeout)
-            └── RecoverableDMAError (error but data may be valid)
-
-    Additional:
+        │   ├── FrequencyError    (frequency out of range)
+        │   ├── EnvelopeUploadError (envelope upload failed)
+        │   └── WaveCompilationError (wave compilation failed)
+        ├── DMAError              (DMA operation failed)
+        │   ├── DMATimeoutError   (DMA transfer timeout)
+        │   └── RecoverableDMAError (error but data may be valid)
         ├── HardwareResourceError (resource access failed)
         └── HardwareStateError    (unexpected hardware state)
     """
@@ -36,12 +37,8 @@ class DriverError(FireqHardwareError):
     This wraps the inconsistent return codes (-3, None, etc.) from the
     FIREQ_LL_API drivers into proper Python exceptions.
 
-    Attributes:
-        driver_name: Name of the driver that failed (if available)
-        operation: The operation that was attempted
-        return_code: The original return code from the driver (if available)
+    Example::
 
-    Example:
         >>> try:
         ...     gen.create_waveform("invalid_name", 100, 0.5)
         ... except DriverError as e:
@@ -56,7 +53,17 @@ class DriverError(FireqHardwareError):
         operation: str | None = None,
         return_code: int | None = None,
     ) -> None:
-        """Initialize a DriverError with optional driver context."""
+        """Initialize a DriverError with optional driver context.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param driver_name: Name of the driver that failed.
+        :type driver_name: str | None
+        :param operation: The operation that was attempted.
+        :type operation: str | None
+        :param return_code: The original return code from the driver.
+        :type return_code: int | None
+        """
         super().__init__(message)
         self.driver_name = driver_name
         self.operation = operation
@@ -74,13 +81,8 @@ class TimingError(FireqHardwareError):
 
     These errors should be caught and parameters adjusted before retrying.
 
-    Attributes:
-        parameter: Name of the timing parameter that violated constraints
-        value: The invalid value that was provided
-        min_required: Minimum valid value (if applicable)
-        max_allowed: Maximum valid value (if applicable)
+    Example::
 
-    Example:
         >>> try:
         ...     backend.start_experiment(duration_cycles=10)
         ... except TimingError as e:
@@ -96,7 +98,19 @@ class TimingError(FireqHardwareError):
         min_required: float | None = None,
         max_allowed: float | None = None,
     ) -> None:
-        """Initialize a TimingError with constraint details."""
+        """Initialize a TimingError with constraint details.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param parameter: Name of the timing parameter that violated constraints.
+        :type parameter: str | None
+        :param value: The invalid value that was provided.
+        :type value: float | None
+        :param min_required: Minimum valid value.
+        :type min_required: float | None
+        :param max_allowed: Maximum valid value.
+        :type max_allowed: float | None
+        """
         super().__init__(message)
         self.parameter = parameter
         self.value = value
@@ -115,7 +129,8 @@ class ConfigurationError(FireqHardwareError):
 
     These errors should be caught and corrected before retrying.
 
-    Example:
+    Example::
+
         >>> try:
         ...     gen.set_drive_frequency(-100)
         ... except ConfigurationError as e:
@@ -130,11 +145,8 @@ class FrequencyError(ConfigurationError):
 
     Provides information about valid Nyquist zones and frequency ranges.
 
-    Attributes:
-        freq_mhz: The frequency that was rejected
-        valid_ranges: List of (min_mhz, max_mhz) tuples showing valid ranges
+    Example::
 
-    Example:
         >>> try:
         ...     gen.set_drive_frequency(10000)
         ... except FrequencyError as e:
@@ -148,7 +160,15 @@ class FrequencyError(ConfigurationError):
         reason: str,
         valid_ranges: list[tuple[float, float]] | None = None,
     ) -> None:
-        """Initialize a FrequencyError with optional valid ranges."""
+        """Initialize a FrequencyError with optional valid ranges.
+
+        :param freq_mhz: The frequency that was rejected.
+        :type freq_mhz: float
+        :param reason: Human-readable rejection reason.
+        :type reason: str
+        :param valid_ranges: List of (min_mhz, max_mhz) tuples showing valid ranges.
+        :type valid_ranges: list[tuple[float, float]] | None
+        """
         self.freq_mhz = freq_mhz
         self.valid_ranges = valid_ranges or []
         message = f"Frequency {freq_mhz} MHz: {reason}"
@@ -162,13 +182,6 @@ class EnvelopeUploadError(ConfigurationError):
 
     This exception wraps errors during the envelope upload stage, providing
     context about which generator and envelope failed.
-
-    :param gen_index: Generator index where upload failed.
-    :type gen_index: int
-    :param envelope_name: Name of the envelope that failed.
-    :type envelope_name: str
-    :param reason: Human-readable failure reason.
-    :type reason: str
     """
 
     def __init__(self, gen_index: int, envelope_name: str, reason: str) -> None:
@@ -192,13 +205,6 @@ class WaveCompilationError(ConfigurationError):
 
     This exception wraps errors during the wave compilation stage, providing
     context about which generator and wave failed.
-
-    :param gen_index: Generator index where compilation failed.
-    :type gen_index: int
-    :param wave_id: Identifier of the wave that failed.
-    :type wave_id: str
-    :param reason: Human-readable failure reason.
-    :type reason: str
     """
 
     def __init__(self, gen_index: int, wave_id: str, reason: str) -> None:
@@ -224,9 +230,6 @@ class DMAError(FireqHardwareError):
     - DMA channel stuck/busy
     - Buffer allocation failure
     - Transfer timeout (see DMATimeoutError for specific timeout case)
-
-    Attributes:
-        recovery_strategy: 'fatal' or 'recoverable' indicating if recovery is possible
     """
 
     def __init__(
@@ -234,7 +237,13 @@ class DMAError(FireqHardwareError):
         message: str,
         recovery_strategy: str = "fatal",
     ) -> None:
-        """Initialize a DMAError with recovery strategy."""
+        """Initialize a DMAError with recovery strategy.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param recovery_strategy: ``'fatal'`` or ``'recoverable'``.
+        :type recovery_strategy: str
+        """
         super().__init__(message)
         self.recovery_strategy = recovery_strategy
 
@@ -244,10 +253,6 @@ class DMATimeoutError(DMAError):
 
     This is a specific, recoverable case of DMA failure where the transfer
     simply took too long.
-
-    Attributes:
-        timeout_seconds: The timeout that was exceeded
-        recovery_strategy: Inherited from DMAError ('fatal' or 'recoverable')
     """
 
     def __init__(
@@ -256,7 +261,15 @@ class DMATimeoutError(DMAError):
         timeout_seconds: float,
         recovery_strategy: str = "fatal",
     ) -> None:
-        """Initialize a DMATimeoutError with timeout details."""
+        """Initialize a DMATimeoutError with timeout details.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param timeout_seconds: The timeout that was exceeded.
+        :type timeout_seconds: float
+        :param recovery_strategy: ``'fatal'`` or ``'recoverable'``.
+        :type recovery_strategy: str
+        """
         super().__init__(message, recovery_strategy=recovery_strategy)
         self.timeout_seconds = timeout_seconds
 
@@ -267,11 +280,7 @@ class RecoverableDMAError(DMAError):
     Example: Internal error bit set but TLAST (transfer last) received,
     indicating the transfer actually completed.
 
-    Recovery strategy: RECOVERABLE - attempt to parse data anyway.
-
-    Attributes:
-        status_code: The DMA status register value
-        recovery_strategy: Always 'recoverable' for this exception
+    Recovery strategy: RECOVERABLE — attempt to parse data anyway.
     """
 
     def __init__(
@@ -279,7 +288,13 @@ class RecoverableDMAError(DMAError):
         message: str,
         status_code: int | None = None,
     ) -> None:
-        """Initialize a RecoverableDMAError with status code."""
+        """Initialize a RecoverableDMAError with status code.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param status_code: The DMA status register value.
+        :type status_code: int | None
+        """
         super().__init__(message, recovery_strategy="recoverable")
         self.status_code = status_code
 
@@ -293,11 +308,7 @@ class HardwareResourceError(FireqHardwareError):
     - Clock not locked
     - Channel not available
 
-    Recovery strategy: FATAL - fix configuration and retry.
-
-    Attributes:
-        resource_type: Type of resource that failed (e.g., 'generator', 'buffer')
-        resource_id: Identifier of the resource
+    Recovery strategy: FATAL — fix configuration and retry.
     """
 
     def __init__(
@@ -306,7 +317,15 @@ class HardwareResourceError(FireqHardwareError):
         resource_type: str | None = None,
         resource_id: object | None = None,
     ) -> None:
-        """Initialize a HardwareResourceError with resource metadata."""
+        """Initialize a HardwareResourceError with resource metadata.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param resource_type: Type of resource that failed (e.g., 'generator', 'buffer').
+        :type resource_type: str | None
+        :param resource_id: Identifier of the resource.
+        :type resource_id: object | None
+        """
         super().__init__(message)
         self.resource_type = resource_type
         self.resource_id = resource_id
@@ -321,12 +340,7 @@ class HardwareStateError(FireqHardwareError):
     - Switch routing failed
     - RF-DC tile not responding
 
-    Recovery strategy: Usually FATAL - indicates firmware or hardware issue.
-
-    Attributes:
-        status_code: Hardware status register value (if available)
-        expected_state: Description of expected state
-        actual_state: Description of actual state
+    Recovery strategy: Usually FATAL — indicates firmware or hardware issue.
     """
 
     def __init__(
@@ -336,7 +350,17 @@ class HardwareStateError(FireqHardwareError):
         expected_state: str | None = None,
         actual_state: str | None = None,
     ) -> None:
-        """Initialize a HardwareStateError with state details."""
+        """Initialize a HardwareStateError with state details.
+
+        :param message: Human-readable error description.
+        :type message: str
+        :param status_code: Hardware status register value.
+        :type status_code: int | None
+        :param expected_state: Description of expected state.
+        :type expected_state: str | None
+        :param actual_state: Description of actual state.
+        :type actual_state: str | None
+        """
         super().__init__(message)
         self.status_code = status_code
         self.expected_state = expected_state

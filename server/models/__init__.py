@@ -41,7 +41,7 @@ from .exceptions import (
     WaveCompilationError,
 )
 from .queue_items import BinaryChunk, StreamHeader, StreamTiming
-from .results import HardwareStatusResult, ResetResult, SweepStatus
+from .results import HardwareStatusResult, ResetResult, SweepStatus, SweepTimingStats
 
 __all__ = [
     # Config types
@@ -65,6 +65,7 @@ __all__ = [
     "HardwareStatusResult",
     "ResetResult",
     "SweepStatus",
+    "SweepTimingStats",
     # Queue items
     "StreamHeader",
     "BinaryChunk",

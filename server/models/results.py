@@ -1,4 +1,4 @@
-# file: fireq-utils/server/results.py
+# file: fireq-utils/server/models/results.py
 """Result containers for FIREQ operations.
 
 This module provides dataclass containers for standardized operation results.
@@ -14,17 +14,13 @@ class HardwareStatusResult:
 
     This is an object meant to return user-friendly status queries.
 
-    Invariants
-    ----------
-    - When ``ok`` is True, the fields ``envelopes`` and ``waves_count`` reflect the current
-      generator caches, and ``hw_summary`` is included for context/debugging.
-    - When ``ok`` is False, ``error`` contains a human-readable failure reason and other
-      fields may be partial defaults.
+    When ``ok`` is True, ``envelopes`` and ``waves_count`` reflect the current
+    generator caches and ``hw_summary`` is included for context/debugging.
+    When ``ok`` is False, ``error`` contains a human-readable failure reason
+    and other fields may be partial defaults.
 
-    Notes
-    -----
-    The payload is intentionally JSON-friendly: it is designed to be sent over a network
-    OR logged without carrying heavy binary buffers.
+    The payload is intentionally JSON-friendly: designed to be sent over a
+    network or logged without carrying heavy binary buffers.
     """
 
     ok: bool
@@ -59,10 +55,8 @@ class ResetResult:
     Reset operations are used to recover from stale state (e.g., compiled waves referring
     to removed envelopes) or to enforce a clean execution environment for a new session.
 
-    Fields
-    ------
-    - ``action`` identifies the reset type (e.g., wave_reset, envelope_reset).
-    - ``details`` contains adapter-specific metadata for debugging (kept optional).
+    ``action`` identifies the reset type (e.g., wave_reset, envelope_reset).
+    ``details`` contains adapter-specific metadata for debugging (kept optional).
     """
 
     ok: bool

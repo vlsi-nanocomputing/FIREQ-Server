@@ -1,4 +1,4 @@
-# file: fireq-utils/server/config_types.py
+# file: fireq-utils/server/models/config_types.py
 """Configuration type definitions for FIREQ experiments.
 
 This module provides TypedDict definitions that document the expected
