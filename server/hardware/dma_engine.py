@@ -117,7 +117,7 @@ class DMAEngine:
 
         :param dma: PYNQ DMA instance
         :type dma: object
-        :param switch: AXI Stream Switch IP used to route the selected ADC/mode stream
+        :param switch: AXI Stream Switch IP used to route the selected acquisition IP /mode stream
             into the DMA.
         :type switch: object
         :param logger: Optional logger. If not provided, a module logger is used.
@@ -196,7 +196,7 @@ class DMAEngine:
 
         Buffer lifetime policy
         ----------------------
-        This engine may cache DDR buffers per ADC index to avoid repeated
+        This engine may cache DDR buffers per Acquisition IP index to avoid repeated
         allocation and improve sweep throughput. Those buffers are physically
         contiguous and can be large; explicit release is important in
         long-running server processes.
@@ -215,49 +215,49 @@ class DMAEngine:
                 except Exception as e:
                     # Cleanup: failures here are non-fatal, and raising would
                     # likely obscure the "original" hardware failure that triggered cleanup.
-                    self.logger.warning(f"Failed to free buffer for ADC {idx}: {e}")
+                    self.logger.warning(f"Failed to free buffer for AcquisitionIP {idx}: {e}")
         self._persistent_buffers.clear()
 
-    def set_active_adcs(self, adc_indices: list[int]) -> None:
-        """Update which ADCs are active and free buffers for inactive ADCs.
+    def set_active_acq_ip(self, acq_ip_indices: list[int]) -> None:
+        """Update which AcquisitionIPs are active and free buffers for inactive AcquisitionIPs.
 
         This method should be called before arm_acquisition() when the set of
-        active ADCs changes (e.g., switching between single-ADC and dual-ADC
-        experiments). Buffers for ADCs that are no longer in the active set
+        active IPs changes (e.g., switching between single-acquisition and dual-acquisition
+        experiments). Buffers for acquisition IPs that are no longer in the active set
         are freed to reduce memory usage.
 
-        :param adc_indices: List of ADC indices that will be used.
-        :type adc_indices: list[int]
+        :param acq_ip_indices: List of acquisition indices that will be used.
+        :type acq_ip_indices: list[int]
         """
-        new_active = set(adc_indices)
+        new_active = set(acq_ip_indices)
 
-        # Free buffers for ADCs that are no longer active
-        for adc_idx in list(self._persistent_buffers.keys()):
-            if adc_idx not in new_active:
-                buf = self._persistent_buffers.pop(adc_idx, None)
+        # Free buffers for AcqIPs that are no longer active
+        for acq_ip_idx in list(self._persistent_buffers.keys()):
+            if acq_ip_idx not in new_active:
+                buf = self._persistent_buffers.pop(acq_ip_idx, None)
                 if buf is not None and hasattr(buf, "freebuffer"):
                     try:
                         buf.freebuffer()
-                        self.logger.debug(f"Freed buffer for inactive ADC {adc_idx}")
+                        self.logger.debug(f"Freed buffer for inactive AcqIP {acq_ip_idx}")
                     except Exception as e:
-                        self.logger.warning(f"Failed to free buffer for inactive ADC {adc_idx}: {e}")
+                        self.logger.warning(f"Failed to free buffer for inactive AcqIP {acq_ip_idx}: {e}")
 
     def _get_fifo_params(
         self,
         mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
+        acq_ip_index: int,
     ) -> tuple[int, int]:
-        """Return FIFO depth and width for the given mode and ADC.
+        """Return FIFO depth and width for the given mode and AcqIP.
 
         :param mode: Acquisition mode.
         :type mode: Literal["raw", "decimated", "accumulated"]
-        :param adc_index: ADC/acquisition IP index.
-        :type adc_index: int
+        :param acq_ip_index: Acquisition IP index.
+        :type acq_ip_index: int
         :return: Tuple of (fifo_depth_words, fifo_width_bits).
         :rtype: tuple[int, int]
         :raises DMAError: If mode is unknown.
         """
-        acq_spec = self.hw_specs["acquisitions"][adc_index]
+        acq_spec = self.hw_specs["acquisitions"][acq_ip_index]
 
         if mode == "raw":
             fifo_depth = int(acq_spec.get("raw_fifo_depth_words", 0))
@@ -274,7 +274,7 @@ class DMAEngine:
         self,
         mode: Literal["raw", "decimated", "accumulated"],
         samp_per_shot: int,
-        adc_index: int,
+        acq_ip_index: int,
     ) -> int:
         """Compute the maximum number of shots that can fit in the acquisition FIFO/buffer.
 
@@ -282,12 +282,12 @@ class DMAEngine:
         :type mode: Literal["raw", "decimated", "accumulated"]
         :param samp_per_shot: Samples per shot (scales by parallelism for raw mode).
         :type samp_per_shot: int
-        :param adc_index: Acquisition IP index.
-        :type adc_index: int
+        :param acq_ip_index: Acquisition IP index.
+        :type acq_ip_index: int
         :return: Maximum shots that fit without overflow (0 if degenerate).
         :rtype: int
         """
-        fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
+        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
         total_bits = fifo_depth * fifo_width
 
         if mode == "accumulated":
@@ -296,7 +296,7 @@ class DMAEngine:
             bits_per_shot = samp_per_shot * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
         else:  # raw
-            acq_spec = self.hw_specs["acquisitions"][adc_index]
+            acq_spec = self.hw_specs["acquisitions"][acq_ip_index]
             parallelism = int(acq_spec.get("parallelism", 1))
             bits_per_shot = samp_per_shot * parallelism * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
@@ -314,7 +314,7 @@ class DMAEngine:
         samp_per_shot: int,
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
+        acq_ip_index: int,
     ) -> object:
         """Arm a DMA acquisition: validate, route, allocate/reuse buffer, and start DMA.
 
@@ -337,9 +337,9 @@ class DMAEngine:
         :param mode:
             Acquisition mode: ``raw``/``decimated``/``accumulated``.
         :type mode: Literal["raw", "decimated", "accumulated"]
-        :param adc_index:
-            ADC/acquisition IP index to route and arm.
-        :type adc_index: int
+        :param acq_ip_index:
+            Acquisition IP index to route and arm.
+        :type acq_ip_index: int
         :return:
             The allocated (or reused) DMA buffer passed to ``recvchannel.transfer()``.
         :rtype: object
@@ -359,9 +359,9 @@ class DMAEngine:
         # "Fast path "is correct if the caller keeps mode and sizing invariants stable
         # across iterations.
         if self._sweep_prepared and self._sweep_mode == mode:
-            return self._arm_acquisition_fast(mode, adc_index)
+            return self._arm_acquisition_fast(mode, acq_ip_index)
         # Full path
-        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, adc_index, skip_idle_check)
+        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, acq_ip_index, skip_idle_check)
 
     def _setup_timeout(self, timeout: float | None, skip_timeout: bool) -> tuple[float | None, object]:
         """Set up timeout mechanism for DMA wait (UNIX only, via SIGALRM).
@@ -540,7 +540,7 @@ class DMAEngine:
         samp_per_shot: int,
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
+        acq_ip_index: int,
         skip_idle_check: bool = False,
     ) -> object:
         """Conservative arm path: validate capacity, check DMA state, route stream, allocate buffer, start DMA.
@@ -562,16 +562,16 @@ class DMAEngine:
             raise DMAError("shots_per_exp must be >= 1")
 
         # 1. Validation - check capacity using get_max_shots
-        max_shots = self.get_max_shots(mode, samp_per_shot, adc_index)
+        max_shots = self.get_max_shots(mode, samp_per_shot, acq_ip_index)
         if shots_per_exp > max_shots:
             raise DMAError(
-                f"Buffer capacity exceeded (mode={mode}, ADC={adc_index}): "
+                f"Buffer capacity exceeded (mode={mode}, AcqIP={acq_ip_index}): "
                 f"requested {shots_per_exp} shots, max is {max_shots} "
                 f"(for {samp_per_shot} samp/shot)"
             )
 
         self.logger.debug(
-            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, " f"mode={mode}, adc={adc_index}"
+            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, " f"mode={mode}, acq_ip={acq_ip_index}"
         )
 
         # 2. DMA state check
@@ -585,12 +585,12 @@ class DMAEngine:
             self._hard_reset()
 
         # 3. Switch routing
-        self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
+        self._route_switch(acq_ip_index=acq_ip_index, raw_mode=(mode == "raw"))
 
         # 4. Buffer allocation (size = FIFO capacity in 32-bit words)
-        fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
+        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
         total_words = fifo_depth * (fifo_width // 32)
-        buffer = self._get_or_allocate_buffer(adc_index, total_words)
+        buffer = self._get_or_allocate_buffer(acq_ip_index, total_words)
 
         # 5. Start DMA
         try:
@@ -645,7 +645,7 @@ class DMAEngine:
     def _arm_acquisition_fast(
         self,
         mode: Literal["raw", "decimated", "accumulated"],
-        adc_index: int,
+        acq_ip_index: int,
     ) -> object:
         """Optimized sweep arm path.
 
@@ -653,7 +653,7 @@ class DMAEngine:
 
         - skips FIFO capacity validation and most logging,
         - reuses a persistent buffer if available,
-        - still performs stream routing (ADC selection is assumed not to be
+        - still performs stream routing (Acquisitin IP selection is assumed not to be
           invariant in general).
 
         Safety notes
@@ -663,16 +663,16 @@ class DMAEngine:
         If the request grows beyond the cached buffer size, we allocate a
         larger one (safe monotonic growth).
         """
-        # 1. Routing (always needed - changes per ADC)
-        self._route_switch(adc_index=adc_index, raw_mode=(mode == "raw"))
+        # 1. Routing
+        self._route_switch(acq_ip_index=acq_ip_index, raw_mode=(mode == "raw"))
 
         # 2. Reuse existing buffer or fallback to full allocation
-        buffer = self._persistent_buffers.get(adc_index)
+        buffer = self._persistent_buffers.get(acq_ip_index)
         if buffer is None:
             # Fallback to full allocation if not pre-allocated
-            fifo_depth, fifo_width = self._get_fifo_params(mode, adc_index)
+            fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
             total_words = fifo_depth * (fifo_width // 32)
-            buffer = self._get_or_allocate_buffer(adc_index, total_words)
+            buffer = self._get_or_allocate_buffer(acq_ip_index, total_words)
 
         try:
             self.dma.recvchannel.transfer(buffer)
@@ -708,10 +708,10 @@ class DMAEngine:
         except Exception as e:
             raise DMAError(f"Failed to start DMA recvchannel: {e}") from e
 
-    def _route_switch(self, adc_index: int, raw_mode: bool) -> None:
-        """Route the AXI Stream Switch to select the desired ADC and output mode.
+    def _route_switch(self, acq_ip_index: int, raw_mode: bool) -> None:
+        """Route the AXI Stream Switch to select the desired AcquisitionIP and output mode.
 
-        The switch is modeled as having two ports per ADC index:
+        The switch is modeled as having two ports per IP index:
         - even port: raw stream
         - odd port:  decimated/accumulated stream
 
@@ -719,8 +719,8 @@ class DMAEngine:
         method returns immediately (assumes a static fabric or a design
         without a switch).
 
-        :param adc_index: Acquisition IP index.
-        :type adc_index: int
+        :param acq_ip_index: Acquisition IP index.
+        :type acq_ip_index: int
         :param raw_mode:
             If True, route the raw path; otherwise route
             decimated/accumulated.
@@ -735,9 +735,9 @@ class DMAEngine:
 
         # Port mapping is a *bitstream-level contract*. Hardcoded swap for this bitstream:
         # acq0 -> base port 2 (raw=2, dec/acc=3), acq1 -> base port 0 (raw=0, dec/acc=1).
-        adc_idx = int(adc_index)
+        acq_ip_index = int(acq_ip_index)
         hard_map = {0: 2, 1: 0}
-        base_port = hard_map.get(adc_idx, adc_idx * 2)
+        base_port = hard_map.get(acq_ip_index, acq_ip_index * 2)
         target_port = base_port + (0 if raw_mode else 1)
 
         # Skip MMIO writes if routing hasn't changed (memoization).
@@ -828,20 +828,20 @@ class DMAEngine:
             self.logger.error(f"Critical Failure during DMA Reset: {e}")
             raise DMAError(f"Critical Failure during DMA Reset: {e}") from e
 
-    def _get_or_allocate_buffer(self, adc_index: int, total_words: int) -> object:
-        """Return a persistent DMA buffer for the given ADC, allocating if necessary.
+    def _get_or_allocate_buffer(self, acq_ip_index: int, total_words: int) -> object:
+        """Return a persistent DMA buffer for the given AcquisitionIP, allocating if necessary.
 
         Buffer size is always the full FIFO capacity. We cache one buffer per
-        ADC index to avoid repeated allocations.
+        Acquisition IP index to avoid repeated allocations.
 
-        :param adc_index: ADC/acquisition index used as the cache key.
-        :type adc_index: int
+        :param acq_ip_index: Acquisition index used as the cache key.
+        :type acq_ip_index: int
         :param total_words: Buffer length in 32-bit words (full FIFO capacity).
         :type total_words: int
         :return: A PYNQ-allocated buffer suitable for DMA reception.
         :rtype: object
         """
-        existing = self._persistent_buffers.get(adc_index)
+        existing = self._persistent_buffers.get(acq_ip_index)
 
         if existing is not None and existing.shape[0] >= total_words:
             return existing
@@ -851,7 +851,7 @@ class DMAEngine:
             existing.freebuffer()
 
         buffer = allocate(shape=(total_words,), dtype="u4")
-        self._persistent_buffers[adc_index] = buffer
+        self._persistent_buffers[acq_ip_index] = buffer
         return buffer
 
 

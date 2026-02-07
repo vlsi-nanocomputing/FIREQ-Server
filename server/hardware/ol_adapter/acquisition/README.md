@@ -1,6 +1,6 @@
 # Acquisition Submodule
 
-DMA-based multi-ADC acquisition control for the FIREQ overlay adapter.
+DMA-based multi-acquisition IP control for the FIREQ overlay adapter.
 
 ## Architecture
 

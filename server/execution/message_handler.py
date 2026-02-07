@@ -107,7 +107,8 @@ class MessageHandler:
             n_chunks = 1
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, adc) for adc in acq_indices
+                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
+                    for acq_ip in acq_indices
                 )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
 
@@ -239,7 +240,8 @@ class MessageHandler:
             # Compute chunks_per_point based on hardware buffer limits
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, adc) for adc in acq_indices
+                    self.adapter.acquisition._dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
+                    for acq_ip in acq_indices
                 )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
             else:
@@ -253,7 +255,7 @@ class MessageHandler:
                 "sweep_id": sweep_id,
                 "stream_mode": "header_binary",
                 "n_points": n_points,
-                "adc_metadata": metadata_payload.get("adc_metadata", {}),
+                "acq_ip_metadata": metadata_payload.get("acq_ip_metadata", {}),
                 "chunks_per_point": chunks_per_point,
             }
             yield StreamHeader(type="sweep_header", metadata=header_metadata)
@@ -608,7 +610,7 @@ class MessageHandler:
     ) -> Iterator[dict[int, np.ndarray]]:
         """Stream acquisition chunks using run_multi_acquisition().
 
-        :param acq_indices: ADC indices to capture.
+        :param acq_indices: acquisition ip indices to capture.
         :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
@@ -646,7 +648,7 @@ class MessageHandler:
     ) -> Iterator[BinaryChunk]:
         """Stream acquisition for one sweep point, yielding BinaryChunk items.
 
-        :param acq_indices: ADC indices to capture.
+        :param acq_indices: acquisition ip indices to capture.
         :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
@@ -700,7 +702,7 @@ class MessageHandler:
 
         :param config: Experiment configuration.
         :type config: dict
-        :return: ADC indices to capture (only active ones with channel != 0).
+        :return: acquisition ip indices to capture (only active ones with channel != 0).
         :rtype: list[int]
         """
         acquisitions = config.get("acquisitions", [])
@@ -726,7 +728,7 @@ class MessageHandler:
 
         :param config: Experiment configuration.
         :type config: dict
-        :param acq_indices: Optional precomputed ADC indices.
+        :param acq_indices: Optional precomputed acquisition ip indices.
         :type acq_indices: list[int] | None
         :return: Tuple (acq_indices, mode, shots, samp_per_shot, timeout).
         :rtype: tuple[list[int], str, int, int, float]
@@ -759,7 +761,7 @@ class MessageHandler:
     ) -> dict:
         """Build metadata payload emitted before streaming chunks.
 
-        :param acq_indices: ADC indices to capture.
+        :param acq_indices: acquisition ip indices to capture.
         :type acq_indices: list[int]
         :param mode: Acquisition output mode.
         :type mode: str
@@ -780,14 +782,14 @@ class MessageHandler:
         :return: Metadata payload.
         :rtype: dict
         """
-        adc_metadata: dict[int, dict[str, object]] = {}
-        for adc_idx in acq_indices:
-            shape = self._compute_expected_shape(mode, shots, samp_per_shot, adc_idx)
+        acq_ip_metadata: dict[int, dict[str, object]] = {}
+        for acq_ip_idx in acq_indices:
+            shape = self._compute_expected_shape(mode, shots, samp_per_shot, acq_ip_idx)
             dtype = "iq_int32" if mode == "accumulated" else "iq_int16"
-            adc_metadata[adc_idx] = {"dtype": dtype, "shape": shape}
+            acq_ip_metadata[acq_ip_idx] = {"dtype": dtype, "shape": shape}
         payload: dict[str, object] = {
             "ok": ok,
-            "adc_metadata": adc_metadata,
+            "acq_ip_metadata": acq_ip_metadata,
             "n_chunks": n_chunks,
             "stream_mode": stream_mode,
         }
@@ -797,8 +799,8 @@ class MessageHandler:
             payload["error"] = error
         return payload
 
-    def _compute_expected_shape(self, mode: str, shots: int, samp_per_shot: int, adc_index: int) -> list[int]:
-        """Compute the expected array shape for a given ADC.
+    def _compute_expected_shape(self, mode: str, shots: int, samp_per_shot: int, acq_ip_index: int) -> list[int]:
+        """Compute the expected array shape for a given acquisition ip.
 
         :param mode: Acquisition mode.
         :type mode: str
@@ -806,8 +808,8 @@ class MessageHandler:
         :type shots: int
         :param samp_per_shot: Samples per shot.
         :type samp_per_shot: int
-        :param adc_index: ADC index.
-        :type adc_index: int
+        :param acq_ip_index: acquisition ip index.
+        :type acq_ip_index: int
         :return: Expected array shape.
         :rtype: list[int]
         """
@@ -816,7 +818,7 @@ class MessageHandler:
         if mode == "decimated":
             return [int(shots), int(samp_per_shot)]
         if mode == "raw":
-            parallelism = int(self.adapter.hw_specs["acquisitions"][adc_index].get("parallelism", 1))
+            parallelism = int(self.adapter.hw_specs["acquisitions"][acq_ip_index].get("parallelism", 1))
             return [int(shots), int(samp_per_shot) * parallelism]
         return [int(shots), int(samp_per_shot)]
 

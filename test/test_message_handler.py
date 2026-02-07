@@ -55,7 +55,7 @@ def stack() -> object:
             # Mock run_acquisition method on adapter
             # This is used by _stream_acquisition_only in MessageHandler
             def run_acquisition_side_effect(
-                adc_indices: list,
+                acq_ip_indices: list,
                 mode: str,
                 shots: int,
                 samp_per_shot: int,
@@ -63,13 +63,13 @@ def stack() -> object:
             ) -> tuple:
                 """Return data dict and timing info (fpga_wait_s, dma_overhead_s)."""
                 result = {}
-                for adc in adc_indices:
+                for acq_ip in acq_ip_indices:
                     if mode == "accumulated":
                         dtype = np.dtype([("i", "<i4"), ("q", "<i4")])
-                        result[adc] = np.zeros(shots, dtype=dtype)
+                        result[acq_ip] = np.zeros(shots, dtype=dtype)
                     else:
                         dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
-                        result[adc] = np.zeros((shots, samp_per_shot), dtype=dtype)
+                        result[acq_ip] = np.zeros((shots, samp_per_shot), dtype=dtype)
                 return result, 0.001, 0.0001
 
             self.adapter.run_acquisition = MagicMock(side_effect=run_acquisition_side_effect)
@@ -77,7 +77,7 @@ def stack() -> object:
             # Mock run_multi_acquisition - generator that yields data_dict only
             def run_multi_acquisition_side_effect(
                 *,
-                adc_indices: list,
+                acq_ip_indices: list,
                 mode: str,
                 shots: int,
                 samp_per_shot: int,
@@ -86,13 +86,13 @@ def stack() -> object:
             ):
                 """Generator that yields data_dict."""
                 result = {}
-                for adc in adc_indices:
+                for acq_ip in acq_ip_indices:
                     if mode == "accumulated":
                         dtype = np.dtype([("i", "<i4"), ("q", "<i4")])
-                        result[adc] = np.zeros(shots, dtype=dtype)
+                        result[acq_ip] = np.zeros(shots, dtype=dtype)
                     else:
                         dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
-                        result[adc] = np.zeros((shots, samp_per_shot), dtype=dtype)
+                        result[acq_ip] = np.zeros((shots, samp_per_shot), dtype=dtype)
                 # Update timing stats on adapter (simulating what the real method does)
                 self.adapter.last_timing_stats = {
                     "total_ms": 1.0,
@@ -144,14 +144,14 @@ def test_run_experiment_flow(stack: object) -> None:
     assert "n_chunks" in metadata
     assert metadata["stream_mode"] == "header_binary"
 
-    # Check that binary data chunks were produced (if any ADC was active)
+    # Check that binary data chunks were produced (if any AcqIP was active)
     chunk_events = [e for e in events if isinstance(e, BinaryChunk)]
     if chunk_events:
         # Verify chunk structure (binary-only, no JSON metadata)
         chunk = chunk_events[0]
         assert chunk.binary_data is not None
         assert chunk.timing is not None
-        assert 0 in chunk.binary_data  # ADC index 0 should be present
+        assert 0 in chunk.binary_data  # AcqIP index 0 should be present
 
 
 def test_run_sweep_optimized(stack: object) -> None:

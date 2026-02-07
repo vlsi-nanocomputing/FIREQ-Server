@@ -3,7 +3,7 @@
 This module provides the SweepOps class that handles:
 - Sweep mode preparation (locking hardware configuration)
 - Sweep mode finalization (releasing resources)
-- ADC mode configuration during sweeps
+- Acquisition IPs configuration during sweeps
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ class SweepOps:
                 acq.set_decimated_output_type(mode)
 
         # Update active acquisition units - frees buffers for units not in use
-        self._ctx.dma_engine.set_active_adcs(acq_indices)
+        self._ctx.dma_engine.set_active_acq_ip(acq_indices)
 
         # Prepare DMA engine
         self._ctx.dma_engine.prepare_sweep(mode)

@@ -161,7 +161,7 @@ class DMAOrchestrator:
 
                     # --- Start current chunk (if not pre-started) ---
                     if pending_buffer is None:
-                        # First iteration: configure trigger, ARM first ADC, TRIGGER
+                        # First iteration: configure trigger, ARM first Acquisition IP, TRIGGER
                         if hw_shots != self._ctx.cache.last_hw_shots:
                             self._ctx.trigger.set_shots(hw_shots)
                             self._ctx.cache.last_hw_shots = hw_shots
@@ -172,12 +172,12 @@ class DMAOrchestrator:
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=hw_shots,
                             mode=mode,
-                            adc_index=first_acq,
+                            acq_ip_index=first_acq,
                         )
                         self._ctx.trigger.trigger_experiment()
                         pending_shots = hw_shots
 
-                    # --- Complete current chunk: WAIT + COPY all ADCs ---
+                    # --- Complete current chunk: WAIT + COPY all AcquisitionIPs ---
                     results: dict[int, np.ndarray] = {}
 
                     # First acquisition unit: wait on pre-armed buffer
@@ -196,7 +196,7 @@ class DMAOrchestrator:
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=pending_shots,
                             mode=mode,
-                            adc_index=acq_i,
+                            acq_ip_index=acq_i,
                         )
                         buffer_data = self._ctx.dma_engine.retrieve_acquisition(
                             buffer=buffer,
@@ -218,7 +218,7 @@ class DMAOrchestrator:
                             samp_per_shot=samp_per_shot,
                             shots_per_exp=next_hw_shots,
                             mode=mode,
-                            adc_index=first_acq,
+                            acq_ip_index=first_acq,
                         )
                         self._ctx.trigger.trigger_experiment()
                         pending_shots = next_hw_shots
@@ -334,7 +334,7 @@ class DMAOrchestrator:
             samp_per_shot=samp_per_shot,
             shots_per_exp=shots,
             mode=mode,
-            adc_index=first_acq,
+            acq_ip_index=first_acq,
         )
 
         # Trigger
@@ -356,7 +356,7 @@ class DMAOrchestrator:
                 samp_per_shot=samp_per_shot,
                 shots_per_exp=shots,
                 mode=mode,
-                adc_index=acq_i,
+                acq_ip_index=acq_i,
             )
             buffer_data = self._ctx.dma_engine.retrieve_acquisition(
                 buffer=buffer,

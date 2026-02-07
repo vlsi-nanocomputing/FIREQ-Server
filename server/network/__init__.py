@@ -5,6 +5,6 @@ This package provides the TCP server that accepts client connections
 and routes commands to the experiment execution layer.
 """
 
-from .tcp_server import FIREQServer
+from .fireq_server import FIREQServer
 
 __all__ = ["FIREQServer"]

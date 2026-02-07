@@ -95,7 +95,7 @@ class AdapterContext:
     logger : logging.Logger
         Logger instance for debug/error reporting.
     dma_engine : DMAEngine
-        DMA orchestration engine for multi-ADC acquisition.
+        DMA orchestration engine for multi-acquisition-ip acquisition.
     trigger : object | None
         Reference to TriggerGeneratorOps instance (set after initialization for cross-dependency).
     generator : object | None

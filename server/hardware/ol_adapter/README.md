@@ -10,7 +10,7 @@ Server-oriented adapter layer on top of the low-level FIREQ hardware drivers (`F
 OverlayAdapter
  ├── TriggerGeneratorOps – trigger generator: shots, duration, delays, experiment start
  ├── GeneratorOps        – wave/envelope management, FIFO, modulation  (generator/)
- ├── AcquisitionOps      – DMA-based multi-ADC acquisition, sweep mode (acquisition/)
+ ├── AcquisitionOps      – DMA-based multi-acquisition ip acquisition, sweep mode (acquisition/)
  └── ExperimentOps       – high-level sweep orchestration
 ```
 

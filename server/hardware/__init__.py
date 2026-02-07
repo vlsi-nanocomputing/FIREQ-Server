@@ -9,7 +9,7 @@ This package provides:
 The OverlayAdapter composes four operation classes:
 - GeneratorOps: Wave management and generator modulation/triggering
 - TriggerGeneratorOps: Trigger generator control
-- AcquisitionOps: DMA-based multi-ADC acquisition with chunking
+- AcquisitionOps: DMA-based multi-acquisition with chunking
 - ExperimentOps: High-level experiment orchestration
 """
 

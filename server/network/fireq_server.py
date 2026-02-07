@@ -1,4 +1,4 @@
-# file: fireq-utils/server/tcp_server.py
+# file: fireq-utils/server/network/fireq_server.py
 """FIREQ TCP Server - single-client TCP server for hardware experiments.
 
 Architecture: 3 threads communicate via queue_in/queue_out.
@@ -8,7 +8,7 @@ Architecture: 3 threads communicate via queue_in/queue_out.
 
 Protocol:
 - Requests: 4-byte big-endian length prefix + UTF-8 JSON payload.
-- Responses: JSON messages (4-byte length) and streamed binary data (ADC frames + timing).
+- Responses: JSON messages (4-byte length) and streamed binary data (acquistion frames + timing).
   For run_experiment/run_sweep: StreamHeader (JSON) → BinaryChunk (frames) → StreamTiming (JSON).
 """
 import json
@@ -431,8 +431,8 @@ class FIREQServer:
                     self._send_message(self._client_socket, item.metadata)
 
                 elif isinstance(item, BinaryChunk):
-                    for adc_idx, arr in item.binary_data.items():
-                        self._send_binary_frame(self._client_socket, adc_idx, arr)
+                    for acq_ip_idx, arr in item.binary_data.items():
+                        self._send_binary_frame(self._client_socket, acq_ip_idx, arr)
                     if item.timing:
                         self._send_timing_trailer(self._client_socket, item.timing[0], item.timing[1])
 
@@ -582,28 +582,29 @@ class FIREQServer:
             payload = json.dumps(msg).encode("utf-8")
         sock.sendall(len(payload).to_bytes(4, "big") + payload)
 
-    def _send_binary_frame(self, sock: socket.socket, adc_index: int, data: np.ndarray) -> None:
-        """Send binary frame: [4B ADC][data].
+    def _send_binary_frame(self, sock: socket.socket, acq_ip_index: int, data: np.ndarray) -> None:
+        """Send binary frame: [4B AcqIP][data].
 
-        Client computes data length and valid_words from request params + adc_metadata.
+        Client computes data length and valid_words from request params + acq_ip_metadata.
 
         :param sock: Connected socket.
         :type sock: socket.socket
-        :param adc_index: ADC/acquisition index.
-        :type adc_index: int
+        :param acq_ip_index: Acquisition index.
+        :type acq_ip_index: int
         :param data: Numpy array to transmit.
         :type data: np.ndarray
         """
         t_start = time.perf_counter()
         self.logger.debug(
-            f"Sending binary frame: ADC={adc_index}, size={data.nbytes}B, " f"dtype={data.dtype}, shape={data.shape}"
+            f"Sending binary frame: AcqIp={acq_ip_index}, size={data.nbytes}B, "
+            f"dtype={data.dtype}, shape={data.shape}"
         )
-        sock.sendall(struct.pack(">I", adc_index))
+        sock.sendall(struct.pack(">I", acq_ip_index))
         sock.sendall(memoryview(data))
         elapsed_ms = (time.perf_counter() - t_start) * 1000
         data_bytes_len = data.nbytes
         if elapsed_ms > 50:
-            self.logger.warning(f"Slow send: ADC {adc_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
+            self.logger.warning(f"Slow send: AcqIp {acq_ip_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
 
     def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
         """Send timing trailer (2x float32 big-endian).

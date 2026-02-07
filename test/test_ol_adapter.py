@@ -69,7 +69,7 @@ def ctx() -> AdapterTestContext:
     adapter = OverlayAdapter(mock_ol)
     # Mock DMA engine for chunking tests
     mock_dma = MagicMock()
-    mock_dma.set_active_adcs = MagicMock(return_value=None)
+    mock_dma.set_active_acq_ips = MagicMock(return_value=None)
     mock_dma.prepare_sweep = MagicMock(return_value=None)
     mock_dma.end_sweep = MagicMock(return_value=None)
     adapter._ctx.dma_engine = mock_dma
@@ -316,8 +316,8 @@ def test_compile_waves_conflict_raises_error(ctx: AdapterTestContext) -> None:
     assert "spec differs" in res["failed"][0]["error"]
 
 
-def test_run_multi_acquisition_single_adc(ctx: AdapterTestContext) -> None:
-    """Verify run_multi_acquisition correctly arms, triggers, and retrieves data from single ADC."""
+def test_run_multi_acquisition_single_acq_ip(ctx: AdapterTestContext) -> None:
+    """Verify run_multi_acquisition correctly arms, triggers, and retrieves data from single AcqIp."""
     # Setup mock return values
     dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
     mock_data = np.zeros((10, 100), dtype=dtype)
@@ -348,7 +348,7 @@ def test_run_multi_acquisition_single_adc(ctx: AdapterTestContext) -> None:
         samp_per_shot=100,
         shots_per_exp=10,
         mode="raw",
-        adc_index=0,
+        acq_ip_index=0,
     )
 
     # Verify trigger was fired
@@ -366,8 +366,8 @@ def test_run_multi_acquisition_single_adc(ctx: AdapterTestContext) -> None:
     ctx.adapter.dma_engine.retrieve_acquisition.assert_called_once()
 
 
-def test_run_multi_acquisition_multi_adc(ctx: AdapterTestContext) -> None:
-    """Verify multi-ADC acquisition with switch routing."""
+def test_run_multi_acquisition_multi_acq_ip(ctx: AdapterTestContext) -> None:
+    """Verify multi-acq_ip acquisition with switch routing."""
     # Setup mock for arm
     buffer_counter = [0]
 
@@ -406,13 +406,13 @@ def test_run_multi_acquisition_multi_adc(ctx: AdapterTestContext) -> None:
     # Verify trigger was fired once
     ctx.trig.start_experiment.assert_called_once()
 
-    # Verify both ADCs have data
+    # Verify both AcqIps have data
     assert 0 in result and 1 in result
 
-    # Verify both ADCs were armed (sequential ARM → TRIGGER → RETRIEVE)
+    # Verify both AcqIps were armed (sequential ARM → TRIGGER → RETRIEVE)
     assert ctx.adapter.dma_engine.arm_acquisition.call_count == 2
 
-    # Verify retrieve was called twice (once per ADC)
+    # Verify retrieve was called twice (once per AcqIp)
     assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 2
 
 

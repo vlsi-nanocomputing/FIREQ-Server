@@ -20,7 +20,7 @@ from .models.exceptions import (
     WaveCompilationError,
 )
 from .models.results import HardwareStatusResult, ResetResult, SweepStatus
-from .network.tcp_server import FIREQServer
+from .network.fireq_server import FIREQServer
 
 __all__ = [
     # Main Server Class

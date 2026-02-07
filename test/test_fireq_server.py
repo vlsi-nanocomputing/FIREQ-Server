@@ -1,5 +1,5 @@
-# file: fireq-utils/test/test_tcp_server.py
-"""TCP Server Integration & Robustness Test Suite (Pytest Version)."""
+# file: fireq-utils/test/test_fireq_server.py
+"""FIREQ Server Integration & Robustness Test Suite (Pytest Version)."""
 
 import json
 import socket
@@ -232,9 +232,9 @@ def test_broken_pipe_during_sweep(client, server_ctx):
         time.sleep(0.2)
         shots = kwargs.get("shots", 1)
         sps = kwargs.get("samp_per_shot", 100)
-        adc_indices = kwargs.get("adc_indices", [0])
+        acq_ip_indices = kwargs.get("acq_ip_indices", [0])
         dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
-        result = {adc: np.zeros((shots, sps), dtype=dtype) for adc in adc_indices}
+        result = {acq_ip: np.zeros((shots, sps), dtype=dtype) for acq_ip in acq_ip_indices}
         yield result
 
     server_ctx.adapter.acquisition.run_multi_acquisition = slow_mock_run_multi_acquisition
@@ -294,7 +294,7 @@ def test_abort_command_execution(client, server_ctx):
             on_plan(points)
 
         # Send sweep_metadata first to trigger sweep_header in TCP server
-        on_point({"kind": "sweep_metadata", "n_total": n_points, "adc_metadata": {}})
+        on_point({"kind": "sweep_metadata", "n_total": n_points, "acq_ip_metadata": {}})
 
         for i in range(50):
             if stop_event.is_set():
