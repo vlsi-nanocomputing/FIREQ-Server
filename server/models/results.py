@@ -104,6 +104,9 @@ class SweepTimingStats:
     total_sw_overhead_ms: float = 0.0  # Sum of run_acquisition + loop overhead
     inter_point_overhead_ms: float = 0.0  # Residual time between points
 
+    # --- Wall-clock reference ---
+    wall_clock_ms: float = 0.0  # True elapsed time (perf_counter end - start)
+
     # --- Metadata ---
     n_points_timed: int = 0  # Validation counter
 
@@ -137,6 +140,7 @@ class SweepTimingStats:
             # Metadata
             "n_points_timed": self.n_points_timed,
             "measured_total_ms": measured_total,
+            "wall_clock_ms": self.wall_clock_ms,
         }
 
 

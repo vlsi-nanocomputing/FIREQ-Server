@@ -260,6 +260,9 @@ class MessageHandler:
             }
             yield StreamHeader(type="sweep_header", metadata=header_metadata)
 
+            # Wall-clock reference for the entire acquisition phase
+            t_wall_clock_start = time.perf_counter()
+
             # Local timing accumulators
             _has_timing = hasattr(self.adapter, "last_timing_stats")
             _hw_ms = _dma_ms = _sw_ms = 0.0
@@ -267,16 +270,15 @@ class MessageHandler:
 
             # Point 0 acquisition
             if acq_indices:
-                for item in self._stream_sweep_point_items(
+                yield from self._stream_sweep_point_items(
                     acq_indices, mode, shots, samp_per_shot, timeout, validate=True
-                ):
-                    if _has_timing:
-                        stats = self.adapter.last_timing_stats
-                        _hw_ms += stats.get("fpga_wait_ms", 0.0)
-                        _dma_ms += stats.get("dma_overhead_ms", 0.0)
-                        _sw_ms += stats.get("sw_overhead_ms", 0.0)
-                        _n_timed += 1
-                    yield item
+                )
+                if _has_timing:
+                    stats = self.adapter.last_timing_stats
+                    _hw_ms += stats.get("fpga_wait_ms", 0.0)
+                    _dma_ms += stats.get("dma_overhead_ms", 0.0)
+                    _sw_ms += stats.get("sw_overhead_ms", 0.0)
+                    _n_timed += 1
 
             t_last_acquisition_end = time.perf_counter()
             n_completed = 1
@@ -289,6 +291,7 @@ class MessageHandler:
                 timing.total_dma_overhead_ms = _dma_ms
                 timing.total_sw_overhead_ms = _sw_ms
                 timing.n_points_timed = _n_timed
+                timing.wall_clock_ms = (time.perf_counter() - t_wall_clock_start) * 1000.0
                 status = SweepStatus(True, sweep_id, n_points, n_completed, timing_stats=timing)
                 yield StreamTiming(
                     type="sweep_status",
@@ -339,14 +342,13 @@ class MessageHandler:
                         else fixed_samp_per_shot
                     )
                     to = float(sweep_config["timeout"]) if plan.has_timeout_var else fixed_timeout
-                    for item in self._stream_sweep_point_items(acq_indices, fixed_mode, sh, sp, to, validate=False):
-                        if _has_timing:
-                            stats = self.adapter.last_timing_stats
-                            _hw_ms += stats.get("fpga_wait_ms", 0.0)
-                            _dma_ms += stats.get("dma_overhead_ms", 0.0)
-                            _sw_ms += stats.get("sw_overhead_ms", 0.0)
-                            _n_timed += 1
-                        yield item
+                    yield from self._stream_sweep_point_items(acq_indices, fixed_mode, sh, sp, to, validate=False)
+                    if _has_timing:
+                        stats = self.adapter.last_timing_stats
+                        _hw_ms += stats.get("fpga_wait_ms", 0.0)
+                        _dma_ms += stats.get("dma_overhead_ms", 0.0)
+                        _sw_ms += stats.get("sw_overhead_ms", 0.0)
+                        _n_timed += 1
 
                 t_last_acquisition_end = time.perf_counter()
                 n_completed += 1
@@ -360,6 +362,7 @@ class MessageHandler:
             t_finalize_start = time.perf_counter()
             self.adapter.experiment.end_sweep()
             timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
+            timing.wall_clock_ms = (time.perf_counter() - t_wall_clock_start) * 1000.0
 
             status = SweepStatus(True, sweep_id, n_points, n_completed, timing_stats=timing)
             yield StreamTiming(
