@@ -301,6 +301,7 @@ class FIREQServer:
 
                 self.logger.info(f"Client connected from {addr}")
                 client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 try:
                     self._handle_client(client_socket)
                 except Exception as e:
@@ -578,6 +579,7 @@ class FIREQServer:
             payload = json.dumps(msg).encode("utf-8")
             debug_timing["server_encode_ms"] = (time.perf_counter() - t0) * 1000.0
             debug_timing["payload_bytes"] = len(payload)
+            payload = json.dumps(msg).encode("utf-8")
         else:
             payload = json.dumps(msg).encode("utf-8")
         sock.sendall(len(payload).to_bytes(4, "big") + payload)
@@ -723,6 +725,7 @@ class FIREQServer:
         if timing_item is not None:
             debug_timing = timing_item.metadata.setdefault("debug_timing", {})
             debug_timing["total_server_time_ms"] = (time.perf_counter() - t_start) * 1000
+            self._safe_queue_put(timing_item)
 
     def _stream_items_to_queue(
         self, items_generator: Iterator[StreamHeader | BinaryChunk | StreamTiming]
@@ -737,6 +740,7 @@ class FIREQServer:
         for item in items_generator:
             if isinstance(item, StreamTiming):
                 last_timing = item
+                continue
             if not self._safe_queue_put(item):
                 break
         return last_timing
