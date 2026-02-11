@@ -85,17 +85,20 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # write duration HIGH
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
-    def set_number_of_shots(self, value: int) -> None:
+    def set_number_of_shots(self, value: int) -> int:
         """Set the number of shots to execute in hardware.
 
         :param value: Number of shots (must be between 1 and max_hw_repetitions)
         :type value: int
-        :raises ValueError: If value is outside the valid range
+        :return: Error code (0 on success)
+        :rtype: int
         """
         if value < 1 or value > self.max_hw_repetitions:
-            raise ValueError(f"Number of shots {value} is outside of range 1 to " f"{self.max_hw_repetitions}")
+            print(f"number of shots {value} is outside of range 1 to {self.max_hw_repetitions}")
+            return -3
 
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
+        return 0
 
     def start_experiment(self) -> None:
         """Start the generation of triggers."""
@@ -110,7 +113,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0)
         return (control_register & 0x40000000) == 0x40000000
 
-    def insert_drive_delay(self, channel: int, index: int, delay: int, generate_trigger: int) -> None:
+    def insert_drive_delay(self, channel: int, index: int, delay: int, generate_trigger: int) -> int:
         """Insert a delay value in the FIFO of a drive channel at index.
 
         The generate_trigger input is used to tell the trigger generator if a trigger
@@ -124,33 +127,41 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :type delay: int
         :param generate_trigger: Generates a trigger if set to 1
         :type generate_trigger: int
-        :raises ValueError: If channel, index, or delay is outside valid range
+        :return: Error code (0 on success)
+        :rtype: int
         """
         if channel < 1 or channel > self.trigger_channels:
-            raise ValueError(f"Channel {channel} is outside of range 1 to {self.trigger_channels}")
+            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
+            return -3
 
         if index < 1 or index > self.channel_fifo_depth:
-            raise ValueError(f"Index {index} is outside of range 1 to {self.channel_fifo_depth}")
+            print(f"index {index} is outside of range 1 to {self.channel_fifo_depth}")
+            return -3
 
         if delay < 1 or delay > self.drive_delay_max:
-            raise ValueError(f"Delay {delay} is outside of range 1 to {self.drive_delay_max}")
+            print(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
+            return -3
 
         real_delay = (delay - 1) | (generate_trigger << 31)
         real_address = (channel - 1) * self.channel_fifo_depth + index - 1
         self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
+        return 0
 
-    def set_readout_delay(self, delay: int, channel: int) -> None:
+    def set_readout_delay(self, delay: int, channel: int) -> int:
         """Set the readout delay for a specific channel.
 
         :param delay: Delay in clock cycles
         :type delay: int
         :param channel: Channel number (1 to trigger_channels)
         :type channel: int
-        :raises ValueError: If channel is outside valid range
+        :return: Error code (0 on success)
+        :rtype: int
         """
         if channel < 1 or channel > self.trigger_channels:
-            raise ValueError(f"Channel {channel} is outside of range 1 to {self.trigger_channels}")
+            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
+            return -3
         # write delay LOW
         self._axi_lite_interface_mmio.write((self._readout_delay_l + (channel - 1) * 2) * 4, delay & 0xFFFFFFFF)
         # write delay HIGH
         self._axi_lite_interface_mmio.write((self._readout_delay_h + (channel - 1) * 2) * 4, delay >> 32)
+        return 0

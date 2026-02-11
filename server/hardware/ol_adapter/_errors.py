@@ -40,6 +40,10 @@ ERROR_HINTS: dict[tuple, str] = {
     ("TriggerGeneratorDriver", "set_readout_delay", -3): (
         "Check: readout channel range, delay non-negative and within HW limits."
     ),
+    ("AcquisitionDriver", "set_decimated_output_type", -3): (
+        "Check: output_type must be 'decimated' or 'accumulated'."
+    ),
+    ("TriggerGeneratorDriver", "set_number_of_shots", -3): ("Check: number of shots in range [1..max_hw_repetitions]."),
 }
 
 

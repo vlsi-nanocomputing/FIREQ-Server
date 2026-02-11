@@ -93,10 +93,10 @@ class AcquisitionDriver(_FIREQDriver):
         :type adc_samplerate: float
         :return: Error code (0 on success)
         :rtype: int
-        :raises ValueError: If frequency is negative
         """
         if frequency < 0:
-            raise ValueError("Frequency must be non-negative")
+            print("input parameters out of range")
+            return -3
 
         # get poff and pinc
         phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, adc_samplerate, self.phase_depth)
@@ -149,10 +149,10 @@ class AcquisitionDriver(_FIREQDriver):
         :type duration: int
         :return: Error code (0 on success)
         :rtype: int
-        :raises ValueError: If duration is out of valid range
         """
         if duration < 1 or duration > self.maximum_duration:
-            raise ValueError(f"Acquisition duration must be between 1 and {self.maximum_duration}")
+            print("acquisition duration is out of range")
+            return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
@@ -166,10 +166,10 @@ class AcquisitionDriver(_FIREQDriver):
         :type channel: int
         :return: Error code (0 on success)
         :rtype: int
-        :raises ValueError: If channel is out of valid range
         """
         if channel < 0 or channel > self.trigger_channels:
-            raise ValueError(f"Channel must be between 0 and {self.trigger_channels}")
+            print("channel choice is out of range")
+            return -3
 
         channel_mask = (1 << channel) >> 1
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
@@ -184,10 +184,10 @@ class AcquisitionDriver(_FIREQDriver):
         :type time_of_flight: int
         :return: Error code (0 on success)
         :rtype: int
-        :raises ValueError: If time_of_flight is out of valid range
         """
         if time_of_flight < 1 or time_of_flight > self.time_of_flight_max:
-            raise ValueError(f"Time of flight must be between 1 and {self.time_of_flight_max}")
+            print("time of flight is out of range")
+            return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(
@@ -208,14 +208,14 @@ class AcquisitionDriver(_FIREQDriver):
         :type output_type: str
         :return: Error code (0 on success)
         :rtype: int
-        :raises ValueError: If output_type is not a valid option
         """
         if output_type == "decimated":
             output_mode_bit = 0
         elif output_type == "accumulated":
             output_mode_bit = 1
         else:
-            raise ValueError("Invalid output_type. Allowed values are 'decimated' and 'accumulated'")
+            print("output_type is not recognized, allowed values are 'decimated' and 'accumulated'")
+            return -3
 
         updated_control = _set_bit(
             self._axi_lite_interface_mmio.read(self._ctrl * 4),

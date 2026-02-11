@@ -262,7 +262,12 @@ class DMAOrchestrator:
             for acq_i in acq_indices:
                 acq = self._ctx.ll.get_acq(acq_i)
                 if mode in ("decimated", "accumulated"):
-                    acq.set_decimated_output_type(mode)
+                    self._ctx.ll.call(
+                        acq.set_decimated_output_type(mode),
+                        operation="set_decimated_output_type",
+                        driver_name="AcquisitionDriver",
+                        config_error=True,
+                    )
 
     @contextmanager
     def _dma_timeout_context(self, timeout_sec: float | None) -> Iterator[None]:

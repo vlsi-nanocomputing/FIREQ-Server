@@ -53,7 +53,12 @@ class SweepOps:
         for acq_index in acq_indices:
             acq = self._ctx.ll.get_acq(acq_index)
             if mode in ("decimated", "accumulated"):
-                acq.set_decimated_output_type(mode)
+                self._ctx.ll.call(
+                    acq.set_decimated_output_type(mode),
+                    operation="set_decimated_output_type",
+                    driver_name="AcquisitionDriver",
+                    config_error=True,
+                )
 
         # Update active acquisition units - frees buffers for units not in use
         self._ctx.dma_engine.set_active_acq_ip(acq_indices)

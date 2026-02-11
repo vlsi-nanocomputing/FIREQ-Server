@@ -52,7 +52,12 @@ class TriggerGeneratorOps:
         if shots < 1 or shots > int(trigger_device.max_hw_repetitions):
             raise ConfigurationError(f"shots={shots} out of range [1..{int(trigger_device.max_hw_repetitions)}]")
 
-        trigger_device.set_number_of_shots(shots)
+        self._ctx.ll.call(
+            trigger_device.set_number_of_shots(shots),
+            operation="set_number_of_shots",
+            driver_name="TriggerGeneratorDriver",
+            config_error=True,
+        )
         return {"shots": shots}
 
     def set_duration(self, duration_cycles: int) -> dict:
