@@ -209,6 +209,58 @@ def check_readout_wave_cache(
     return old_entry, "replace" if old_entry is not None else "compile"
 
 
+# =============================================================================
+# FIFO Validation
+# =============================================================================
+
+
+def validate_fifo_capacity(
+    gen_fifo_depth: int,
+    start_index: int,
+    sequence_length: int,
+) -> None:
+    """Validate FIFO capacity and raise if overflow would occur.
+
+    :param gen_fifo_depth: FIFO segment depth (from hardware).
+    :type gen_fifo_depth: int
+    :param start_index: FIFO write start index.
+    :type start_index: int
+    :param sequence_length: Length of sequence to write.
+    :type sequence_length: int
+    :raises ConfigurationError: If FIFO would overflow.
+    """
+    max_entries = int(gen_fifo_depth // 4)
+    end_index = start_index + sequence_length - 1
+    if end_index > max_entries:
+        raise ConfigurationError(
+            f"program_drive_sequence: overflow: end_index={end_index} > " f"max_entries={max_entries}"
+        )
+
+
+def validate_wave_ids_in_cache(
+    cache: dict[str, WaveEntry],
+    wave_id_list: list[str],
+    gen_wave_memory: dict,
+) -> None:
+    """Validate all wave_ids exist in HL cache and LL memory.
+
+    :param cache: High-level wave cache.
+    :type cache: dict[str, WaveEntry]
+    :param wave_id_list: List of wave IDs to check.
+    :type wave_id_list: list[str]
+    :param gen_wave_memory: Generator wave memory dictionary (from HW).
+    :type gen_wave_memory: dict
+    :raises ConfigurationError: If any wave_id is missing.
+    """
+    missing_wave_id_hl = [wid for wid in wave_id_list if (wid not in cache) or (cache[wid].wdw) is None]
+    missing_wave_id_ll = [wid for wid in wave_id_list if wid not in gen_wave_memory]
+
+    if missing_wave_id_hl:
+        raise ConfigurationError(f"program_drive_sequence: wave_id not in HL cache: {missing_wave_id_hl}")
+    if missing_wave_id_ll:
+        raise ConfigurationError(f"program_drive_sequence: wave_id was never compiled (LL): " f"{missing_wave_id_ll}")
+
+
 __all__ = [
     "build_wave_entry",
     "check_wave_replacement_policy",
@@ -216,4 +268,6 @@ __all__ = [
     "validate_envelope_symmetry",
     "process_envelope_samples",
     "check_readout_wave_cache",
+    "validate_fifo_capacity",
+    "validate_wave_ids_in_cache",
 ]
