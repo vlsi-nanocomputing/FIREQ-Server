@@ -111,6 +111,7 @@ class FIREQServer:
         self._abort_in_progress = Event()
         self._sweep_active = Event()  # Tracks active sweep for cleanup sync
         self._sender_dead = Event()  # Signals sender thread death
+        self._cleanup_done = Event()  # Main-thread cleanup acknowledgment
 
         self._server_socket: socket.socket | None = None
         self._client_socket: socket.socket | None = None
@@ -161,6 +162,10 @@ class FIREQServer:
             try:
                 msg = self.queue_in.get(timeout=1.0)
             except Empty:
+                if self._stop_event.is_set():
+                    self._do_hardware_cleanup("Client disconnect")
+                    self._stop_event.clear()
+                    self._cleanup_done.set()
                 continue
 
             if msg is None:
@@ -345,13 +350,20 @@ class FIREQServer:
         finally:
             self.logger.info("Client teardown...")
             self._stop_event.set()
-            self._do_hardware_cleanup("Cleanup", wait_for_sweep=True)
 
+            # Drain stale messages from disconnected client
             while not self.queue_in.empty():
                 try:
                     self.queue_in.get_nowait()
                 except Empty:
                     break
+
+            # Wait for main loop to finish current message + do cleanup
+            self._cleanup_done.clear()
+            cleanup_timeout = SWEEP_WAIT_TIMEOUT_SECONDS + 5.0
+            if not self._cleanup_done.wait(timeout=cleanup_timeout):
+                self.logger.warning("Cleanup acknowledgment timeout (%.1fs)", cleanup_timeout)
+
             self.queue_out.clear()
 
             try:
@@ -737,12 +749,15 @@ class FIREQServer:
         :rtype: StreamTiming | None
         """
         last_timing = None
-        for item in items_generator:
-            if isinstance(item, StreamTiming):
-                last_timing = item
-                continue
-            if not self._safe_queue_put(item):
-                break
+        try:
+            for item in items_generator:
+                if isinstance(item, StreamTiming):
+                    last_timing = item
+                    continue
+                if not self._safe_queue_put(item):
+                    break
+        finally:
+            items_generator.close()
         return last_timing
 
     def _handle_command_error(self, cmd: str, session_id: str, exc: Exception) -> None:
@@ -764,23 +779,14 @@ class FIREQServer:
             self.logger.exception(f"Command '{cmd}' failed")
         self.queue_out.put(self._build_response(cmd, session_id, ok=False, error=str(exc), error_type=error_type))
 
-    def _do_hardware_cleanup(self, context: str, wait_for_sweep: bool = False) -> None:
+    def _do_hardware_cleanup(self, context: str) -> None:
         """Best-effort hardware cleanup to avoid stale DMA/acquisition state.
 
-        :param context: Description for log messages (e.g., "Cleanup", "Pre-sweep").
-        :type context: str
-        :param wait_for_sweep: If True, wait for active sweep to finish first.
-        :type wait_for_sweep: bool
-        """
-        if wait_for_sweep and self._sweep_active.is_set():
-            self.logger.info("Waiting for active sweep...")
-            elapsed = 0.0
-            while self._sweep_active.is_set() and elapsed < SWEEP_WAIT_TIMEOUT_SECONDS:
-                time.sleep(0.1)
-                elapsed += 0.1
-            if self._sweep_active.is_set():
-                self.logger.warning(f"Sweep timeout ({elapsed:.1f}s), proceeding anyway")
+        Must be called from the main thread only — serialized with hardware ops.
 
+        :param context: Description for log messages (e.g., "Client disconnect").
+        :type context: str
+        """
         try:
             self.handler.cleanup()
         except Exception as e:

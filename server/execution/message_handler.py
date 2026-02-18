@@ -53,13 +53,12 @@ class MessageHandler:
     # =========================================================================
 
     def cleanup(self) -> None:
-        """Hardware cleanup for abnormal termination (e.g., client disconnect)."""
-        try:
-            if hasattr(self.adapter, "end_sweep"):
-                self.adapter.experiment.end_sweep()
-        except Exception as e:
-            self.logger.warning(f"end_sweep during cleanup failed: {e}")
+        """Hardware cleanup for abnormal termination (e.g., client disconnect).
 
+        Note: ``end_sweep()`` is NOT called here: the generator's ``finally``
+        block in :meth:`run_sweep` handles it on all exit paths (normal,
+        exception, ``GeneratorExit`` from disconnect).
+        """
         try:
             self._disable_acquisitions()
         except Exception as e:
@@ -187,6 +186,7 @@ class MessageHandler:
         timing = SweepTimingStats()
         n_points = 0
         n_completed = 0
+        prepare_called = False
 
         try:
             # Plan creation
@@ -284,9 +284,7 @@ class MessageHandler:
             n_completed = 1
 
             if n_points == 1:
-                t_finalize_start = time.perf_counter()
-                self.adapter.experiment.end_sweep()
-                timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
+                # No prepare_sweep was called → no end_sweep needed
                 timing.total_hardware_ms = _hw_ms
                 timing.total_dma_overhead_ms = _dma_ms
                 timing.total_sw_overhead_ms = _sw_ms
@@ -304,6 +302,7 @@ class MessageHandler:
 
             if acq_indices:
                 self.adapter.experiment.prepare_sweep(mode, acq_indices)
+                prepare_called = True
 
             sweep_config = current_config
             if not plan.has_envelope_vars:
@@ -361,6 +360,7 @@ class MessageHandler:
 
             t_finalize_start = time.perf_counter()
             self.adapter.experiment.end_sweep()
+            prepare_called = False  # Mark as handled — skip finally cleanup
             timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
             timing.wall_clock_ms = (time.perf_counter() - t_wall_clock_start) * 1000.0
 
@@ -372,17 +372,19 @@ class MessageHandler:
 
         except Exception as e:
             self.logger.exception(f"Sweep '{sweep_id}' failed")
-            try:
-                t_finalize_start = time.perf_counter()
-                self.adapter.experiment.end_sweep()
-                timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
-            except Exception as cleanup_err:
-                self.logger.error(f"Failed to end sweep during cleanup: {cleanup_err}")
+            # end_sweep() is handled by the finally block below
             status = SweepStatus(False, sweep_id, n_points, n_completed, str(e), timing_stats=timing)
             yield StreamTiming(
                 type="sweep_status",
                 metadata={"type": "sweep_status", "cmd": cmd, "session_id": session_id, **status.to_dict()},
             )
+
+        finally:
+            if prepare_called:
+                try:
+                    self.adapter.experiment.end_sweep()
+                except Exception as cleanup_err:
+                    self.logger.error(f"Failed to end sweep during cleanup: {cleanup_err}")
 
     # =========================================================================
     #                       SWEEP FAST-PATH UPDATES
