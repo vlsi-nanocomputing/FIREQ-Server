@@ -10,3 +10,4 @@ style:
     - pip3.10 install -r requirements.txt
     - python -m black --check .
     - python -m ruff check .
+    - pytest

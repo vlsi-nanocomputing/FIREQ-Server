@@ -1,126 +1,110 @@
-# FIREQ Server
+# FIREQ Utils
 
-A simple API for loading FPGA overlays into the FIREQ SoC system.
+FIREQ control stack for FPGA experiments: low-level PYNQ drivers (`FIREQ_LL_API`), server/runtime orchestration (`server`), and protocol specifications (`specifics`).
+
+## Architecture
+
+```
+fireq-utils/
+ ├── API.py              – interactive server entry point
+ ├── server/             – TCP protocol server + execution orchestration
+ ├── FIREQ_LL_API/       – low-level FIREQ SoC/IP drivers
+ ├── specifics/          – plain-text protocol specifications (.txt)
+ ├── test/               – tests
+ ├── pyproject.toml      – project metadata, dependencies, lint/tool config
+ └── requirements.txt    – pinned install requirements
+```
+
+## Components
+
+| Folder / File | Public API | Responsibility |
+|---|---|---|
+| [`API.py`](API.py) | `main()` | Prompts for overlay/server parameters, loads `FIREQSoC`, instantiates `OverlayAdapter` + `MessageHandler`, then starts `FIREQServer`. |
+| [`server/`](server/README.md) | `FIREQServer`, `MessageHandler`, `OverlayAdapter`, `DMAEngine`, shared models/exceptions | High-level server package: client handshake/auth, command routing, sweep execution, binary streaming protocol, and hardware abstraction wiring. |
+| [`FIREQ_LL_API/`](FIREQ_LL_API/__init__.py) | `FIREQSoC`, `load_fireq`, `GeneratorDriver`, `AcquisitionDriver`, `TriggerGeneratorDriver` | Low-level drivers that bind to overlay IPs, expose AXI register/memory control, and build hardware capability metadata from the `.hwh` design. |
+| [`specifics/`](specifics/) | `.txt` protocol docs | External protocol documentation in plain text. These files describe request/response payloads and streaming formats used by the server. |
+
+## Server Package
+
+The `server` package contains the runtime service and protocol implementation.
+
+- Network layer (`server/network`): length-prefixed TCP framing, session/auth handling, command dispatch, sender/receiver threading.
+- Execution layer (`server/execution`): experiment and sweep orchestration, fast-path sweep updates, stream metadata/chunk emission.
+- Hardware layer (`server/hardware`): server-facing `OverlayAdapter` plus DMA orchestration over low-level drivers.
+- Models (`server/models`): shared config types, results dataclasses, queue payload classes, exception hierarchy.
+
+See [`server/README.md`](server/README.md) for the package-level breakdown.
+
+## FIREQ_LL_API Package
+
+`FIREQ_LL_API` is the low-level hardware control package on top of PYNQ.
+
+### Architecture
+
+```
+FIREQ_LL_API/
+ ├── fireq_soc.py                 – overlay loading, IP discovery, hw_specs build
+ ├── generator_driver.py          – generator IP control (envelopes, waves, modulation, trigger channel)
+ ├── acquisition_driver.py        – acquisition IP control (timing, demodulation, output mode)
+ ├── trigger_generator_driver.py  – trigger/timing FIFO programming and shot control
+ ├── _fireq_parser.py             – .hwh parser for connectivity + AXI mapping
+ ├── _utils.py                    – shared driver/MMIO helpers and bit utilities
+ └── __init__.py                  – public low-level exports
+```
+
+### Files
+
+| File | Public API | Responsibility |
+|---|---|---|
+| `fireq_soc.py` | `FIREQSoC`, `load_fireq` | Loads bitstream, initializes clocks, discovers FIREQ IPs, maps RF topology, and computes structured `hw_specs` metadata. |
+| `generator_driver.py` | `GeneratorDriver` | Direct generator IP control: envelope memory handling, wave memory/sequencing, modulation and trigger listener configuration. |
+| `acquisition_driver.py` | `AcquisitionDriver` | Direct acquisition IP control: demodulation DDS parameters, acquisition timing, trigger channel, and decimated/accumulated output mode. |
+| `trigger_generator_driver.py` | `TriggerGeneratorDriver` | Direct trigger generator control: shot count, experiment duration, drive delay FIFO programming, and readout delays. |
+| `_fireq_parser.py` | `FireqParser` | Parses `.hwh` XML for module connectivity and PS/PL AXI memory mappings used during driver binding/discovery. |
+| `_utils.py` | `_FIREQDriver`, `_DebugMMIO`, helper bit functions | Common base driver and utility primitives used by all low-level IP drivers. |
+| `__init__.py` | — | Re-exports the public low-level APIs. |
+
+## Protocol Specs (`specifics/`)
+
+The `specifics` folder is intentionally plain text (`.txt`) and serves as external protocol documentation for clients.
+
+| File | Scope |
+|---|---|
+| [`specifics/handshake.txt`](specifics/handshake.txt) | Handshake/authentication flow and hardware summary payload (`hw_summary` / `hw_specs`). |
+| [`specifics/upload_envelopes.txt`](specifics/upload_envelopes.txt) | Two-step envelope upload protocol (JSON metadata + binary I/Q frames). |
+| [`specifics/compilation.txt`](specifics/compilation.txt) | Wave compilation request/response format and wave type semantics (`env`, `vz`). |
+| [`specifics/run_experiment_regular.txt`](specifics/run_experiment_regular.txt) | Single experiment execution protocol with `experiment_header`, binary chunks, and timing trailer/message. |
+| [`specifics/run_experiment_sweep.txt`](specifics/run_experiment_sweep.txt) | Sweep execution protocol with variable placeholders, streamed point data, final sweep status, and abort semantics. |
 
 ## Requirements
 
-- Python 3.10+
-- Dependencies listed in `pyproject.toml`:
-  - numpy
-  - pynq >= 3.0.0
-  - pytest
+- Python `3.10.x`
+- `numpy`, `pynq`, `pytest` (see `pyproject.toml` / `requirements.txt`)
 
 ## Installation
 
 ```bash
-# Install dependencies
 pip install -r requirements.txt
+```
 
-# Or, if using pyproject.toml
+or
+
+```bash
 pip install -e .
 ```
 
-## Usage
-
-### Start the server
+## Running the Server
 
 ```bash
 python3 API.py
 ```
 
-### Startup Procedure
+Startup prompts ask for:
 
-The server will prompt for the following information:
+1. Overlay folder path under `/home/xilinx/jupyter_notebooks/`
+2. Overlay bitfile name (default: `overlay.bit`)
+3. Bind host (default: `0.0.0.0`)
+4. Port (default: `5000`)
+5. Auth token (default: `fireq`)
 
-1. **Overlay folder path**
-   - Where your overlay files are located relative to `/home/xilinx/jupyter_notebooks/`
-   - Example: `my_overlays`
-
-2. **Overlay filename** (optional)
-   - Default: `overlay.bit`
-   - Example: `custom_overlay.bit`
-
-3. **Server host** (optional)
-   - Where the server binds
-   - Default: `0.0.0.0` (all interfaces)
-   - Example: `localhost`
-
-4. **Server port** (optional)
-   - Default: `5000`
-   - Example: `8080`
-
-5. **Auth token** (optional)
-   - Token for client authentication
-   - Default: `fireq`
-
-### Example Startup Session
-
-```
-### FIREQ Server startup ###
-
-# Insert Overlay folder
-my_overlays
-
-# Insert Overlay filename (press Enter for "overlay.bit")
-my_custom.bit
-
-# Insert server host (press Enter for "0.0.0.0")
-0.0.0.0
-
-# Insert server port (press Enter for "5000")
-5000
-
-# Insert auth token (press Enter for "fireq")
-fireq
-
-Starting FIREQ Server on 0.0.0.0:5000
-```
-
-### Stopping the Server
-
-Press `Ctrl+C` to gracefully stop the server. The server will clean up hardware resources before exiting.
-
-## Project Structure
-
-```
-fireq-utils/
-├── API.py                    # Server entry point
-├── FIREQ_LL_API/            # Main package
-│   └── OverlayDriver.py     # Overlay and SoC management
-├── pyproject.toml           # Project configuration
-└── README.md                # This file
-```
-
-## Client Communication
-
-Once the server is running, clients can connect via TCP on the specified host and port. The server expects:
-
-1. **Handshake**: Client must authenticate with the correct auth token
-2. **Commands**: JSON-formatted commands using the length-prefixed protocol
-3. **Responses**: JSON responses and optional binary data streams
-
-See the protocol documentation for detailed message formats.
-
-## Troubleshooting
-
-**Error: "Overlay invalid filepath"**
-- Check that the folder path and filename are correct
-- Make sure the files exist in `/home/xilinx/jupyter_notebooks/`
-
-**Error: "Module not found" or "Failed to initialize adapter"**
-- Install all dependencies: `pip install -e .`
-- Verify you have Python 3.10 installed: `python --version`
-- Ensure the PYNQ environment is properly configured
-
-**Port already in use**
-- Change the port number when prompted (pick a different unused port)
-- Or stop any other FIREQ servers running on that port
-
-**Connection refused**
-- Make sure the server is running
-- Verify the correct host and port
-- Check firewall settings if connecting remotely
-
-**Authentication failed**
-- Verify the auth token matches on both server and client
-- Default token is `fireq`
+Stop with `Ctrl+C` for graceful cleanup.
