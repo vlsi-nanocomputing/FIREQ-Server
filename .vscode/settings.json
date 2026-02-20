@@ -1,0 +1,10 @@
+{
+  // Ensure Python files use Black as the formatter and that it will format on save
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+  // Ruff configuration: lint only, will not format because it is not set as default formatter
+  "ruff.enable": true,
+  "ruff.lint.enable": true
+}

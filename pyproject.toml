@@ -1,0 +1,71 @@
+# pyproject.toml
+# This file centralizes project metadata and tool configuration.
+# It allows the whole team (PyCharm, VS Code, CI) to use the same rules.
+
+[project]
+# Project metadata (used by packaging/build tools and some IDEs)
+name = "fireq-server"
+version = "0.1.0"
+requires-python = "==3.10.*"
+
+# Dependencies
+dependencies = [
+  "black>=25.12.0",
+  "ruff>=0.14.11",
+  "pre-commit>=4.5.1",
+  "numpy>=1.21.0,<2.0",
+  "pynq>=3.0.0",
+  "pytest>=7.0.0",
+]
+
+[tool.black]
+# Black is used for Python formatting.
+# It reformats code deterministically (no warnings, only formatting).
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+# Ruff is used only as a linter (static analysis), not as a formatter.
+# It reports issues but should not modify code automatically.
+line-length = 120
+fix = false
+unsafe-fixes = false
+
+# Exclude non-Python sources / generated files from Ruff linting (project-specific).
+# Note: Ruff already focuses on Python files, but this can be useful for repos with mixed content.
+exclude = [
+  "*.yaml",
+  "*.yml",
+  "*.pyi",
+]
+
+[tool.ruff.lint]
+# Enabled rule families:
+# E: pycodestyle errors (PEP 8)
+# F: pyflakes (real errors)
+# I: import sorting (isort-compatible)
+# UP: pyupgrade (modern Python syntax)
+# B: flake8-bugbear (likely bugs)
+# D: pydocstyle (docstrings)
+# ANN: type annotations
+# PL: pylint-derived rules
+select = ["E", "F", "I", "UP", "B", "D", "ANN", "PL"]
+
+ignore = [
+    "ISC001",
+    "PLR09",
+    "PLR2004",
+    "S101",
+]
+future-annotations = true
+
+[tool.ruff.lint.per-file-ignores]
+# Relax rules in specific contexts
+"test/**" = ["D", "ANN", "S101", "T20"]
+#"docs/**" = ["D"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"

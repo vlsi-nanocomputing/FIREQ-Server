@@ -1,0 +1,54 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+.env
+
+# --- Testing & Code Quality Caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# --- Data from Jupyter Notebooks ---
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+.ipynb.kernel.*
+
+# --- IDE & Editors ---
+.idea/
+.vscode/*.code-workspace
+.vscode/launch.json
+.vscode/tasks.json
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Any data from run ---
+
+*.log
+*.npy
+*.csv
+*.bin

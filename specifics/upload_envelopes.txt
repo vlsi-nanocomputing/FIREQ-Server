@@ -1,0 +1,80 @@
+ENVELOPE UPLOAD (Binary Protocol)
+==================================
+
+Uploads envelope waveform data to the server using a binary protocol for
+efficient transfer of I/Q sample data.
+
+
+CLIENT REQUEST - STEP 1: Metadata JSON
+--------------------------------------
+{
+  "cmd": "upload_envelopes",
+  "session_id": "ses_001",
+  "envelopes": {
+    "0": [                            // KEY: Generator index (string)
+      {
+        "name": "GAUSS_SIGMA_10",
+        "for_interpolation": true,    // Enable hardware interpolation
+        "is_symmetric": true,         // Only if for_interpolation = true
+        "i_even": true,               // Only if is_symmetric = true (I channel symmetry)
+        "q_even": false,              // Only if is_symmetric = true (Q channel symmetry)
+        "num_samples": 3              // Number of I/Q sample pairs (REQUIRED)
+      }
+    ]
+  }
+}
+
+
+CLIENT REQUEST - STEP 2: Binary Frames
+--------------------------------------
+Immediately after the metadata JSON, send binary frames for each envelope
+in order (generator index ascending, then envelope index within generator).
+
+Frame format per envelope:
+  [4 bytes: generator index (uint32 big-endian)]
+  [4 bytes: envelope index in upload (uint32 big-endian)]
+  [4 bytes: sample count (uint32 big-endian)]
+  [N x 8 bytes: float32 I/Q pairs interleaved]
+
+Example binary frame for envelope above (3 samples):
+  Header: 12 bytes = [gen_idx=0][env_idx=0][num_samples=3]
+  Data: 24 bytes = [I0_f32][Q0_f32][I1_f32][Q1_f32][I2_f32][Q2_f32]
+
+Sample values must be normalized to range [-1.0, 1.0].
+
+Total frame size: 12 + (num_samples x 8) bytes
+
+
+SERVER RESPONSE
+---------------
+{
+  "cmd": "upload_envelopes",
+  "session_id": "ses_001",
+  "ok": true,
+  "result": {
+    "0": {                            // Generator index (string key)
+      "loaded": ["GAUSS_SIGMA_10"],   // Successfully uploaded envelope names
+      "skipped": [],                  // Envelopes that were skipped (already exist)
+      "failed": []                    // Envelopes that failed to upload
+    }
+  },
+  "error": null
+}
+
+
+INTERPOLATION OPTIONS
+---------------------
+When for_interpolation = true:
+  - is_symmetric: If true, only half the envelope is stored (symmetric waveform)
+  - i_even: I channel has even symmetry (mirrored around center)
+  - q_even: Q channel has even symmetry
+
+These options reduce memory usage for symmetric pulse shapes like Gaussian.
+
+
+NOTES
+-----
+- num_samples in metadata MUST match the actual binary frame sample count
+- Envelopes are cached per generator until reset or logout
+- Envelope names must be unique within a generator
+- Binary frames must be sent in the same order as metadata entries

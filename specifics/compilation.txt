@@ -1,0 +1,68 @@
+WAVE COMPILATION
+================
+
+Compiles wave definitions for use in experiments. Waves are cached server-side
+and can be referenced by their wave_id in subsequent experiments.
+
+
+CLIENT REQUEST
+--------------
+{
+  "cmd": "compile_waves",
+  "session_id": "ses_001",
+  "waves": {
+    "0": [                            // KEY: generator index (string)
+      // TYPE 1: Standard pulse (envelope-based)
+      {
+        "wave_id": "pi_pulse_x",
+        "kind": "env",                // "env" for envelope-based (default if omitted)
+        "envelope": "GAUSS_SIGMA_10", // Reference to uploaded envelope name
+        "duration": 256,              // Duration in samples/cycles
+        "gain": 0.95,                 // Amplitude range [-1.0, 1.0]
+        "switch_iq": false,           // Swap I/Q channels
+        "keep_last": false            // Hold last sample value
+      },
+      // TYPE 2: Virtual Z Gate (phase rotation)
+      {
+        "wave_id": "vz_gate_pi_half",
+        "kind": "vz",
+        "vz_phase_rad": 1.570796      // Phase shift in radians
+      }
+    ]
+  }
+}
+
+
+SERVER RESPONSE
+---------------
+{
+  "cmd": "compile_waves",
+  "session_id": "ses_001",
+  "ok": true,
+  "payload": {
+    "0": {                            // Generator index (string key)
+      "waves": ["pi_pulse_x", "vz_gate_pi_half"],  // Successfully compiled wave IDs
+      "replaced": [],                 // Wave IDs that were replaced (already existed)
+      "skipped": [],                  // Wave IDs that were skipped
+      "failed": []                    // Wave IDs that failed to compile
+    }
+  }
+}
+
+
+WAVE TYPES
+----------
+1. Envelope-based ("env"):
+   - Uses a pre-uploaded envelope shape
+   - Supports gain, duration, I/Q switching, and keep_last options
+
+2. Virtual Z Gate ("vz"):
+   - Phase-only rotation (no physical pulse output)
+   - Used for Z-axis rotations in qubit control
+
+
+NOTES
+-----
+- Envelopes must be uploaded before compiling waves that reference them
+- Compiled waves are cached per generator until reset
+- wave_id must be unique within a generator
