@@ -1,9 +1,9 @@
-# file: fireq-utils/server/dma_engine.py
-"""High-level DMA acquisition utilities for the FIREQ server.
+# file: fireq-utils/server/hardware/dma_engine.py
+"""Low-level DMA transfer engine for the FIREQ server.
 
 Purpose
 -------
-This module provides a *high-level*, abstraction for FPGA data acquisition
+This module provides a low-level abstraction for FPGA data acquisition
 using a Xilinx AXI DMA controlled through PYNQ.
 
 It exists to isolate hardware acquisition in a single class:
@@ -11,18 +11,17 @@ It exists to isolate hardware acquisition in a single class:
 - stream routing via an AXI Stream Switch ("raw" vs "decimated/accumulated" path),
 - contiguous DDR buffer allocation through :func:`pynq.allocate`,
 - starting and waiting for DMA transfers,
-- robust recovery logic when the DMA becomes stuck (e.g., TLAST not received),
-- conversion of packed acquisition words into complex I/Q NumPy arrays.
+- robust recovery logic when the DMA becomes stuck (e.g., TLAST not received).
 
 Architectural intent
 --------------------
-The orchestration layer (e.g., server/experiment logic) does *not* need to know:
-which MMIO registers to poke, how PYNQ behaves when DMA is wedged, how buffers
-must be aligned/allocated and how firmware packs I/Q samples. This module centralizes those
-concerns and exposes a small, explicit contract:
+The orchestration layer (e.g., ``DMAOrchestrator``) does *not* need to know:
+which MMIO registers to poke, how PYNQ behaves when DMA is wedged, or how buffers
+must be aligned/allocated. This module centralizes those concerns and exposes a
+small, explicit contract:
 
 1) `DMAEngine.arm_acquisition` to configure routing + allocate buffers + start DMA
-2) `DMAEngine.retrieve_acquisition` to wait + recover on failure + parse output
+2) `DMAEngine.retrieve_acquisition` to wait + recover on failure + return raw buffer
 
 Invariants and assumptions
 --------------------------
@@ -58,18 +57,31 @@ message_handler classes are built to ensure such usage is safe.
 
 
 import logging
-import signal  # for timeout handling
 import sys
 import time
-from typing import Literal, NoReturn
+from typing import Literal, NamedTuple
 
 import numpy as np
 from pynq import allocate
 
 from ..models.exceptions import DMAError, DMATimeoutError
 
-# Zero-copy parsing requires little-endian byte order (ARM/Zynq is little-endian)
-assert sys.byteorder == "little", "Zero-copy DMA parsing requires little-endian system"
+# Zero-copy parsing requires little-endian byte order (ARM/Zynq is little-endian).
+# This is a hard invariant: violating it would silently corrupt all acquired data.
+# Using if/raise instead of assert so it cannot be disabled with python -O.
+if sys.byteorder != "little":
+    raise RuntimeError("Zero-copy DMA parsing requires little-endian system")
+
+
+class DMAResult(NamedTuple):
+    """Result of a DMA retrieval operation."""
+
+    buffer: np.ndarray
+    """The DMA destination buffer (same object passed to :meth:`DMAEngine.arm_acquisition`)."""
+    dma_wait_s: float
+    """Time spent blocking on ``recvchannel.wait()`` (seconds)."""
+    invalidate_s: float
+    """Time spent invalidating the CPU cache for the buffer (seconds)."""
 
 
 class DMAEngine:
@@ -81,30 +93,39 @@ class DMAEngine:
         Validates capacity (full path), routes the stream switch, allocates or reuses a DDR
         buffer, and starts DMA reception.
     - `retrieve_acquisition`:
-        Waits for completion, applies timeout protection, performs fail-fast recovery on
-        DMA errors, invalidates CPU caches, and parses into complex I/Q arrays.
+        Waits for completion, performs fail-fast recovery on DMA errors,
+        invalidates CPU caches, and returns the raw buffer with timing.
 
-    Minor sweep optimization
+    Sweep optimization
     ------------------
-    When executing repeated acquisitions with identical configuration, the caller may use:
-
-    - `prepare_sweep` to declare the acquisition mode invariant
-    - `arm_acquisition` calls (fast path used internally)
-    - `end_sweep` to return to conservative behavior
-
-    The sweep fast path skips capacity validation and assumes buffer sizing and firmware
-    format remain unchanged. If those assumptions are violated, results may be truncated
-    or misinterpreted: this is an explicit trade-off.
+    When executing repeated acquisitions with identical configuration, the caller may
+    pass ``fast_path=True`` to :meth:`arm_acquisition` to skip capacity validation and
+    reuse previously allocated buffers. After a sweep, :meth:`end_sweep` resets routing
+    memoization and schedules an idle-skip for the next arm.
 
     """
 
     # ------------------------------------------------------------------
-    # Initialization
+    # MMIO register addresses and masks — bitstream-level contract.
+    # These are class constants because they are fixed by the bitstream and must
+    # never be mutated per-instance. If the bitstream changes, update here in lockstep.
     # ------------------------------------------------------------------
 
-    # Pipelined buffer acquisition margin
-    # Notice that it is a global margin s.t. it will be uniform across all DMA instances
-    # Future-proof in case of multiple DMA in the same PL design
+    # AXI Stream Switch registers
+    REG_CTRL = 0x00
+    REG_MI_MUX_0 = 0x40
+    MASK_COMMIT = 0x00000002
+
+    # AXI DMA S2MM registers (for emergency low-level reset)
+    REG_S2MM_DMACR = 0x30
+    REG_S2MM_DMASR = 0x34
+    MASK_RS = 0x00000001  # Run/Stop bit
+    MASK_RESET = 0x00000004  # Soft Reset bit
+    MASK_IRQ_CLEAR = 0x00007000  # W1C on IOC, DM, ERR
+
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -134,9 +155,6 @@ class DMAEngine:
         self.logger = logger or logging.getLogger(__name__)
         self.hw_specs = hw_specs
         self._persistent_buffers = {}
-        # sweep mode flags
-        self._sweep_mode = None
-        self._sweep_prepared = False
         self._reset_on_next_arm = False
         # Last successful DMA wait duration (seconds). Set to 0.0 on entry.
         self.last_dma_wait_s = 0.0
@@ -144,26 +162,10 @@ class DMAEngine:
         self.last_invalidate_s: float = 0.0
         # Memoization for stream routing to avoid redundant MMIO writes.
         self._last_routed_port: int | None = None
-        # Cache SIGALRM availability check (Unix only).
-        self._has_sigalrm: bool = hasattr(signal, "SIGALRM")
-
         # Ensure the DMA recvchannel is transitioned into a usable state early.
         # This is intentionally done at construction time so failures are detected
         # before we allocate buffers or program other IPs (fail-fast for HW sanity).
         self._ensure_started()
-
-        # MMIO register addresses are duplicated here to keep this class self-contained.
-        # If these addresses change with the bitstream, hw/overlay versioning must ensure
-        # this code is updated in lockstep.
-        self.REG_CTRL = 0x00
-        self.REG_MI_MUX_0 = 0x40
-        self.MASK_COMMIT = 0x00000002
-        # --- DMA (S2MM) registers for "emergency" reset ---
-        self.REG_S2MM_DMACR = 0x30
-        self.REG_S2MM_DMASR = 0x34
-        self.MASK_RS = 0x00000001  # Run/Stop bit
-        self.MASK_RESET = 0x00000004  # Soft Reset bit
-        self.MASK_IRQ_CLEAR = 0x00007000  # W1C on IOC, DM, ERR
 
     # ------------------------------------------------------------------
     # Public API
@@ -208,17 +210,17 @@ class DMAEngine:
         failures. Errors are logged but swallowed to prioritize cleanup
         completion over strict exception propagation.
         """
-        for idx, buf in self._persistent_buffers.items():
+        for acq_index, buf in self._persistent_buffers.items():
             if hasattr(buf, "freebuffer"):
                 try:
                     buf.freebuffer()
                 except Exception as e:
                     # Cleanup: failures here are non-fatal, and raising would
                     # likely obscure the "original" hardware failure that triggered cleanup.
-                    self.logger.warning(f"Failed to free buffer for AcquisitionIP {idx}: {e}")
+                    self.logger.warning(f"Failed to free buffer for AcquisitionIP {acq_index}: {e}")
         self._persistent_buffers.clear()
 
-    def set_active_acq_ip(self, acq_ip_indices: list[int]) -> None:
+    def set_active_acq_ip(self, acq_indices: list[int]) -> None:
         """Update which AcquisitionIPs are active and free buffers for inactive AcquisitionIPs.
 
         This method should be called before arm_acquisition() when the set of
@@ -226,38 +228,38 @@ class DMAEngine:
         experiments). Buffers for acquisition IPs that are no longer in the active set
         are freed to reduce memory usage.
 
-        :param acq_ip_indices: List of acquisition indices that will be used.
-        :type acq_ip_indices: list[int]
+        :param acq_indices: List of acquisition indices that will be used.
+        :type acq_indices: list[int]
         """
-        new_active = set(acq_ip_indices)
+        new_active = set(acq_indices)
 
         # Free buffers for AcqIPs that are no longer active
-        for acq_ip_idx in list(self._persistent_buffers.keys()):
-            if acq_ip_idx not in new_active:
-                buf = self._persistent_buffers.pop(acq_ip_idx, None)
+        for acq_idx in list(self._persistent_buffers.keys()):
+            if acq_idx not in new_active:
+                buf = self._persistent_buffers.pop(acq_idx, None)
                 if buf is not None and hasattr(buf, "freebuffer"):
                     try:
                         buf.freebuffer()
-                        self.logger.debug(f"Freed buffer for inactive AcqIP {acq_ip_idx}")
+                        self.logger.debug(f"Freed buffer for inactive AcqIP {acq_idx}")
                     except Exception as e:
-                        self.logger.warning(f"Failed to free buffer for inactive AcqIP {acq_ip_idx}: {e}")
+                        self.logger.warning(f"Failed to free buffer for inactive AcqIP {acq_idx}: {e}")
 
     def _get_fifo_params(
         self,
         mode: Literal["raw", "decimated", "accumulated"],
-        acq_ip_index: int,
+        acq_index: int,
     ) -> tuple[int, int]:
         """Return FIFO depth and width for the given mode and AcqIP.
 
         :param mode: Acquisition mode.
         :type mode: Literal["raw", "decimated", "accumulated"]
-        :param acq_ip_index: Acquisition IP index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :return: Tuple of (fifo_depth_words, fifo_width_bits).
         :rtype: tuple[int, int]
         :raises DMAError: If mode is unknown.
         """
-        acq_spec = self.hw_specs["acquisitions"][acq_ip_index]
+        acq_spec = self.hw_specs["acquisitions"][acq_index]
 
         if mode == "raw":
             fifo_depth = int(acq_spec.get("raw_fifo_depth_words", 0))
@@ -274,7 +276,7 @@ class DMAEngine:
         self,
         mode: Literal["raw", "decimated", "accumulated"],
         samp_per_shot: int,
-        acq_ip_index: int,
+        acq_index: int,
     ) -> int:
         """Compute the maximum number of shots that can fit in the acquisition FIFO/buffer.
 
@@ -282,12 +284,12 @@ class DMAEngine:
         :type mode: Literal["raw", "decimated", "accumulated"]
         :param samp_per_shot: Samples per shot (scales by parallelism for raw mode).
         :type samp_per_shot: int
-        :param acq_ip_index: Acquisition IP index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :return: Maximum shots that fit without overflow (0 if degenerate).
         :rtype: int
         """
-        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
+        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_index)
         total_bits = fifo_depth * fifo_width
 
         if mode == "accumulated":
@@ -296,7 +298,7 @@ class DMAEngine:
             bits_per_shot = samp_per_shot * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
         else:  # raw
-            acq_spec = self.hw_specs["acquisitions"][acq_ip_index]
+            acq_spec = self.hw_specs["acquisitions"][acq_index]
             parallelism = int(acq_spec.get("parallelism", 1))
             bits_per_shot = samp_per_shot * parallelism * 32
             return total_bits // bits_per_shot if bits_per_shot > 0 else 0
@@ -314,7 +316,8 @@ class DMAEngine:
         samp_per_shot: int,
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
-        acq_ip_index: int,
+        acq_index: int,
+        fast_path: bool = False,
     ) -> object:
         """Arm a DMA acquisition: validate, route, allocate/reuse buffer, and start DMA.
 
@@ -337,9 +340,13 @@ class DMAEngine:
         :param mode:
             Acquisition mode: ``raw``/``decimated``/``accumulated``.
         :type mode: Literal["raw", "decimated", "accumulated"]
-        :param acq_ip_index:
+        :param acq_index:
             Acquisition IP index to route and arm.
-        :type acq_ip_index: int
+        :type acq_index: int
+        :param fast_path:
+            If True, use the sweep-optimized path (skip validation, reuse buffers).
+            The caller is responsible for guaranteeing invariant configuration.
+        :type fast_path: bool
         :return:
             The allocated (or reused) DMA buffer passed to ``recvchannel.transfer()``.
         :rtype: object
@@ -352,112 +359,41 @@ class DMAEngine:
         if self._reset_on_next_arm:
             self.logger.debug("Clearing _reset_on_next_arm flag (no hard reset, skip idle check).")
             self._reset_on_next_arm = False
-            # Skip idle check to avoid triggering hard reset if DMA reports non-idle
-            # briefly after sweep end
             skip_idle_check = True
 
-        # "Fast path "is correct if the caller keeps mode and sizing invariants stable
-        # across iterations.
-        if self._sweep_prepared and self._sweep_mode == mode:
-            return self._arm_acquisition_fast(mode, acq_ip_index)
-        # Full path
-        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, acq_ip_index, skip_idle_check)
+        if fast_path:
+            return self._arm_acquisition_fast(mode, acq_index)
+        return self._arm_acquisition_full(samp_per_shot, shots_per_exp, mode, acq_index, skip_idle_check)
 
-    def _setup_timeout(self, timeout: float | None, skip_timeout: bool) -> tuple[float | None, object]:
-        """Set up timeout mechanism for DMA wait (UNIX only, via SIGALRM).
-
-        :param timeout:
-            Timeout in seconds. If ``None`` or non-positive, no timeout is enforced.
-        :type timeout: Optional[float]
-        :param skip_timeout:
-            If True, skip internal signal handler setup.
-        :type skip_timeout: bool
-        :return:
-            Tuple of (timeout_sec, old_handler) where:
-            - timeout_sec: Effective timeout in seconds, or None if not set up
-            - old_handler: Previous signal handler (to be restored later), or None
-        :rtype: tuple[Optional[float], object]
-        """
-        timeout_sec: float | None = None
-        old_handler = None
-
-        if not skip_timeout and timeout is not None and timeout > 0:
-            if self._has_sigalrm:
-                timeout_sec = float(timeout)
-
-                def _timeout_handler(signum: int, frame: object) -> NoReturn:
-                    raise TimeoutError("DMA wait timeout")
-
-                # Save old handler, set new one
-                old_handler = signal.getsignal(signal.SIGALRM)
-                signal.signal(signal.SIGALRM, _timeout_handler)
-                signal.setitimer(signal.ITIMER_REAL, timeout_sec)
-            else:
-                self.logger.warning("DMA timeout disabled: SIGALRM not supported on this platform.")
-
-        return timeout_sec, old_handler
-
-    def _wait_for_dma_with_timeout(self, timeout_sec: float | None) -> None:
-        """Wait for DMA completion with timeout handling.
+    def _wait_for_dma(self) -> None:
+        """Wait for DMA completion.
 
         Performs the blocking wait on the DMA recvchannel and measures the wait duration.
-        On timeout, performs a hard reset and cleanup. On other exceptions, also resets.
+        On timeout (external SIGALRM from orchestrator) or other errors, performs a hard
+        reset and cleanup.
 
-        :param timeout_sec:
-            Effective timeout in seconds from _setup_timeout, or None if not set up.
-        :type timeout_sec: Optional[float]
         :raises DMATimeoutError:
-            If the DMA wait exceeds the timeout.
+            If an external timeout interrupts the DMA wait.
         :raises DMAError:
             For other DMA failures.
         """
         try:
-            # Block until DMA finishes
-            # Blocking wait is the standard PYNQ completion mechanism.
-            # If the hardware never asserts TLAST, this call may block forever without
-            # an external timeout mechanism.
             t_wait_start = time.perf_counter()
             self.dma.recvchannel.wait()
             self.last_dma_wait_s = time.perf_counter() - t_wait_start
 
         except TimeoutError as e:
-            # Timeout means DMA is likely starving (waiting for TLAST).
-            # We MUST reset the core to clear the internal buffer state.
-            self.logger.error(f"DMA Timeout ({timeout_sec}s). Resetting core.")
+            # External timeout (e.g., SIGALRM from DMAOrchestrator).
             self._hard_reset()
-            # free resources in case of timeout error
             self.free_resources()
-            raise DMATimeoutError(f"DMA transfer timed out after {timeout_sec:.3f} s", timeout_sec) from e
+            self.logger.error(f"DMA Timeout: {e}. Resetting core.")
+            raise DMATimeoutError(f"DMA transfer timed out: {e}") from e
 
         except Exception as e:
-            # Any other error (e.g. RuntimeError: DMA channel not started)
-            # implies the state is inconsistent. Reset.
             self._hard_reset()
             self.free_resources()
             self.logger.error(f"DMA Runtime Error: {e}. Resetting core.")
             raise DMAError(f"DMA transfer failed: {e}") from e
-
-    def _restore_timeout_handler(self, timeout_sec: float | None, old_handler: object) -> None:
-        """Restore the original signal handler after DMA wait completes.
-
-        :param timeout_sec:
-            Effective timeout that was set up (if None, handler was not set).
-        :type timeout_sec: Optional[float]
-        :param old_handler:
-            Previous signal handler to restore.
-        :type old_handler: object
-        """
-        # Restore signal handler (only if we set one up)
-        if timeout_sec is not None:
-            try:
-                signal.setitimer(signal.ITIMER_REAL, 0.0)
-            except Exception:
-                pass
-            if old_handler is not None:
-                try:
-                    signal.signal(signal.SIGALRM, old_handler)
-                except Exception:
-                    pass
 
     def _invalidate_buffer(self, buffer: object) -> None:
         """Invalidate DMA buffer cache to ensure coherency and measure time.
@@ -473,63 +409,32 @@ class DMAEngine:
             pass
         self.last_invalidate_s = time.perf_counter() - t_invalidate_start
 
-    def retrieve_acquisition(
-        self,
-        buffer: object,
-        timeout: float | None = None,
-        skip_timeout: bool = False,
-    ) -> np.ndarray:
-        """Wait for DMA completion, apply timeout protection, and return buffer.
+    def retrieve_acquisition(self, buffer: object) -> DMAResult:
+        """Wait for DMA completion, handle errors, invalidate cache, and return result.
 
-        Hardware DMA can hang (commonly: missing TLAST, upstream stream
-        starvation). In those cases, waiting indefinitely would deadlock
-        the server. Therefore:
-
-        - an optional timeout is enforced (UNIX only, via ``SIGALRM``.
-          REMARK: it is compatible with the main thread only),
-        - on timeout or unexpected DMA errors, a low-level hard reset is
-          executed,
-        - persistent buffers are freed to avoid reusing potentially
-          inconsistent mappings.
+        On timeout (external SIGALRM from the orchestrator layer) or unexpected DMA
+        errors, a low-level hard reset is executed and persistent buffers are freed
+        to avoid reusing potentially inconsistent mappings.
 
         :param buffer:
             DMA destination buffer previously returned by :meth:`arm_acquisition`.
         :type buffer: object
-        :param timeout:
-            Timeout in seconds. If ``None`` or non-positive, no timeout is enforced.
-        :type timeout: Optional[float]
-        :param skip_timeout:
-            If True, skip internal signal handler setup (caller manages timeout externally).
-        :type skip_timeout: bool
         :return:
-            Full DMA buffer. Client computes valid_words from request params.
-        :rtype: np.ndarray
+            Named tuple with the buffer and timing measurements.
+        :rtype: DMAResult
 
         :raises DMATimeoutError:
-            If the DMA wait exceeds the timeout.
+            If an external timeout interrupts the DMA wait.
         :raises DMAError:
             For other DMA failures.
         """
-        # Reset timing accumulators
         self.last_dma_wait_s = 0.0
         self.last_invalidate_s = 0.0
 
-        # Set up timeout mechanism (UNIX only, via SIGALRM)
-        timeout_sec, old_handler = self._setup_timeout(timeout, skip_timeout)
-
-        try:
-            # Wait for DMA completion with timeout handling
-            self._wait_for_dma_with_timeout(timeout_sec)
-
-        finally:
-            # Always restore signal handler if we set one up
-            self._restore_timeout_handler(timeout_sec, old_handler)
-
-        # Invalidate buffer cache to ensure coherency
+        self._wait_for_dma()
         self._invalidate_buffer(buffer)
 
-        # Return full buffer (client computes valid_words from request params)
-        return buffer
+        return DMAResult(buffer, self.last_dma_wait_s, self.last_invalidate_s)
 
     # ------------------------------------------------------------------
     # Acquisition methods : full validation for non-sweep experiments
@@ -540,7 +445,7 @@ class DMAEngine:
         samp_per_shot: int,
         shots_per_exp: int,
         mode: Literal["raw", "decimated", "accumulated"],
-        acq_ip_index: int,
+        acq_index: int,
         skip_idle_check: bool = False,
     ) -> object:
         """Conservative arm path: validate capacity, check DMA state, route stream, allocate buffer, start DMA.
@@ -562,16 +467,16 @@ class DMAEngine:
             raise DMAError("shots_per_exp must be >= 1")
 
         # 1. Validation - check capacity using get_max_shots
-        max_shots = self.get_max_shots(mode, samp_per_shot, acq_ip_index)
+        max_shots = self.get_max_shots(mode, samp_per_shot, acq_index)
         if shots_per_exp > max_shots:
             raise DMAError(
-                f"Buffer capacity exceeded (mode={mode}, AcqIP={acq_ip_index}): "
+                f"Buffer capacity exceeded (mode={mode}, AcqIP={acq_index}): "
                 f"requested {shots_per_exp} shots, max is {max_shots} "
                 f"(for {samp_per_shot} samp/shot)"
             )
 
         self.logger.debug(
-            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, " f"mode={mode}, acq_ip={acq_ip_index}"
+            f"Arming DMA: samp/shot={samp_per_shot}, shots/exp={shots_per_exp}, mode={mode}, acq_ip={acq_index}"
         )
 
         # 2. DMA state check
@@ -585,12 +490,12 @@ class DMAEngine:
             self._hard_reset()
 
         # 3. Switch routing
-        self._route_switch(acq_ip_index=acq_ip_index, raw_mode=(mode == "raw"))
+        self._route_switch(acq_index=acq_index, raw_mode=(mode == "raw"))
 
         # 4. Buffer allocation (size = FIFO capacity in 32-bit words)
-        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
+        fifo_depth, fifo_width = self._get_fifo_params(mode, acq_index)
         total_words = fifo_depth * (fifo_width // 32)
-        buffer = self._get_or_allocate_buffer(acq_ip_index, total_words)
+        buffer = self._get_or_allocate_buffer(acq_index, total_words)
 
         # 5. Start DMA
         try:
@@ -607,45 +512,15 @@ class DMAEngine:
     # Acquisition methods: sweep
     # ------------------------------------------------------------------
 
-    def prepare_sweep(
-        self,
-        mode: Literal["raw", "decimated", "accumulated"],
-    ) -> None:
-        """Enable sweep mode optimizations for repeated acquisitions.
-
-        Sweep mode is a performance feature: repeated iterations share the same
-        acquisition configuration (mode, duration limits, buffer sizing).
-        Reuse persistent buffers and skip capacity validation on each arm.
-
-        Contract
-        --------
-        The caller is responsible for keeping these invariants constant
-        across the sweep:
-
-        - acquisition ``mode``,
-        - effective buffer sizing implied by the firmware and hw_specs,
-        - no hot-swapping overlays/bitstreams while sweep mode is active.
-
-        If any of these change, the caller must call :meth:`end_sweep` and
-        re-arm via the full path to avoid mis-sized buffers or mis-parsed
-        data.
-        """
-        self._sweep_prepared = True
-        self._sweep_mode = mode
-        self.logger.debug(f"Sweep prepared: mode={mode}")
-
     def end_sweep(self) -> None:
-        """Disable sweep mode and return to conservative validation behavior."""
-        self._sweep_prepared = False
-        self._sweep_mode = None
+        """Signal end of sweep: reset routing memoization and schedule idle-skip on next arm."""
         self._reset_on_next_arm = True
-        # Reset routing memoization so next acquisition re-routes.
         self._last_routed_port = None
 
     def _arm_acquisition_fast(
         self,
         mode: Literal["raw", "decimated", "accumulated"],
-        acq_ip_index: int,
+        acq_index: int,
     ) -> object:
         """Optimized sweep arm path.
 
@@ -653,7 +528,7 @@ class DMAEngine:
 
         - skips FIFO capacity validation and most logging,
         - reuses a persistent buffer if available,
-        - still performs stream routing (Acquisitin IP selection is assumed not to be
+        - still performs stream routing (Acquisition IP selection is assumed not to be
           invariant in general).
 
         Safety notes
@@ -664,27 +539,26 @@ class DMAEngine:
         larger one (safe monotonic growth).
         """
         # 1. Routing
-        self._route_switch(acq_ip_index=acq_ip_index, raw_mode=(mode == "raw"))
+        self._route_switch(acq_index=acq_index, raw_mode=(mode == "raw"))
 
         # 2. Reuse existing buffer or fallback to full allocation
-        buffer = self._persistent_buffers.get(acq_ip_index)
+        buffer = self._persistent_buffers.get(acq_index)
         if buffer is None:
             # Fallback to full allocation if not pre-allocated
-            fifo_depth, fifo_width = self._get_fifo_params(mode, acq_ip_index)
+            fifo_depth, fifo_width = self._get_fifo_params(mode, acq_index)
             total_words = fifo_depth * (fifo_width // 32)
-            buffer = self._get_or_allocate_buffer(acq_ip_index, total_words)
+            buffer = self._get_or_allocate_buffer(acq_index, total_words)
 
         try:
             self.dma.recvchannel.transfer(buffer)
         except Exception as e:
-            self._sweep_prepared = False  # Exit sweep mode
             self._hard_reset()
             raise DMAError(f"DMA start failed in sweep: {e}") from e
 
         return buffer
 
     # ------------------------------------------------------------------
-    # Internal methods: routing, dimensions, parsing, reset
+    # Internal methods: routing, reset, buffer management
     # ------------------------------------------------------------------
     def _ensure_started(self) -> None:
         """Ensure the PYNQ DMA recvchannel is started.
@@ -696,19 +570,19 @@ class DMAEngine:
         :raises DMAError:
             If the channel cannot be started.
         """
-        ch = self.dma.recvchannel
+        recv_ch = self.dma.recvchannel
         try:
             # PYNQ implementations differ: some expose a `.running` property, others do not.
             # We probe defensively to keep the engine compatible across versions.
-            if hasattr(ch, "running"):
-                if not ch.running:
-                    ch.start()
+            if hasattr(recv_ch, "running"):
+                if not recv_ch.running:
+                    recv_ch.start()
             else:
-                ch.start()
+                recv_ch.start()
         except Exception as e:
             raise DMAError(f"Failed to start DMA recvchannel: {e}") from e
 
-    def _route_switch(self, acq_ip_index: int, raw_mode: bool) -> None:
+    def _route_switch(self, acq_index: int, raw_mode: bool) -> None:
         """Route the AXI Stream Switch to select the desired AcquisitionIP and output mode.
 
         The switch is modeled as having two ports per IP index:
@@ -719,8 +593,8 @@ class DMAEngine:
         method returns immediately (assumes a static fabric or a design
         without a switch).
 
-        :param acq_ip_index: Acquisition IP index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :param raw_mode:
             If True, route the raw path; otherwise route
             decimated/accumulated.
@@ -735,9 +609,9 @@ class DMAEngine:
 
         # Port mapping is a *bitstream-level contract*. Hardcoded swap for this bitstream:
         # acq0 -> base port 2 (raw=2, dec/acc=3), acq1 -> base port 0 (raw=0, dec/acc=1).
-        acq_ip_index = int(acq_ip_index)
+        acq_index = int(acq_index)
         hard_map = {0: 2, 1: 0}
-        base_port = hard_map.get(acq_ip_index, acq_ip_index * 2)
+        base_port = hard_map.get(acq_index, acq_index * 2)
         target_port = base_port + (0 if raw_mode else 1)
 
         # Skip MMIO writes if routing hasn't changed (memoization).
@@ -762,11 +636,12 @@ class DMAEngine:
         bounded-time recovery sequence:
 
         1) halt the channel by clearing Run/Stop,
-        2) assert soft reset and wait (with a strict timeout) for the reset
-           bit to clear,
-        3) clear interrupt/status bits (write-one-to-clear),
-        4) re-start the recvchannel to resynchronize PYNQ's wrapper state,
-        5) reset internal PYNQ bookkeeping flags when present.
+        2) assert soft reset,
+        3) wait (with a strict timeout) for the reset bit to clear,
+        4) clear interrupt/status bits (write-one-to-clear),
+        5) re-start the recvchannel to resynchronize PYNQ's wrapper state,
+        6) reset internal PYNQ bookkeeping flags when present,
+        7) reset routing memoization so the next acquisition re-routes.
 
         Failure policy
         --------------
@@ -784,28 +659,38 @@ class DMAEngine:
         # 1. BYPASS PYNQ stop() because it hangs if HW is stuck.
         # Instead, manually clear the Run/Stop bit (Halt).
         try:
-            cr = mmio.read(self.REG_S2MM_DMACR)
-            mmio.write(self.REG_S2MM_DMACR, cr & ~self.MASK_RS)
+            dmacr_val = mmio.read(self.REG_S2MM_DMACR)
+            mmio.write(self.REG_S2MM_DMACR, dmacr_val & ~self.MASK_RS)
         except Exception as e:
             self.logger.error(f"Failed to halt DMA manually: {e}")
 
+        # 2. Trigger Soft Reset (Write Reset bit = 1)
         try:
-            # 2. Trigger Soft Reset (Write Reset bit = 1)
             mmio.write(self.REG_S2MM_DMACR, self.MASK_RESET)
+        except Exception as e:
+            self.logger.error(f"Critical Failure during DMA Reset: {e}")
+            raise DMAError(f"Critical Failure during DMA Reset: {e}") from e
 
-            # 3. Wait for Reset to clear (with strict Timeout)
-            # Timeout is intentionally short: a reset that cannot complete
-            # promptly is not a transient performance issue but a sign of a
-            # deeper hardware fault.
-            timeout = 0.5  # 500ms safety limit
-            start = time.time()
-
+        # 3. Wait for Reset to clear (with strict timeout).
+        # Timeout is intentionally short: a reset that cannot complete
+        # promptly is not a transient performance issue but a sign of a
+        # deeper hardware fault.
+        # Use perf_counter (monotonic) to avoid sensitivity to NTP/DST adjustments.
+        reset_timeout_s = 0.5  # 500ms safety limit
+        reset_start = time.perf_counter()
+        try:
             while mmio.read(self.REG_S2MM_DMACR) & self.MASK_RESET:
-                if (time.time() - start) > timeout:
+                if (time.perf_counter() - reset_start) > reset_timeout_s:
                     self.logger.critical("DMA Hardware Reset TIMEOUT. Reset bit stuck high.")
                     raise DMAError("Hardware Reset Failed (Bit Stuck). Clock missing?")
                 time.sleep(0.001)
+        except DMAError:
+            raise  # propagate directly; do not re-wrap
+        except Exception as e:
+            self.logger.error(f"Critical Failure during DMA Reset: {e}")
+            raise DMAError(f"Critical Failure during DMA Reset: {e}") from e
 
+        try:
             # 4. Clear Interrupts/Errors (Write 1 to clear)
             mmio.write(self.REG_S2MM_DMASR, self.MASK_IRQ_CLEAR)
 
@@ -815,7 +700,9 @@ class DMAEngine:
             if hasattr(self.dma.recvchannel, "start"):
                 self.dma.recvchannel.start()
 
-            # 6. Reset internal flags
+            # 6. Reset internal PYNQ bookkeeping flag.
+            # _first_transfer is a PYNQ internal attribute (verified on pynq 2.7.x).
+            # hasattr guard makes this resilient to PYNQ version changes.
             if hasattr(self.dma.recvchannel, "_first_transfer"):
                 self.dma.recvchannel._first_transfer = True
 
@@ -828,20 +715,20 @@ class DMAEngine:
             self.logger.error(f"Critical Failure during DMA Reset: {e}")
             raise DMAError(f"Critical Failure during DMA Reset: {e}") from e
 
-    def _get_or_allocate_buffer(self, acq_ip_index: int, total_words: int) -> object:
+    def _get_or_allocate_buffer(self, acq_index: int, total_words: int) -> object:
         """Return a persistent DMA buffer for the given AcquisitionIP, allocating if necessary.
 
         Buffer size is always the full FIFO capacity. We cache one buffer per
         Acquisition IP index to avoid repeated allocations.
 
-        :param acq_ip_index: Acquisition index used as the cache key.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition index used as the cache key.
+        :type acq_index: int
         :param total_words: Buffer length in 32-bit words (full FIFO capacity).
         :type total_words: int
         :return: A PYNQ-allocated buffer suitable for DMA reception.
         :rtype: object
         """
-        existing = self._persistent_buffers.get(acq_ip_index)
+        existing = self._persistent_buffers.get(acq_index)
 
         if existing is not None and existing.shape[0] >= total_words:
             return existing
@@ -851,8 +738,8 @@ class DMAEngine:
             existing.freebuffer()
 
         buffer = allocate(shape=(total_words,), dtype="u4")
-        self._persistent_buffers[acq_ip_index] = buffer
+        self._persistent_buffers[acq_index] = buffer
         return buffer
 
 
-__all__ = ["DMAEngine"]
+__all__ = ["DMAEngine", "DMAResult"]
