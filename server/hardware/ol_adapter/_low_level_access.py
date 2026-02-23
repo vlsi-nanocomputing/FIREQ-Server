@@ -16,21 +16,39 @@ from ._errors import ERROR_HINTS, handle_error_result
 class LowLevelAccess:
     """Unified interface for accessing low-level FIREQ_SoC drivers with error handling.
 
+    Each ops class receives its own ``LowLevelAccess`` instance configured with the
+    appropriate ``driver_name`` (e.g. ``"GeneratorDriver"``), so that error messages
+    automatically include the correct driver context.
+
     - Invalid indices raise ConfigurationError immediately
     - All driver return codes are normalized through handle_error_result
-    - Hardware specifications are accessible in a standard format
+    - Hardware specifications are accessible via the ``hw_specs`` property
     """
 
-    def __init__(self, overlay_driver: object, logger: logging.Logger) -> None:
+    def __init__(
+        self,
+        overlay_driver: object,
+        logger: logging.Logger,
+        *,
+        driver_name: str = "Driver",
+    ) -> None:
         """Initialize the low-level access helper.
 
         :param overlay_driver: The low-level overlay driver (FIREQ_SoC instance).
         :type overlay_driver: object
         :param logger: Logger instance for error reporting.
         :type logger: logging.Logger
+        :param driver_name: Name of the driver class for error messages
+            (e.g. ``"GeneratorDriver"``).
+        :type driver_name: str
         """
         self.overlay_driver = overlay_driver
         self.logger = logger
+        self._driver_name = driver_name
+
+    # ========================================================================
+    # DEVICE GETTERS
+    # ========================================================================
 
     def get_gen(self, gen_index: int) -> object:
         """Retrieve the low-level driver for a specific generator.
@@ -80,6 +98,19 @@ class LowLevelAccess:
             raise ConfigurationError("No trigger generator available in overlay")
         return self.overlay_driver.trigger
 
+    # ========================================================================
+    # HARDWARE SPECIFICATION QUERIES
+    # ========================================================================
+
+    @property
+    def hw_specs(self) -> dict:
+        """Hardware specification dictionary from the overlay driver.
+
+        :return: The full hw_specs dictionary.
+        :rtype: dict
+        """
+        return self.overlay_driver.hw_specs
+
     def dac_sr_mhz(self) -> float:
         """Retrieve the DAC sampling rate from hardware specifications and convert it to MHz.
 
@@ -96,49 +127,100 @@ class LowLevelAccess:
         """
         return float(self.overlay_driver.hw_specs["summary"]["adc_sr_hz"]) / 1e6
 
-    def call(
+    # ========================================================================
+    # MIX-MODE CONFIGURATION
+    # ========================================================================
+
+    def configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict | None:
+        """Configure the DAC Mix-Mode (Nyquist zone) for a generator.
+
+        Silently returns ``None`` if the driver does not support mix-mode
+        configuration (e.g. on mock overlays or older bitstreams).
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param label: Modulation context ('drive' or 'readout').
+        :type label: str
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
+        :return: Mix-mode info dictionary from the driver, or ``None`` if unavailable.
+        :rtype: dict | None
+        """
+        try:
+            mix_info = self.overlay_driver.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            if mix_info.get("changed"):
+                self.logger.debug(
+                    "DAC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+            return mix_info
+        except (ValueError, AttributeError, TypeError, KeyError) as e:
+            self.logger.debug("DAC Mix-mode config skipped: %s", e)
+            return None
+
+    def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> None:
+        """Configure the ADC Mix-Mode (Nyquist zone) for an acquisition unit.
+
+        Logs a warning and continues if the driver does not support mix-mode
+        configuration.
+
+        :param acq_index: Index of the acquisition unit.
+        :type acq_index: int
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
+        """
+        try:
+            mix_info = self.overlay_driver.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
+            if mix_info.get("changed"):
+                self.logger.debug(
+                    "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+        except ValueError as e:
+            self.logger.warning("ADC Mix-mode config skipped: %s", e)
+
+    # ========================================================================
+    # ERROR-CHECKED RESULT HANDLING
+    # ========================================================================
+
+    def check_result(
         self,
         result: object,
         *,
         operation: str,
-        driver_name: str,
-        config_error: bool = False,
         hint: str | None = None,
     ) -> object:
-        """Uniform wrapper for low-level driver calls with centralized error handling.
+        """Check a driver return code and raise on error.
 
-        This method acts as a middleware that intercepts the integer return codes from
-        the Low-Level API. It standardizes logging, injects diagnostic hints, and
-        converts error codes into semantic Python exceptions.
+        Inspects the integer return code from a low-level driver method. Non-negative
+        values pass through unchanged; negative values trigger a ``ConfigurationError``
+        with a diagnostic hint looked up from ``ERROR_HINTS``.
 
         :param result: Raw return value from the low-level driver method (typically an
             integer status code).
         :type result: object
-        :param operation: The name of the specific operation being performed (used for
-            logging context).
+        :param operation: The name of the driver operation (used for error messages
+            and hint lookups).
         :type operation: str
-        :param driver_name: The name of the low-level driver class (used for logging
-            context).
-        :type driver_name: str
-        :param config_error: Strategy flag. If True, maps failures to
-            ``ConfigurationError`` (invalid user input). If False, maps failures to
-            ``DriverError`` (hardware/runtime failure).
-        :type config_error: bool
-        :param hint: An explicit diagnostic hint to append to the error message if the
-            call fails, overriding default lookups.
-        :type hint: Optional[str]
-        :return: The original ``result`` passed through unchanged if it indicates
-            success (non-negative).
+        :param hint: An explicit diagnostic hint to append to the error message,
+            overriding the default ``ERROR_HINTS`` lookup.
+        :type hint: str | None
+        :return: The original ``result`` passed through unchanged on success.
         :rtype: object
-        :raises ConfigurationError: If the result is negative and ``config_error`` is True.
-        :raises DriverError: If the result is negative and ``config_error`` is False.
+        :raises ConfigurationError: If the result is a negative integer.
         """
         return handle_error_result(
             result,
             operation=operation,
-            driver_name=driver_name,
+            driver_name=self._driver_name,
             logger=self.logger,
-            config_error=config_error,
+            config_error=True,
             hint=hint,
             error_hints=ERROR_HINTS,
             error_exc=None,
