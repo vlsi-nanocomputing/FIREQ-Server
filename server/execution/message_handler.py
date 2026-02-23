@@ -106,8 +106,7 @@ class MessageHandler:
             n_chunks = 1
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition.dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
-                    for acq_ip in acq_indices
+                    self.adapter.acquisition.compute_max_hw_shots(mode, samp_per_shot, acq_ip) for acq_ip in acq_indices
                 )
                 n_chunks = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
 
@@ -240,8 +239,7 @@ class MessageHandler:
             # Compute chunks_per_point based on hardware buffer limits
             if acq_indices and shots > 0:
                 max_hw_shots = min(
-                    self.adapter.acquisition.dma.compute_max_hw_shots(mode, samp_per_shot, acq_ip)
-                    for acq_ip in acq_indices
+                    self.adapter.acquisition.compute_max_hw_shots(mode, samp_per_shot, acq_ip) for acq_ip in acq_indices
                 )
                 chunks_per_point = (shots + max_hw_shots - 1) // max_hw_shots if max_hw_shots > 0 else 1
             else:
@@ -519,6 +517,24 @@ class MessageHandler:
                     gen_index=gen_index, wave_id_list=drive["fifo"], start_index=drive.get("fifo_start_index", 1)
                 )
                 self._log(log, f"gen {gen_index} drive sequence programmed")
+            legacy_drive_keys = {"source", "lfsr_seed", "lsfr_seed"} & set(drive)
+            if legacy_drive_keys:
+                raise ValueError(
+                    f"drive fields {sorted(legacy_drive_keys)} are no longer supported; "
+                    "use 'random' and 'random_seed'."
+                )
+            if "random" in drive:
+                seed = drive.get("random_seed")
+                self.adapter.generator.set_drive_source(
+                    gen_index=gen_index,
+                    source=str(drive["random"]),
+                    seed=(int(seed) if seed is not None else None),
+                )
+                source_lower = str(drive["random"]).lower()
+                if source_lower == "lfsr" and seed is not None:
+                    self._log(log, f"gen {gen_index} drive source set to lfsr (seed={int(seed)})")
+                else:
+                    self._log(log, f"gen {gen_index} drive source set to {source_lower}")
 
         if readout := gen_cfg.get("readout"):
             if "frequency_mhz" in readout:
@@ -804,7 +820,7 @@ class MessageHandler:
             payload["error"] = error
         return payload
 
-    def _compute_expected_shape(self, mode: str, shots: int, samp_per_shot: int, acq_ip_index: int) -> list[int]:
+    def _compute_expected_shape(self, mode: str, shots: int, samp_per_shot: int, acq_index: int) -> list[int]:
         """Compute the expected array shape for a given acquisition ip.
 
         :param mode: Acquisition mode.
@@ -813,8 +829,8 @@ class MessageHandler:
         :type shots: int
         :param samp_per_shot: Samples per shot.
         :type samp_per_shot: int
-        :param acq_ip_index: acquisition ip index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :return: Expected array shape.
         :rtype: list[int]
         """
@@ -823,7 +839,7 @@ class MessageHandler:
         if mode == "decimated":
             return [int(shots), int(samp_per_shot)]
         if mode == "raw":
-            parallelism = int(self.adapter.hw_specs["acquisitions"][acq_ip_index].get("parallelism", 1))
+            parallelism = int(self.adapter.hw_specs["acquisitions"][acq_index].get("parallelism", 1))
             return [int(shots), int(samp_per_shot) * parallelism]
         return [int(shots), int(samp_per_shot)]
 

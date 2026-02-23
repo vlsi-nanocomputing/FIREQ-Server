@@ -15,11 +15,12 @@ It applies the Adapter pattern to:
 
 Architecture
 ------------
-The OverlayAdapter uses composition to integrate four operation classes:
-- GeneratorOps: Wave management, envelope upload, FIFO programming
+The OverlayAdapter uses flat operation classes:
+- GeneratorOps: Wave management, envelope upload, FIFO, modulation, triggering
 - TriggerGeneratorOps: Trigger generator configuration and execution
-- AcquisitionOps: DMA-based acquisition with chunking and sweep optimization
-- ExperimentOps: High-level multi-acquisition orchestration
+- AcquisitionOps: DMA-based acquisition with chunking, sweep, modulation, timing
+
+Each operation class owns its own state. No shared mutable containers.
 
 Key design principles
 ---------------------

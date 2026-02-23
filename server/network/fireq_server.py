@@ -596,29 +596,28 @@ class FIREQServer:
             payload = json.dumps(msg).encode("utf-8")
         sock.sendall(len(payload).to_bytes(4, "big") + payload)
 
-    def _send_binary_frame(self, sock: socket.socket, acq_ip_index: int, data: np.ndarray) -> None:
+    def _send_binary_frame(self, sock: socket.socket, acq_index: int, data: np.ndarray) -> None:
         """Send binary frame: [4B AcqIP][data].
 
         Client computes data length and valid_words from request params + acq_ip_metadata.
 
         :param sock: Connected socket.
         :type sock: socket.socket
-        :param acq_ip_index: Acquisition index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :param data: Numpy array to transmit.
         :type data: np.ndarray
         """
         t_start = time.perf_counter()
         self.logger.debug(
-            f"Sending binary frame: AcqIp={acq_ip_index}, size={data.nbytes}B, "
-            f"dtype={data.dtype}, shape={data.shape}"
+            f"Sending binary frame: AcqIp={acq_index}, size={data.nbytes}B, " f"dtype={data.dtype}, shape={data.shape}"
         )
-        sock.sendall(struct.pack(">I", acq_ip_index))
+        sock.sendall(struct.pack(">I", acq_index))
         sock.sendall(memoryview(data))
         elapsed_ms = (time.perf_counter() - t_start) * 1000
         data_bytes_len = data.nbytes
         if elapsed_ms > 50:
-            self.logger.warning(f"Slow send: AcqIp {acq_ip_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
+            self.logger.warning(f"Slow send: AcqIp {acq_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
 
     def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
         """Send timing trailer (2x float32 big-endian).

@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from server import MessageHandler, OverlayAdapter, WaveCompilationError
+from server.hardware.dma_engine import DMAResult
 from server.models import BinaryChunk, StreamHeader, StreamTiming
 
 # Attempt to import Mock Hardware; fallback to local import if the file is adjacent
@@ -35,22 +36,14 @@ def stack() -> object:
             self.adapter.dma_engine = MagicMock()
             self.adapter.dma_engine.get_max_shots.return_value = 999999
 
-            # Setup valid DMA buffer return - returns just buffer (no valid_words)
-            def retrieve_side_effect(
-                buffer: object,
-                timeout: object = None,
-                skip_timeout: bool = False,
-            ) -> np.ndarray:
+            # Setup valid DMA buffer return as DMAResult
+            def retrieve_side_effect(buffer: object) -> DMAResult:
                 # Return compact I/Q format (structured array with dummy data)
                 dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
                 data = np.zeros((10, 256), dtype=dtype)
-                return data
+                return DMAResult(data, 0.001, 0.0001)
 
             self.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
-
-            # Setup timing tracking attributes on DMA mock
-            self.adapter.dma_engine.last_dma_wait_s = 0.001
-            self.adapter.dma_engine.last_invalidate_s = 0.0001
 
             # Mock run_acquisition method on adapter
             # This is used by _stream_acquisition_only in MessageHandler
@@ -93,8 +86,8 @@ def stack() -> object:
                     else:
                         dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
                         result[acq_ip] = np.zeros((shots, samp_per_shot), dtype=dtype)
-                # Update timing stats on adapter (simulating what the real method does)
-                self.adapter.last_timing_stats = {
+                # Update timing stats on acquisition ops (simulating what the real method does)
+                self.adapter.acquisition._last_timing_stats = {
                     "total_ms": 1.0,
                     "fpga_wait_ms": 0.5,
                     "dma_overhead_ms": 0.1,
@@ -104,8 +97,8 @@ def stack() -> object:
 
             self.adapter.run_multi_acquisition = MagicMock(side_effect=run_multi_acquisition_side_effect)
 
-            # Mock compute_max_hw_shots on the DMAOrchestrator to return a high limit (no chunking)
-            self.adapter.acquisition.dma.compute_max_hw_shots = MagicMock(return_value=999999)
+            # Mock compute_max_hw_shots on AcquisitionOps to return a high limit (no chunking)
+            self.adapter.acquisition.compute_max_hw_shots = MagicMock(return_value=999999)
 
             # 4. Initialize Handler
             self.handler = MessageHandler(self.adapter)

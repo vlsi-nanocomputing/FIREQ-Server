@@ -7,7 +7,8 @@ import numpy as np
 import pytest
 
 from server import ConfigurationError, OverlayAdapter
-from server.hardware.ol_adapter.generator._iq_conversion import iq_float_to_cint16
+from server.hardware.dma_engine import DMAResult
+from server.hardware.ol_adapter.generator_utils._iq_conversion import iq_float_to_cint16
 
 try:
     from test.mock_hardware import MockOverlay
@@ -67,14 +68,13 @@ def ctx() -> AdapterTestContext:
         acq.current_channel = 1
 
     adapter = OverlayAdapter(mock_ol)
-    # Mock DMA engine for chunking tests
+
+    # Mock DMA engine for acquisition tests.
+    # In the flat architecture, DMA engine lives inside AcquisitionOps.
     mock_dma = MagicMock()
     mock_dma.set_active_acq_ips = MagicMock(return_value=None)
-    mock_dma.prepare_sweep = MagicMock(return_value=None)
     mock_dma.end_sweep = MagicMock(return_value=None)
-    adapter._ctx.dma_engine = mock_dma
-    # Also expose on adapter for backward compatibility
-    adapter.dma_engine = mock_dma
+    adapter.acquisition._dma_engine = mock_dma
 
     return AdapterTestContext(adapter, mock_ol, mock_gen, mock_trig, mock_acq)
 
@@ -262,7 +262,7 @@ def test_compile_waves_cache_hit(ctx: AdapterTestContext) -> None:
 
     # 1. Correct Setup:
     # Perform a real compilation. This populates:
-    # - The HL cache (ctx.adapter._ctx.cache.wave_store)
+    # - The HL cache (adapter.generator._wave_store)
     # - The LL memory (ctx.gen.wave_memory_dict) via internal calls
     ctx.adapter.generator.compile_waves(gen_index=0, waves=[wave_spec], replace=True)
 
@@ -322,11 +322,9 @@ def test_run_multi_acquisition_single_acq_ip(ctx: AdapterTestContext) -> None:
     dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
     mock_data = np.zeros((10, 100), dtype=dtype)
 
-    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer_handle"
-    ctx.adapter.dma_engine.retrieve_acquisition.return_value = mock_data
-    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
-    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
-    ctx.adapter.dma_engine.last_invalidate_s = 0.0002
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer_handle"
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.return_value = DMAResult(mock_data, 0.001, 0.0002)
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
 
     # Consume iterator to get result
     results = list(
@@ -344,11 +342,12 @@ def test_run_multi_acquisition_single_acq_ip(ctx: AdapterTestContext) -> None:
     result = results[0]
 
     # Verify DMA arm was called with correct parameters
-    ctx.adapter.dma_engine.arm_acquisition.assert_called_once_with(
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.assert_called_once_with(
         samp_per_shot=100,
         shots_per_exp=10,
         mode="raw",
-        acq_ip_index=0,
+        acq_index=0,
+        fast_path=False,
     )
 
     # Verify trigger was fired
@@ -363,7 +362,7 @@ def test_run_multi_acquisition_single_acq_ip(ctx: AdapterTestContext) -> None:
     assert ctx.adapter.last_timing_stats["dma_overhead_ms"] == pytest.approx(0.2)
 
     # Verify retrieve was called once
-    ctx.adapter.dma_engine.retrieve_acquisition.assert_called_once()
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.assert_called_once()
 
 
 def test_run_multi_acquisition_multi_acq_ip(ctx: AdapterTestContext) -> None:
@@ -375,18 +374,16 @@ def test_run_multi_acquisition_multi_acq_ip(ctx: AdapterTestContext) -> None:
         buffer_counter[0] += 1
         return f"buffer_{buffer_counter[0]}"
 
-    ctx.adapter.dma_engine.arm_acquisition.side_effect = arm_side_effect
-    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.side_effect = arm_side_effect
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
 
     # Setup mock for retrieve - returns buffer
     dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
 
-    def retrieve_side_effect(**kwargs: object) -> np.ndarray:
-        return np.zeros((10, 100), dtype=dtype)
+    def retrieve_side_effect(**kwargs: object) -> DMAResult:
+        return DMAResult(np.zeros((10, 100), dtype=dtype), 0.001, 0.0001)
 
-    ctx.adapter.dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
-    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
-    ctx.adapter.dma_engine.last_invalidate_s = 0.0001
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
 
     # Run acquisition for both acquisition units
     results = list(
@@ -409,18 +406,18 @@ def test_run_multi_acquisition_multi_acq_ip(ctx: AdapterTestContext) -> None:
     # Verify both AcqIps have data
     assert 0 in result and 1 in result
 
-    # Verify both AcqIps were armed (sequential ARM → TRIGGER → RETRIEVE)
-    assert ctx.adapter.dma_engine.arm_acquisition.call_count == 2
+    # Verify both AcqIps were armed (sequential ARM -> TRIGGER -> RETRIEVE)
+    assert ctx.adapter.acquisition._dma_engine.arm_acquisition.call_count == 2
 
     # Verify retrieve was called twice (once per AcqIp)
-    assert ctx.adapter.dma_engine.retrieve_acquisition.call_count == 2
+    assert ctx.adapter.acquisition._dma_engine.retrieve_acquisition.call_count == 2
 
 
 def test_fifo_patching_consistency(ctx: AdapterTestContext) -> None:
     """Verify that partial FIFO updates maintain consistency in the HL cache."""
     # 1. Initial Setup: Sequence [A, B, C]
-    # Mock cache presence to bypass validation
-    ctx.adapter._ctx.cache.wave_store[0] = {
+    # Directly populate the generator's wave cache
+    ctx.adapter.generator._wave_store[0] = {
         "A": MagicMock(wdw=1),
         "B": MagicMock(wdw=2),
         "C": MagicMock(wdw=3),
@@ -431,7 +428,7 @@ def test_fifo_patching_consistency(ctx: AdapterTestContext) -> None:
 
     # Program base sequence
     ctx.adapter.generator.program_drive_sequence(gen_index=0, wave_id_list=["A", "B", "C"], start_index=1)
-    assert ctx.adapter._ctx.cache.last_fifo[0] == ["A", "B", "C"]
+    assert ctx.adapter.generator._last_fifo[0] == ["A", "B", "C"]
 
     # 2. Patching: Replace from index 2 (B -> D) -> Expected Result [A, D, C]
     # Logic: new_fifo = prev[:start-1] + new_list + prev[end:]
@@ -441,12 +438,12 @@ def test_fifo_patching_consistency(ctx: AdapterTestContext) -> None:
     ctx.gen.add_wave_to_drive_wave_sequence.assert_any_call(2, "D")
 
     # Verify HL cache consistency
-    assert ctx.adapter._ctx.cache.last_fifo[0] == ["A", "D", "C"]
+    assert ctx.adapter.generator._last_fifo[0] == ["A", "D", "C"]
 
 
 def test_fifo_patching_out_of_bounds(ctx: AdapterTestContext) -> None:
     """Verify patching beyond known sequence length raises ConfigurationError."""
-    ctx.adapter._ctx.cache.wave_store[0] = {"A": MagicMock(wdw=1)}
+    ctx.adapter.generator._wave_store[0] = {"A": MagicMock(wdw=1)}
     ctx.gen.wave_memory_dict = {"A": 1}
 
     # Attempt to patch index 5 when list is empty/short
@@ -460,16 +457,16 @@ def test_reset_wave_memory_preserve_specs(ctx: AdapterTestContext) -> None:
     # 1. Populate cache
     entry = MagicMock()
     entry.wdw = 12345
-    ctx.adapter._ctx.cache.wave_store[0] = {"test_wave": entry}
+    ctx.adapter.generator._wave_store[0] = {"test_wave": entry}
 
     # 2. Execute reset with preservation
     ctx.adapter.generator.reset_wave_memory(gen_index=0, preserve_wave_specs=True)
 
     # 3. Assertions
     # Entry must still exist
-    assert "test_wave" in ctx.adapter._ctx.cache.wave_store[0]
+    assert "test_wave" in ctx.adapter.generator._wave_store[0]
     # WDW must be invalidated (None)
-    assert ctx.adapter._ctx.cache.wave_store[0]["test_wave"].wdw is None
+    assert ctx.adapter.generator._wave_store[0]["test_wave"].wdw is None
     # Driver must be reset
     ctx.gen.reset_wave_memory_dict.assert_called_once()
 
@@ -477,10 +474,10 @@ def test_reset_wave_memory_preserve_specs(ctx: AdapterTestContext) -> None:
 def test_run_multi_acquisition_dma_failure(ctx: AdapterTestContext) -> None:
     """Verify DMA errors during run_multi_acquisition are propagated."""
     # Setup arm to succeed
-    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer_handle"
-    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer_handle"
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
     # Simulate DMA timeout during retrieval
-    ctx.adapter.dma_engine.retrieve_acquisition.side_effect = TimeoutError("DMA Timeout")
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.side_effect = TimeoutError("DMA Timeout")
 
     # Execute run_multi_acquisition - consume iterator to trigger exception
     with pytest.raises(TimeoutError, match="DMA Timeout"):
@@ -494,14 +491,13 @@ def test_run_multi_acquisition_dma_failure(ctx: AdapterTestContext) -> None:
             )
         )
 
-    ctx.adapter.dma_engine.retrieve_acquisition.assert_called_once()
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.assert_called_once()
 
 
 def test_sweep_lifecycle(ctx: AdapterTestContext) -> None:
     """Verify the lifecycle management of the sweep mode (prepare/end)."""
     # Mock DMA engine methods
-    ctx.adapter.dma_engine.prepare_sweep = MagicMock()
-    ctx.adapter.dma_engine.end_sweep = MagicMock()
+    ctx.adapter.acquisition._dma_engine.end_sweep = MagicMock()
 
     # Explicitly Mock the ACQ driver method (since it's a real function in mock_hardware)
     ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
@@ -516,12 +512,13 @@ def test_sweep_lifecycle(ctx: AdapterTestContext) -> None:
 
     # Assert driver call
     ctx.acq.set_decimated_output_type.assert_called_with("decimated")
-    # Assert DMA call
-    ctx.adapter.dma_engine.prepare_sweep.assert_called_with("decimated")
+    # Assert sweep_prepared flag is set
+    assert ctx.adapter.acquisition._sweep_prepared is True
 
     # 2. Conclusion
     ctx.adapter.experiment.end_sweep()
-    ctx.adapter.dma_engine.end_sweep.assert_called_once()
+    ctx.adapter.acquisition._dma_engine.end_sweep.assert_called_once()
+    assert ctx.adapter.acquisition._sweep_prepared is False
 
 
 def test_program_drive_sequence_overflow(ctx: AdapterTestContext) -> None:
@@ -570,11 +567,9 @@ def test_run_multi_acquisition_shot_memoization(ctx: AdapterTestContext) -> None
     # Setup mocks
     dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
     mock_data = np.zeros((10, 100), dtype=dtype)
-    ctx.adapter.dma_engine.arm_acquisition.return_value = "buffer"
-    ctx.adapter.dma_engine.retrieve_acquisition.return_value = mock_data
-    ctx.adapter.dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
-    ctx.adapter.dma_engine.last_dma_wait_s = 0.001
-    ctx.adapter.dma_engine.last_invalidate_s = 0.0001
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer"
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.return_value = DMAResult(mock_data, 0.001, 0.0001)
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024  # Large enough to avoid chunking
 
     # Mock the actual trigger.set_shots method (used internally during run_multi_acquisition)
     ctx.adapter.trigger.set_shots = MagicMock()
