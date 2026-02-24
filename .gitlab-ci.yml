@@ -1,5 +1,6 @@
 stages:
   - code-style
+  - test
 
 style:
   stage: code-style
@@ -10,4 +11,17 @@ style:
     - pip3.10 install -r requirements.txt
     - python -m black --check .
     - python -m ruff check .
+  artifacts:
+    paths:
+      - venv/
+    expire_in: 1 hour
+    when: always
+
+pytest:
+  stage: test
+  tags: ["python3.10"]
+  dependencies:
+    - style
+  script:
+    - source venv/bin/activate
     - pytest
