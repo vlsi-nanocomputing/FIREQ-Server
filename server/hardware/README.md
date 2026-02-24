@@ -7,8 +7,7 @@ Hardware abstraction layer for FIREQ.
 ```
 hardware/
  ├── ol_adapter/          – OverlayAdapter: server-facing adapter
- │    ├── generator/      – wave, envelope, FIFO, modulation operations
- │    └── acquisition/    – DMA acquisition, sweep, timing operations
+ │    └── generator_utils/ – pure utility functions for wave/envelope processing
  └── dma_engine.py        – low-level DMA buffer management
 ```
 

@@ -17,3 +17,12 @@ repos:
     rev: v0.14.11
     hooks:
       - id: ruff
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        pass_filenames: false
+        always_run: true
