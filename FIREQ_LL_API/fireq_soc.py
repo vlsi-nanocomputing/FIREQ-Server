@@ -2,6 +2,7 @@
 
 import os
 import re
+import time
 
 import xrfclk
 import xrfdc  # noqa: F401
@@ -737,24 +738,51 @@ class FIREQSoC(Overlay):
         else:
             self._rf.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
 
-    def calibrate_adc(self, acq_index: int, gen_index: int, freq_mhz: float) -> None:
+    def calibrate_adc(self, acq_index: int, gen_index: int, label: str, freq_mhz: float) -> None:
         """Perform ADC calibration for the ADC connected to acq_index.
 
-        Uses the DAC connected to gen_index to generate the calibration tone.
+        Uses the DAC connected to gen_index to generate the calibration tone,
+        on the output defined by label, at the frequency freq_mhz.
 
         :param acq_index: Acquisition IP index
         :type acq_index: int
         :param gen_index: Acquisition IP index
         :type gen_index: int
+        :param label: Output selection of generator IP, 'drive' or 'readout'
+        :type label: str
         :param freq_mhz: Calibration tone frequency in MHz
         :type freq_mhz: float
         :return: Dict with zone info
         :rtype: dict
         :raises ValueError: If acq_index not in mapping
         """
+        # TODO: make sure this function is safe. Does this brake caching?
+        # activate auto calibration for acquisition index
+        self.set_adc_autocalibration_status(acq_index, freeze=False)
 
-        # TODO: need to check what gen_index is, because the generator is connected to two DAC tiles
-        # WIP
+        # create wave definition word, with keeplast to
+        wave_wdw = self._generation_ips[gen_index].create_wave_definition_word(
+            envelope_name="_RECTANGULAR", duration=1000, gain=0.5, switch_iq=0
+        )
+        wave_wdw = wave_wdw | (1 << 122)
+
+        # set required parameters to generate the tone
+        self._generation_ips[gen_index].write_readout_wave(wave_definition=wave_wdw)
+        self._generation_ips[gen_index].set_manual_wave_destination_output_channel(label)
+        self._generation_ips[gen_index].set_readout_dds_parameters(
+            frequency=freq_mhz, phase=0.0, dac_samplerate=self.hw_specs["summary"]["dac_sr_hz"]
+        )
+
+        # start the tone and wait for 1s
+        self._generation_ips[gen_index].trigger_manually()
+        time.sleep(1)
+
+        # stop the tone
+        self._generation_ips[gen_index].write_readout_wave(wave_definition=0)
+        self._generation_ips[gen_index].trigger_manually()
+
+        # freeze calibration for ADC
+        self.set_adc_autocalibration_status(acq_index, freeze=True)
 
     def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> dict:
         """Configure RF-DC NyquistZone for an ADC channel based on frequency.
