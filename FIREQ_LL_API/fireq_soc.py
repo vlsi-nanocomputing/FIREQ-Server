@@ -95,8 +95,13 @@ class FIREQSoC(Overlay):
 
         # 7) Health flag
         self._healthy = True  # if _build_hw_specs did not raise exceptions
+
         # 8) recommended PL reset
         PL.reset()
+
+        # 9) freeze calibration for all ADCs
+        for acq_idx in range(len(self._acquisition_ips)):
+            self.set_adc_autocalibration_status(acq_idx, freeze=True)
 
     @staticmethod
     def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
@@ -706,6 +711,50 @@ class FIREQSoC(Overlay):
         }
 
     # FIREQ IPs
+
+    def set_adc_autocalibration_status(self, acq_index: int, freeze: bool = True) -> None:
+        """Set the ADC autocalibration status for the ADC connected to acq_index.
+
+        If freeze is True, calibration is frozen (deactivated), otherwise it is unfrozen (activated).
+
+        :param acq_index: Acquisition IP index
+        :type acq_index: int
+        :param freeze: Calibration setting, defaults to True
+        :type freeze: bool
+        :rtype: None
+        :raises ValueError: If acq_index not in mapping
+        """
+        # Lookup tile/block
+        tile_block = self._ACQ_RF_MAP.get(acq_index)
+        if tile_block is None:
+            raise ValueError(f"No RF mapping for acq_index={acq_index}")
+
+        tile, block = tile_block
+
+        # Freeze calibration for the ADC block if freeze, otherwise unfreeze
+        if freeze:
+            self._rf.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 1
+        else:
+            self._rf.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
+
+    def calibrate_adc(self, acq_index: int, gen_index: int, freq_mhz: float) -> None:
+        """Perform ADC calibration for the ADC connected to acq_index.
+
+        Uses the DAC connected to gen_index to generate the calibration tone.
+
+        :param acq_index: Acquisition IP index
+        :type acq_index: int
+        :param gen_index: Acquisition IP index
+        :type gen_index: int
+        :param freq_mhz: Calibration tone frequency in MHz
+        :type freq_mhz: float
+        :return: Dict with zone info
+        :rtype: dict
+        :raises ValueError: If acq_index not in mapping
+        """
+
+        # TODO: need to check what gen_index is, because the generator is connected to two DAC tiles
+        # WIP
 
     def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> dict:
         """Configure RF-DC NyquistZone for an ADC channel based on frequency.
