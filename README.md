@@ -96,7 +96,7 @@ pip install -e .
 ## Running the Server
 
 ```bash
-sudo -I
+sudo -i
 source /etc/profile.d/pynq_venv.py
 python API.py
 ```
