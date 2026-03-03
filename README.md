@@ -96,7 +96,9 @@ pip install -e .
 ## Running the Server
 
 ```bash
-python3 API.py
+sudo -I
+source /etc/profile.d/pynq_venv.py
+python API.py
 ```
 
 Startup prompts ask for:
