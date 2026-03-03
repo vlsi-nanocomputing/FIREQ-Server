@@ -174,7 +174,115 @@ class FIREQSoC(Overlay):
         :return: Generator label, either 'drive' or 'readout'
         :rtype: str
         """
-        return "drive" if "m0" in gen_port_alias or "drive" in gen_port_alias else "readout"
+        alias = gen_port_alias.lower()
+        return "drive" if "m0" in alias or "drive" in alias else "readout"
+
+    @staticmethod
+    def _find_rfdc_sinks(
+        node_dict: dict[str, object],
+        rfdc_name: str,
+        source_alias: str | None = None,
+    ) -> list[tuple[str, str]]:
+        """Find all RFDC slave port connections in a connectivity tree.
+
+        :param node_dict: Connectivity graph node
+        :type node_dict: dict[str, object]
+        :param rfdc_name: Instance name of the RF data converter
+        :type rfdc_name: str
+        :param source_alias: Original generator source port alias propagated through
+            pass-through modules
+        :type source_alias: str | None
+        :return: List of (rfdc_port, gen_port_alias) tuples
+        :rtype: list[tuple[str, str]]
+        """
+        results: list[tuple[str, str]] = []
+        curr_alias = source_alias
+        if curr_alias is None and node_dict["BUS_M/S"][0] is not None:
+            curr_alias = node_dict["BUS_M/S"][0]
+
+        if node_dict["NODE"] == rfdc_name:
+            results.append((node_dict["BUS_M/S"][1], curr_alias or node_dict["BUS_M/S"][0]))
+            return results
+        for child in node_dict.get("CHILDREN", []):
+            results.extend(FIREQSoC._find_rfdc_sinks(child, rfdc_name, curr_alias))
+        return results
+
+    @staticmethod
+    def _trace_rfdc_source(
+        node_dict: dict[str, object],
+        source_port_name: str,
+        rfdc_name: str,
+        acquisition_ips: list,
+        at_root: bool = True,
+    ) -> int | None:
+        """Trace an RFDC master port back to the acquisition IP it connects to.
+
+        :param node_dict: Connectivity graph node
+        :type node_dict: dict[str, object]
+        :param source_port_name: RFDC master port name to trace
+        :type source_port_name: str
+        :param rfdc_name: Instance name of the RF data converter
+        :type rfdc_name: str
+        :param acquisition_ips: List of AcquisitionDriver instances
+        :type acquisition_ips: list
+        :param at_root: Whether currently at the root node, defaults to True
+        :type at_root: bool
+        :return: Acquisition IP index, or None if not found
+        :rtype: int | None
+        """
+        if at_root and node_dict["NODE"] == rfdc_name:
+            for child in node_dict["CHILDREN"]:
+                if child["BUS_M/S"][0] == source_port_name:
+                    return FIREQSoC._trace_rfdc_source(
+                        child, source_port_name, rfdc_name, acquisition_ips, at_root=False
+                    )
+            return None
+
+        curr_name = node_dict["NODE"]
+        for idx, acq in enumerate(acquisition_ips):
+            acq_fullpath = getattr(acq, "_fullpath", "")
+            if acq_fullpath and acq_fullpath.split("/")[0] == curr_name:
+                return idx
+
+        for child in node_dict.get("CHILDREN", []):
+            res = FIREQSoC._trace_rfdc_source(child, source_port_name, rfdc_name, acquisition_ips, at_root=False)
+            if res is not None:
+                return res
+        return None
+
+    def _trace_rfdc_sink(
+        self,
+        sink_port_name: str,
+        rfdc_name: str,
+        all_modules: list,
+    ) -> tuple[int, str] | None:
+        """Trace an RFDC slave port back to the generator IP and label it connects to.
+
+        :param sink_port_name: RFDC slave port name (e.g. s20_axis)
+        :type sink_port_name: str
+        :param rfdc_name: Instance name of the RF data converter
+        :type rfdc_name: str
+        :param all_modules: Full module list from HWH parser
+        :type all_modules: list
+        :return: Tuple (gen_index, label) or None if not found
+        :rtype: tuple[int, str] | None
+        """
+        for gen_idx, gen in enumerate(self._generation_ips):
+            gen_fullpath = getattr(gen, "_fullpath", "")
+            if not gen_fullpath:
+                continue
+
+            gen_instance_name = gen_fullpath.split("/")[0]
+            gen_xml = self._fireq_parser.get_module(gen_instance_name)
+            if gen_xml is None:
+                continue
+
+            conn = self._fireq_parser.get_connectivity(gen_xml, all_modules)
+            for rfdc_port, gen_port_alias in self._find_rfdc_sinks(conn, rfdc_name):
+                if rfdc_port == sink_port_name:
+                    return gen_idx, self._get_gen_label_from_port_alias(gen_port_alias)
+
+        return None
 
     def _map_rf_topology(self) -> None:
         """Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
@@ -187,78 +295,44 @@ class FIREQSoC(Overlay):
         all_modules = list(self._fireq_parser._modules)
         rfdc_name = "usp_rf_data_converter_0"
 
-        # ---------------------------------------------------------------------
-        # 1. Map Generators (DAC Path)
-        # ---------------------------------------------------------------------
-        for idx, gen in enumerate(self._generation_ips):
-            gen_fullpath = getattr(gen, "_fullpath", "")
-            if not gen_fullpath:
-                continue
-
-            gen_instance_name = gen_fullpath.split("/")[0]
-            gen_xml = self._fireq_parser.get_module(gen_instance_name)
-
-            conn = self._fireq_parser.get_connectivity(gen_xml, all_modules)
-
-            def find_rfdc_sink(node_dict: dict[str, object]) -> tuple[str, str] | None:
-                if node_dict["NODE"] == rfdc_name:
-                    return node_dict["BUS_M/S"][1], node_dict["BUS_M/S"][0]
-                for child in node_dict.get("CHILDREN", []):
-                    res = find_rfdc_sink(child)
-                    if res:
-                        return res
-                return None
-
-            res = find_rfdc_sink(conn)
-
-            if res:
-                rfdc_port, gen_port_alias = res
-                # DAC uses sXY_axis (slave ports)
-                m = re.match(r"s(\d)(\d)_axis", rfdc_port)
-                if m:
-                    dac_global_index = int(m.group(1)) * 10 + int(m.group(2))
-                    # Dual DAC tile: 2 blocks per tile
-                    tile = dac_global_index // 2
-                    block = dac_global_index % 2
-
-                    label = self._get_gen_label_from_port_alias(gen_port_alias)
-
-                    if idx not in self._GEN_RF_MAP:
-                        self._GEN_RF_MAP[idx] = {}
-                    self._GEN_RF_MAP[idx][label] = (tile, block)
-
-        # ---------------------------------------------------------------------
-        # 2. Map Acquisitions (ADC Path)
-        # ---------------------------------------------------------------------
         rfdc_xml = self._fireq_parser.get_module(rfdc_name)
         if rfdc_xml:
             conn_rfdc = self._fireq_parser.get_connectivity(rfdc_xml, all_modules)
-
-            def trace_rfdc_source(
-                node_dict: dict[str, object],
-                source_port_name: str,
-                at_root: bool = True,
-            ) -> int | None:
-                if at_root and node_dict["NODE"] == rfdc_name:
-                    for child in node_dict["CHILDREN"]:
-                        if child["BUS_M/S"][0] == source_port_name:
-                            return trace_rfdc_source(child, source_port_name, at_root=False)
-                    return None
-
-                curr_name = node_dict["NODE"]
-                for idx, acq in enumerate(self._acquisition_ips):
-                    acq_fullpath = getattr(acq, "_fullpath", "")
-                    if acq_fullpath and acq_fullpath.split("/")[0] == curr_name:
-                        return idx
-
-                for child in node_dict.get("CHILDREN", []):
-                    res = trace_rfdc_source(child, source_port_name, at_root=False)
-                    if res is not None:
-                        return res
-                return None
-
             rfdc_interfaces = self._fireq_parser.get_bus_interfaces(rfdc_xml)
 
+            # -----------------------------------------------------------------
+            # 1. Map Generators (DAC Path) - same strategy as ADC:
+            #    iterate RFDC ports first, then trace back to endpoint IP index.
+            # -----------------------------------------------------------------
+            for _bus_name, attribs in rfdc_interfaces.items():
+                if attribs["TYPE"] in ["SLAVE", "TARGET"]:
+                    port_name = attribs["NAME"]
+                    # DAC uses sXY_axis (slave ports)
+                    m = re.match(r"s(\d)(\d)_axis", port_name)
+                    if m:
+                        tile = int(m.group(1))
+                        port_indicator = int(m.group(2))
+                        block = port_indicator
+
+                        # Keep compatibility across RFDC variants:
+                        # some expose one AXIS port per block, others expose two ports per block.
+                        if self._rf is not None and tile < len(self._rf.dac_tiles):
+                            n_blocks = len(getattr(self._rf.dac_tiles[tile], "blocks", []))
+                            if n_blocks > 0 and block >= n_blocks:
+                                collapsed_block = port_indicator // 2
+                                if collapsed_block < n_blocks:
+                                    block = collapsed_block
+
+                        trace = self._trace_rfdc_sink(port_name, rfdc_name, all_modules)
+                        if trace is not None:
+                            gen_idx, label = trace
+                            if gen_idx not in self._GEN_RF_MAP:
+                                self._GEN_RF_MAP[gen_idx] = {}
+                            self._GEN_RF_MAP[gen_idx][label] = (tile, block)
+
+            # -----------------------------------------------------------------
+            # 2. Map Acquisitions (ADC Path)
+            # -----------------------------------------------------------------
             for _bus_name, attribs in rfdc_interfaces.items():
                 if attribs["TYPE"] in ["MASTER", "INITIATOR"]:
                     port_name = attribs["NAME"]
@@ -271,7 +345,7 @@ class FIREQSoC(Overlay):
                         port_indicator = int(m.group(2))
                         block = port_indicator // 2
 
-                        acq_idx = trace_rfdc_source(conn_rfdc, port_name)
+                        acq_idx = self._trace_rfdc_source(conn_rfdc, port_name, rfdc_name, self._acquisition_ips)
 
                         if acq_idx is not None:
                             self._ACQ_RF_MAP[acq_idx] = (tile, block)
@@ -683,6 +757,17 @@ class FIREQSoC(Overlay):
             raise ValueError(f"No RF mapping for label='{label}' on gen={gen_index}")
 
         tile, block = tile_block
+        if tile < 0 or tile >= len(self._rf.dac_tiles):
+            raise ValueError(
+                f"Invalid DAC mapping for gen_index={gen_index}, label='{label}': "
+                f"tile={tile}, available_tiles={len(self._rf.dac_tiles)}"
+            )
+        n_blocks = len(getattr(self._rf.dac_tiles[tile], "blocks", []))
+        if block < 0 or block >= n_blocks:
+            raise ValueError(
+                f"Invalid DAC mapping for gen_index={gen_index}, label='{label}': "
+                f"tile={tile}, block={block}, available_blocks={n_blocks}"
+            )
 
         # Compute Nyquist zone
         dac_nyquist_hz = self.hw_specs["summary"]["dac_nyquist_hz"]
@@ -746,21 +831,19 @@ class FIREQSoC(Overlay):
 
         :param acq_index: Acquisition IP index
         :type acq_index: int
-        :param gen_index: Acquisition IP index
+        :param gen_index: Generator IP index
         :type gen_index: int
         :param label: Output selection of generator IP, 'drive' or 'readout'
         :type label: str
         :param freq_mhz: Calibration tone frequency in MHz
         :type freq_mhz: float
-        :return: Dict with zone info
-        :rtype: dict
+        :rtype: None
         :raises ValueError: If acq_index not in mapping
         """
-        # TODO: make sure this function is safe. Does this brake caching?
         # activate auto calibration for acquisition index
         self.set_adc_autocalibration_status(acq_index, freeze=False)
 
-        # create wave definition word, with keeplast to
+        # create wave definition word, with keeplast bit set
         wave_wdw = self._generation_ips[gen_index].create_wave_definition_word(
             envelope_name="_RECTANGULAR", duration=1000, gain=0.5, switch_iq=0
         )
@@ -832,6 +915,17 @@ class FIREQSoC(Overlay):
             "tile": tile,
             "block": block,
             "changed": changed,
+        }
+
+    def rf_mapping(self) -> dict:
+        """Return internal RF mapping dictionaries as-is.
+
+        :return: Dict with ``_GEN_RF_MAP`` and ``_ACQ_RF_MAP``.
+        :rtype: dict
+        """
+        return {
+            "_GEN_RF_MAP": dict(self._GEN_RF_MAP),
+            "_ACQ_RF_MAP": dict(self._ACQ_RF_MAP),
         }
 
     @property

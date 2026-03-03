@@ -9,7 +9,7 @@ Architecture: 3 threads communicate via queue_in/queue_out.
 Protocol:
 - Requests: 4-byte big-endian length prefix + UTF-8 JSON payload.
 - Responses: JSON messages (4-byte length) and streamed binary data (acquistion frames + timing).
-  For run_experiment/run_sweep: StreamHeader (JSON) → BinaryChunk (frames) → StreamTiming (JSON).
+  For run_experiment/run_sweep: StreamHeader (JSON) -> BinaryChunk (frames) -> StreamTiming (JSON).
 """
 import json
 import logging
@@ -244,6 +244,16 @@ class FIREQServer:
                         session_id,
                         ok=True,
                         generators=self.handler.status_h.get_all_generators_status(),
+                    )
+                )
+
+            elif cmd == "rf_mapping":
+                self.queue_out.put(
+                    self._build_response(
+                        cmd,
+                        session_id,
+                        ok=True,
+                        rf_mapping=self.handler.status_h.get_rf_mapping(),
                     )
                 )
 

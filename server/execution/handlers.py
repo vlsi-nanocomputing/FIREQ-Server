@@ -58,6 +58,14 @@ class StatusHandler:
         """
         return self._hw_summary.get("num_acquisitions", 0)
 
+    def get_rf_mapping(self) -> dict:
+        """Return RF topology mapping for generators/acquisitions.
+
+        :return: Dict containing generator and acquisition RF mappings.
+        :rtype: dict
+        """
+        return self.adapter.rf_mapping()
+
     def get_all_generators_status(self) -> list[dict]:
         """Get status for all generators.
 
