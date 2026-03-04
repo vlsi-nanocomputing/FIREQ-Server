@@ -32,12 +32,20 @@ def build_wave_entry(wave_spec: dict) -> WaveEntry:
         raise ConfigurationError(f"Unknown wave kind '{kind}' (use 'env' or 'vz').")
 
     if kind == "env":
+        # parsing switch iq and keeplast
+        switch_iq = wave_spec.get("switch_iq", None)
+        keep_last = wave_spec.get("keep_last", None)
+        # default to false, which removes some possibility for errors
+        # TODO: make this convertion strict
+        switch_iq = True if (switch_iq and switch_iq == "True") else False
+        keep_last = True if (keep_last and keep_last == "True") else False
+
         return WaveEntry(
             envelope=str(wave_spec["envelope"]),
             duration=int(wave_spec["duration"]),
             gain=float(wave_spec["gain"]),
-            switch_iq=bool(wave_spec.get("switch_iq", False)),
-            keep_last=bool(wave_spec.get("keep_last", False)),
+            switch_iq=switch_iq,
+            keep_last=keep_last,
             wdw=None,
         )
     else:

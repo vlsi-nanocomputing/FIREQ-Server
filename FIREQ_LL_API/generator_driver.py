@@ -790,6 +790,11 @@ class GeneratorDriver(_FIREQDriver):
         # set the start offset and increment bits
         wavedef = wavedef | (start_offset << (self.sample_memory_address_width + self.fractional_precision))
         wavedef = wavedef | increment
+
+        logger.debug(
+            f"generator_driver, create_wave_definition_word, got following inputs {envelope_name}, {duration}, {gain}, {switch_iq}, {keep_last}"
+        )
+
         # return wave definition
         return wavedef
 

@@ -129,6 +129,7 @@ class GeneratorOps:
                     continue
 
                 wdw = self._compile_wdw(gen, new_entry)
+                self._logger.debug("compile_waves: wave_id '%s' -> WDW=0x%X", wave_id, wdw)
                 new_entry.wdw = wdw
                 self._store_wdw_in_hardware(gen, wdw, wave_id, action == "replace")
 
