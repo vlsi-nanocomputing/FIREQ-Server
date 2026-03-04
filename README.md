@@ -97,7 +97,7 @@ pip install -e .
 
 ```bash
 sudo -i
-source /etc/profile.d/pynq_venv.py
+source /etc/profile.d/pynq_venv.sh
 python API.py
 ```
 
