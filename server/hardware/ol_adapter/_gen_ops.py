@@ -175,12 +175,20 @@ class GeneratorOps:
 
         gen = self._ll.get_gen(gen_index)
 
+        # parsing switch iq and keeplast
+        switch_iq = wave.get("switch_iq", None)
+        keep_last = wave.get("keep_last", None)
+        # default to false, which removes some possibility for errors
+        # TODO: make this convertion strict
+        switch_iq = True if (switch_iq and switch_iq == "True") else False
+        keep_last = True if (keep_last and keep_last == "True") else False
+
         new_entry = WaveEntry(
             envelope=str(wave["envelope"]),
             duration=int(wave["duration"]),
             gain=float(wave["gain"]),
-            switch_iq=bool(wave.get("switch_iq", False)),
-            keep_last=bool(wave.get("keep_last", False)),
+            switch_iq=switch_iq,
+            keep_last=keep_last,
             wdw=None,
         )
 
