@@ -1,5 +1,6 @@
 """Low-level driver for the FIREQ generator IP."""
 
+import logging
 import numpy as np
 
 from ._utils import (
@@ -10,6 +11,8 @@ from ._utils import (
     _set_bit,
     _set_bits,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["GeneratorDriver"]
 
@@ -214,6 +217,9 @@ class GeneratorDriver(_FIREQDriver):
         """
         control_register = self._axi_lite_interface_mmio.read(self.ctrl * 4)
         self._axi_lite_interface_mmio.write(self.ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
+
+        logger.debug("generator, trigger_manually, manually triggered")
+
         return 0
 
     def set_trigger_channel(self, channel: int, ttype: str) -> int:
@@ -248,6 +254,8 @@ class GeneratorDriver(_FIREQDriver):
             trigger_mask,
         )
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+
+        logger.debug(f"generator, set_trigger_channel, got the following for channel: {channel}, ttype: {ttype}")
 
         return 0
 
@@ -293,6 +301,9 @@ class GeneratorDriver(_FIREQDriver):
             setvalue=source,
         )
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+
+        logger.debug(f"generator, set_drive_order_source, got the following for source: {source}")
+
         return 0
 
     def get_drive_order_source(self) -> int:
@@ -323,6 +334,9 @@ class GeneratorDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(self.ctrl * 4)
         control_register = _set_bits(control_register, 2 * self.trigger_channels, self.seed_lfsr_width, seed)
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+
+        logger.debug(f"generator, set_lfsr_seed, got the following for seed: {seed}")
+
         return 0
 
     def get_lfsr_seed(self) -> int:
@@ -439,6 +453,11 @@ class GeneratorDriver(_FIREQDriver):
             setvalue=selector,
         )
         self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+
+        logger.debug(
+            f"generator, set_manual_wave_destination_output_channel, got the following for destination: {destination}"
+        )
+
         return 0
 
     def get_manual_wave_destination_output_channel(self) -> int:
@@ -457,7 +476,7 @@ class GeneratorDriver(_FIREQDriver):
         :type frequency: float
         :param phase: Phase in radians
         :type phase: float
-        :param dac_samplerate: Sample rate of the dac, in samples per second
+        :param dac_samplerate: Sample rate of the dac, in MSps
         :type dac_samplerate: int
         :return: Error code
         :rtype: Literal[-3, 0]
@@ -468,10 +487,15 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, dac_samplerate, self.phase_depth)
+        phase_parameters = _compute_pinc_poff(frequency, phase, dac_samplerate, self.phase_depth)
 
         # write registers
         self._set_readout_pinc_poff(phase_parameters[0], phase_parameters[1])
+
+        logger.debug(
+            f"generator, set_readout_dds_parameters, got following frequency and phase: {frequency}, {phase}, {dac_samplerate} "
+        )
+
         return 0
 
     def set_drive_dds_parameters(self, frequency: float, dac_samplerate: int) -> int:
@@ -479,7 +503,7 @@ class GeneratorDriver(_FIREQDriver):
 
         :param frequency: Frequency in MHz
         :type frequency: float
-        :param dac_samplerate: Sampling frequency of the dac in samples per second
+        :param dac_samplerate: Sampling frequency of the dac in MSps
         :type dac_samplerate: int
         :return: Error code
         :rtype: Literal[-3, 0]
@@ -490,10 +514,15 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency * 1000000, 0, dac_samplerate, self.phase_depth)
+        phase_parameters = _compute_pinc_poff(frequency, 0, dac_samplerate, self.phase_depth)
 
         # write registers
         self._set_drive_pinc(phase_parameters[0])
+
+        logger.debug(
+            f"generator, set_drive_dds_parameters, got following frequency and phase: {frequency}, {dac_samplerate} "
+        )
+
         return 0
 
     def add_envelope_to_envelope_memory(

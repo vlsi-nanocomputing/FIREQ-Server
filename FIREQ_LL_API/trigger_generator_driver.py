@@ -1,6 +1,10 @@
 """Low-level driver for the FIREQ trigger generator IP."""
 
+import logging
+
 from ._utils import _FIREQDriver
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["TriggerGeneratorDriver"]
 
@@ -85,6 +89,10 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # write duration HIGH
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
+        logger.debug(f"trigger, set_experiment_duration, got the following for duration: {duration}")
+
+        return 0
+
     def set_number_of_shots(self, value: int) -> int:
         """Set the number of shots to execute in hardware.
 
@@ -98,11 +106,18 @@ class TriggerGeneratorDriver(_FIREQDriver):
             return -3
 
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
+
+        logger.debug(f"trigger, set_number_of_shots, got the following for shots: {value}")
+
         return 0
 
     def start_experiment(self) -> None:
         """Start the generation of triggers."""
         self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
+
+        logger.debug(f"trigger, started experiment")
+
+        return 0
 
     def is_done(self) -> bool:
         """Check if the experiment is finished.
@@ -145,6 +160,11 @@ class TriggerGeneratorDriver(_FIREQDriver):
         real_delay = (delay - 1) | (generate_trigger << 31)
         real_address = (channel - 1) * self.channel_fifo_depth + index - 1
         self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
+
+        logger.debug(
+            f"trigger, insert_drive_delay, got the following for channel: {channel}, index: {index}, delay: {delay}, generate_trigger: {generate_trigger}"
+        )
+
         return 0
 
     def set_readout_delay(self, delay: int, channel: int) -> int:
@@ -164,4 +184,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write((self._readout_delay_l + (channel - 1) * 2) * 4, delay & 0xFFFFFFFF)
         # write delay HIGH
         self._axi_lite_interface_mmio.write((self._readout_delay_h + (channel - 1) * 2) * 4, delay >> 32)
+
+        logger.debug(f"trigger, set_readout_delay, got the following for channel: {channel}, delay: {delay}")
+
         return 0
