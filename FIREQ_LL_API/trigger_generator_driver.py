@@ -115,7 +115,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         """Start the generation of triggers."""
         self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
 
-        logger.debug(f"trigger, started experiment")
+        logger.debug("trigger, started experiment")
 
         return 0
 
@@ -162,7 +162,12 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
 
         logger.debug(
-            f"trigger, insert_drive_delay, got the following for channel: {channel}, index: {index}, delay: {delay}, generate_trigger: {generate_trigger}"
+            "trigger, insert_drive_delay, got the following for channel: %s, index: %s, delay: %s, "
+            "generate_trigger: %s",
+            channel,
+            index,
+            delay,
+            generate_trigger,
         )
 
         return 0

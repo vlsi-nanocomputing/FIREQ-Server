@@ -1,6 +1,7 @@
 """Low-level driver for the FIREQ generator IP."""
 
 import logging
+
 import numpy as np
 
 from ._utils import (
@@ -493,7 +494,10 @@ class GeneratorDriver(_FIREQDriver):
         self._set_readout_pinc_poff(phase_parameters[0], phase_parameters[1])
 
         logger.debug(
-            f"generator, set_readout_dds_parameters, got following frequency and phase: {frequency}, {phase}, {dac_samplerate} "
+            "generator, set_readout_dds_parameters, got following frequency and phase: %s, %s, %s",
+            frequency,
+            phase,
+            dac_samplerate,
         )
 
         return 0
@@ -792,7 +796,12 @@ class GeneratorDriver(_FIREQDriver):
         wavedef = wavedef | increment
 
         logger.debug(
-            f"generator_driver, create_wave_definition_word, got following inputs {envelope_name}, {duration}, {gain}, {switch_iq}, {keep_last}"
+            "generator_driver, create_wave_definition_word, got following inputs %s, %s, %s, %s, %s",
+            envelope_name,
+            duration,
+            gain,
+            switch_iq,
+            keep_last,
         )
 
         # return wave definition

@@ -146,6 +146,60 @@ def test_ping_pong(client, server_ctx):
     assert res.get("session_id") == "123"
 
 
+def test_rf_mapping_command(client, server_ctx):
+    client.connect()
+    client.handshake(server_ctx.auth_token)
+
+    client.send({"cmd": "rf_mapping", "session_id": "map1"})
+    res = client.receive()
+
+    assert res.get("cmd") == "rf_mapping"
+    assert res.get("session_id") == "map1"
+    assert res.get("ok") is True
+
+    mapping = res.get("rf_mapping")
+    assert isinstance(mapping, dict)
+    assert "_GEN_RF_MAP" in mapping
+    assert "_ACQ_RF_MAP" in mapping
+    assert "0" in mapping["_GEN_RF_MAP"]
+    assert "drive" in mapping["_GEN_RF_MAP"]["0"]
+    assert mapping["_ACQ_RF_MAP"]["0"] == [0, 0]
+
+
+def test_calibrate_adc_command(client, server_ctx):
+    client.connect()
+    client.handshake(server_ctx.auth_token)
+
+    client.send(
+        {
+            "cmd": "calibrate_adc",
+            "session_id": "cal1",
+            "acq_index": 1,
+            "gen_index": 0,
+            "label": "drive",
+            "freq_mhz": 123.45,
+        }
+    )
+    res = client.receive()
+
+    assert res.get("cmd") == "calibrate_adc"
+    assert res.get("session_id") == "cal1"
+    assert res.get("ok") is True
+    assert res.get("acq_index") == 1
+    assert res.get("gen_index") == 0
+    assert res.get("label") == "drive"
+    assert abs(float(res.get("freq_mhz")) - 123.45) < 1e-9
+
+    assert len(server_ctx.adapter._fireq_soc.calibrate_adc_calls) >= 1
+    last = server_ctx.adapter._fireq_soc.calibrate_adc_calls[-1]
+    assert last == {
+        "acq_index": 1,
+        "gen_index": 0,
+        "label": "drive",
+        "freq_mhz": 123.45,
+    }
+
+
 def test_logout(client, server_ctx):
     client.connect()
     client.handshake(server_ctx.auth_token)
@@ -218,7 +272,7 @@ def test_broken_pipe_during_sweep(client, server_ctx):
     """
     # 1. Preload dummy data
     gen_idx = 0
-    server_ctx.adapter.overlay_driver.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
+    server_ctx.adapter._fireq_soc.generators[gen_idx].envelope_memory_dict["rect"] = {"type": "std"}
     server_ctx.adapter.generator.compile_waves(
         gen_index=gen_idx,
         waves=[{"wave_id": "w1", "envelope": "rect", "duration": 100, "gain": 1.0}],

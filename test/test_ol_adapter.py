@@ -84,7 +84,7 @@ def ctx() -> AdapterTestContext:
 
 def test_initialization_success(ctx: AdapterTestContext) -> None:
     """Verify that the adapter initializes correctly with a healthy overlay."""
-    assert ctx.adapter.overlay_driver.is_healthy
+    assert ctx.adapter._fireq_soc.is_healthy
 
 
 def test_upload_envelopes_success(ctx: AdapterTestContext) -> None:
@@ -358,8 +358,8 @@ def test_run_multi_acquisition_single_acq_ip(ctx: AdapterTestContext) -> None:
     assert result[0].shape == (10, 100)
 
     # Verify timing stats populated
-    assert ctx.adapter.last_timing_stats["fpga_wait_ms"] == pytest.approx(1.0)
-    assert ctx.adapter.last_timing_stats["dma_overhead_ms"] == pytest.approx(0.2)
+    assert ctx.adapter.acquisition.last_timing_stats["fpga_wait_ms"] == pytest.approx(1.0)
+    assert ctx.adapter.acquisition.last_timing_stats["dma_overhead_ms"] == pytest.approx(0.2)
 
     # Verify retrieve was called once
     ctx.adapter.acquisition._dma_engine.retrieve_acquisition.assert_called_once()
@@ -505,7 +505,7 @@ def test_sweep_lifecycle(ctx: AdapterTestContext) -> None:
     acq_list = [0]
 
     # 1. Preparation
-    ctx.adapter.experiment.prepare_sweep(
+    ctx.adapter.acquisition.prepare_sweep(
         mode="decimated",
         acq_indices=acq_list,
     )
@@ -516,7 +516,7 @@ def test_sweep_lifecycle(ctx: AdapterTestContext) -> None:
     assert ctx.adapter.acquisition._sweep_prepared is True
 
     # 2. Conclusion
-    ctx.adapter.experiment.end_sweep()
+    ctx.adapter.acquisition.end_sweep()
     ctx.adapter.acquisition._dma_engine.end_sweep.assert_called_once()
     assert ctx.adapter.acquisition._sweep_prepared is False
 

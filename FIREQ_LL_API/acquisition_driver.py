@@ -116,7 +116,10 @@ class AcquisitionDriver(_FIREQDriver):
         self._set_readout_pinc_poff(pinc, poff)
 
         logger.debug(
-            f"acquistion, set_dds_parameters, got the following for frequency: {frequency}, phase: {phase}, adc_samplerate: {adc_samplerate}"
+            "acquistion, set_dds_parameters, got the following for frequency: %s, phase: %s, " "adc_samplerate: %s",
+            frequency,
+            phase,
+            adc_samplerate,
         )
 
         return 0

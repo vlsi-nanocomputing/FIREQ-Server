@@ -6,7 +6,7 @@ fireq_utils.server.hardware.ol_adapter
 Purpose
 -------
 This package implements a *server-facing adapter layer* on top of the low-level
-FIREQ hardware drivers exposed by `FIREQ_LL_API.overlay_driver.FIREQ_SoC`.
+FIREQ hardware drivers exposed by ``FIREQ_LL_API.FIREQ_SoC``.
 
 It applies the Adapter pattern to:
 - expose an API for experiment execution,

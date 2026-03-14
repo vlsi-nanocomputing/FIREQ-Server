@@ -257,6 +257,33 @@ class FIREQServer:
                     )
                 )
 
+            elif cmd == "calibrate_adc":
+                try:
+                    acq_index = int(msg["acq_index"])
+                    gen_index = int(msg["gen_index"])
+                    label = str(msg["label"])
+                    freq_mhz = float(msg["freq_mhz"])
+                except KeyError as e:
+                    raise ValueError(f"Missing required field for calibrate_adc: {e.args[0]}") from e
+
+                self.handler.adapter.calibrate_adc(
+                    acq_index=acq_index,
+                    gen_index=gen_index,
+                    label=label,
+                    freq_mhz=freq_mhz,
+                )
+                self.queue_out.put(
+                    self._build_response(
+                        cmd,
+                        session_id,
+                        ok=True,
+                        acq_index=acq_index,
+                        gen_index=gen_index,
+                        label=label,
+                        freq_mhz=freq_mhz,
+                    )
+                )
+
             elif cmd == "logout":
                 self._handle_logout()
 

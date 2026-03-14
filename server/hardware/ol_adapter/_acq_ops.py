@@ -16,6 +16,7 @@ acq_trigger_channel) and receives explicit typed dependencies.
 
 from __future__ import annotations
 
+import logging
 import signal
 import time
 from collections.abc import Iterator
@@ -27,12 +28,10 @@ import numpy as np
 
 from ...models.config_types import Modulation, TriggerCommand
 from ...models.exceptions import ConfigurationError
+from ._errors import check_driver_result
 
 if TYPE_CHECKING:
-    import logging
-
     from ..dma_engine import DMAEngine
-    from ._low_level_access import LowLevelAccess
     from ._trigger_gen_ops import TriggerGeneratorOps
 
 
@@ -48,8 +47,8 @@ class AcquisitionOps:
     its own state for sweep mode, shot memoization, timing statistics, and
     trigger channel tracking.
 
-    :param ll: Low-level access helper for driver calls and error handling.
-    :type ll: LowLevelAccess
+    :param fireq_soc: The FIREQ_SoC hardware driver instance.
+    :type fireq_soc: FIREQ_SoC-compatible
     :param logger: Logger instance for debug/error reporting.
     :type logger: logging.Logger
     :param dma_engine: DMA engine for buffer management and transfer.
@@ -58,17 +57,19 @@ class AcquisitionOps:
     :type trigger: TriggerGeneratorOps
     """
 
+    _DRIVER_NAME = "AcquisitionDriver"
+
     def __init__(
         self,
-        ll: LowLevelAccess,
+        fireq_soc: object,
         logger: logging.Logger,
         dma_engine: DMAEngine,
         trigger: TriggerGeneratorOps,
     ) -> None:
         """Initialize AcquisitionOps with direct typed dependencies.
 
-        :param ll: Low-level access helper for driver calls and error handling.
-        :type ll: LowLevelAccess
+        :param fireq_soc: The FIREQ_SoC hardware driver instance.
+        :type fireq_soc: FIREQ_SoC-compatible
         :param logger: Logger instance for debug/error reporting.
         :type logger: logging.Logger
         :param dma_engine: DMA engine for buffer management and transfer.
@@ -76,12 +77,11 @@ class AcquisitionOps:
         :param trigger: Trigger generator operations instance.
         :type trigger: TriggerGeneratorOps
         """
-        self._ll = ll
+        self._fireq_soc = fireq_soc
         self._logger = logger
         self._dma_engine = dma_engine
         self._trigger = trigger
 
-        # Acquisition state (previously in CacheContainers)
         self._sweep_prepared: bool = False
         self._last_hw_shots: int | None = None
         self._last_timing_stats: dict[str, float] = {
@@ -91,6 +91,69 @@ class AcquisitionOps:
             "sw_overhead_ms": 0.0,
         }
         self._acq_trigger_channel: dict[int, int] = {}
+
+    # ========================================================================
+    # PRIVATE HELPERS
+    # ========================================================================
+
+    def _get_acq(self, acq_index: int) -> object:
+        """Retrieve the low-level driver for a specific acquisition unit.
+
+        :param acq_index: Index of the target acquisition unit.
+        :type acq_index: int
+        :return: The low-level acquisition driver instance.
+        :rtype: object
+        :raises ConfigurationError: If the index is out of bounds or invalid.
+        """
+        try:
+            return self._fireq_soc.acquisitions[int(acq_index)]
+        except Exception as e:
+            raise ConfigurationError(f"Invalid acq_index={acq_index}") from e
+
+    def _check(self, result: object, *, operation: str, hint: str | None = None) -> object:
+        """Check a driver return code and raise on error.
+
+        :param result: Raw return value from the driver method.
+        :type result: object
+        :param operation: Name of the driver operation.
+        :type operation: str
+        :param hint: Explicit diagnostic hint.
+        :type hint: str | None
+        :return: The original result on success.
+        :rtype: object
+        :raises ConfigurationError: If the result is a negative integer.
+        """
+        return check_driver_result(
+            result,
+            operation=operation,
+            driver_name=self._DRIVER_NAME,
+            logger=self._logger,
+            hint=hint,
+        )
+
+    def _configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> None:
+        """Configure the ADC Mix-Mode (Nyquist zone) for an acquisition unit.
+
+        Logs a warning and continues if the driver does not support mix-mode
+        configuration.
+
+        :param acq_index: Index of the acquisition unit.
+        :type acq_index: int
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
+        """
+        try:
+            mix_info = self._fireq_soc.configure_adc_mix_mode(acq_index=acq_index, freq_mhz=freq_mhz)
+            if mix_info.get("changed"):
+                self._logger.debug(
+                    "ADC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+        except ValueError as e:
+            self._logger.warning("ADC Mix-mode config skipped: %s", e)
 
     # ========================================================================
     # PUBLIC PROPERTIES
@@ -190,10 +253,10 @@ class AcquisitionOps:
             # --- Input Validation ---
             if not acq_indices:
                 raise ConfigurationError("No acquisition unit indices provided.")
-            if len(acq_indices) > len(self._ll.hw_specs["acquisitions"]):
+            if len(acq_indices) > len(self._fireq_soc.hw_specs["acquisitions"]):
                 raise ConfigurationError(
                     f"Requested {len(acq_indices)} acquisition units, "
-                    f"but only {len(self._ll.hw_specs['acquisitions'])} available."
+                    f"but only {len(self._fireq_soc.hw_specs['acquisitions'])} available."
                 )
 
         # Compute hardware buffer limits (Required for chunking logic)
@@ -345,9 +408,9 @@ class AcquisitionOps:
         """
         # Pre-config acquisition IPs
         for acq_index in acq_indices:
-            acq = self._ll.get_acq(acq_index)
+            acq = self._get_acq(acq_index)
             if mode in ("decimated", "accumulated"):
-                self._ll.check_result(
+                self._check(
                     acq.set_decimated_output_type(mode),
                     operation="set_decimated_output_type",
                 )
@@ -396,15 +459,15 @@ class AcquisitionOps:
             freq_mhz,
             phase,
         )
-        unit = self._ll.get_acq(acq_index)
+        unit = self._get_acq(acq_index)
 
-        self._ll.configure_adc_mix_mode(acq_index, freq_mhz)
+        self._configure_adc_mix_mode(acq_index, freq_mhz)
 
-        self._ll.check_result(
+        self._check(
             unit.set_acquisition_dds_parameters(
                 frequency=freq_mhz,
                 phase=phase,
-                adc_samplerate=self._ll.adc_sr_mhz(),
+                adc_samplerate=float(self._fireq_soc.hw_specs["summary"]["adc_sr_hz"]) / 1e6,
             ),
             operation="set_acquisition_dds_parameters",
         )
@@ -433,9 +496,9 @@ class AcquisitionOps:
         channel = trig["channel"]
 
         self._logger.debug("set_trigger_listener: acq=%d channel=%s", acq_index, channel)
-        unit = self._ll.get_acq(acq_index)
+        unit = self._get_acq(acq_index)
 
-        self._ll.check_result(
+        self._check(
             unit.set_trigger_channel(channel=channel),
             operation="set_trigger_channel",
         )
@@ -472,14 +535,14 @@ class AcquisitionOps:
         :rtype: dict
         """
         self._logger.debug("set_timing: acq_index=%d tof=%d duration=%d", acq_index, tof, duration)
-        acq = self._ll.get_acq(acq_index)
+        acq = self._get_acq(acq_index)
 
-        self._ll.check_result(
+        self._check(
             acq.set_acquisition_duration(duration),
             operation="set_acquisition_duration",
         )
 
-        self._ll.check_result(
+        self._check(
             acq.set_time_of_flight(tof),
             operation="set_time_of_flight",
         )
@@ -504,9 +567,9 @@ class AcquisitionOps:
         """
         if not self._sweep_prepared:
             for acq_idx in acq_indices:
-                acq = self._ll.get_acq(acq_idx)
+                acq = self._get_acq(acq_idx)
                 if mode in ("decimated", "accumulated"):
-                    self._ll.check_result(
+                    self._check(
                         acq.set_decimated_output_type(mode),
                         operation="set_decimated_output_type",
                     )

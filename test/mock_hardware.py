@@ -262,6 +262,15 @@ class MockOverlay:
     def __init__(self) -> None:
         """Initialize a mock overlay."""
         self.is_healthy = True
+        self.calibrate_adc_calls: list[dict[str, Any]] = []
+        self._GEN_RF_MAP = {
+            0: {"drive": (1, 0), "readout": (1, 1)},
+            1: {"drive": (2, 0), "readout": (2, 1)},
+        }
+        self._ACQ_RF_MAP = {
+            0: (0, 0),
+            1: (0, 1),
+        }
         self.hw_specs = {
             "summary": {
                 "dac_sr_hz": 4e9,
@@ -317,6 +326,13 @@ class MockOverlay:
             "hw_specs": self.hw_specs,
         }
 
+    def rf_mapping(self) -> dict:
+        """Return internal RF mapping dictionaries as-is."""
+        return {
+            "_GEN_RF_MAP": dict(self._GEN_RF_MAP),
+            "_ACQ_RF_MAP": dict(self._ACQ_RF_MAP),
+        }
+
     def configure_dac_mix_mode(self, *args: object, **kwargs: object) -> dict:
         """Mock DAC mix mode configuration."""
         return {"changed": False}
@@ -324,6 +340,17 @@ class MockOverlay:
     def configure_adc_mix_mode(self, *args: object, **kwargs: object) -> dict:
         """Mock ADC mix mode configuration."""
         return {"changed": False}
+
+    def calibrate_adc(self, *, acq_index: int, gen_index: int, label: str, freq_mhz: float) -> None:
+        """Mock ADC calibration call and store arguments for assertions."""
+        self.calibrate_adc_calls.append(
+            {
+                "acq_index": int(acq_index),
+                "gen_index": int(gen_index),
+                "label": str(label),
+                "freq_mhz": float(freq_mhz),
+            }
+        )
 
     # Properties used for direct access via adapter
     @property

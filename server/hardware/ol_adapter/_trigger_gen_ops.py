@@ -10,39 +10,72 @@ This module provides the TriggerGeneratorOps class that handles:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 from ...models.exceptions import ConfigurationError
-
-if TYPE_CHECKING:
-    from ._low_level_access import LowLevelAccess
+from ._errors import check_driver_result
 
 
 class TriggerGeneratorOps:
     """Trigger generator control: shots, timing delays, and experiment execution.
 
-    This class owns its own state for drive FIFO high-water-mark tracking
-    and requires only a LowLevelAccess instance and a logger.
+    This class owns its own state for drive FIFO high-water-mark tracking.
 
-    :param ll: Low-level access helper for driver calls and error handling.
-    :type ll: LowLevelAccess
+    :param fireq_soc: The FIREQ_SoC hardware driver instance.
+    :type fireq_soc: FIREQ_SoC-compatible
     :param logger: Logger instance for debug/error reporting.
     :type logger: logging.Logger
     """
 
-    def __init__(self, ll: LowLevelAccess, logger: logging.Logger) -> None:
+    _DRIVER_NAME = "TriggerGeneratorDriver"
+
+    def __init__(self, fireq_soc: object, logger: logging.Logger) -> None:
         """Initialize the TriggerGeneratorOps class.
 
-        :param ll: Low-level access helper for driver calls and error handling.
-        :type ll: LowLevelAccess
+        :param fireq_soc: The FIREQ_SoC hardware driver instance.
+        :type fireq_soc: FIREQ_SoC-compatible
         :param logger: Logger instance for debug/error reporting.
         :type logger: logging.Logger
         """
-        self._ll = ll
+        self._fireq_soc = fireq_soc
         self._logger = logger
 
-        # Trigger state (previously in CacheContainers)
         self._drive_fifo_hwm: dict[int, int] = {}
+
+    # ========================================================================
+    # PRIVATE HELPERS
+    # ========================================================================
+
+    def _get_trig(self) -> object:
+        """Retrieve the low-level Trigger Generator driver.
+
+        :return: The low-level trigger driver instance.
+        :rtype: object
+        :raises ConfigurationError: If no trigger generator is available.
+        """
+        if self._fireq_soc.trigger is None:
+            raise ConfigurationError("No trigger generator available in overlay")
+        return self._fireq_soc.trigger
+
+    def _check(self, result: object, *, operation: str, hint: str | None = None) -> object:
+        """Check a driver return code and raise on error.
+
+        :param result: Raw return value from the driver method.
+        :type result: object
+        :param operation: Name of the driver operation.
+        :type operation: str
+        :param hint: Explicit diagnostic hint.
+        :type hint: str | None
+        :return: The original result on success.
+        :rtype: object
+        :raises ConfigurationError: If the result is a negative integer.
+        """
+        return check_driver_result(
+            result,
+            operation=operation,
+            driver_name=self._DRIVER_NAME,
+            logger=self._logger,
+            hint=hint,
+        )
 
     # ========================================================================
     # PUBLIC PROPERTIES
@@ -55,7 +88,7 @@ class TriggerGeneratorOps:
         :return: Hardware repetition limit (10-bit register).
         :rtype: int
         """
-        return int(self._ll.get_trig().max_hw_repetitions)
+        return int(self._get_trig().max_hw_repetitions)
 
     # ========================================================================
     # PUBLIC METHODS
@@ -69,13 +102,13 @@ class TriggerGeneratorOps:
         :return: Dictionary containing the set number of shots.
         :rtype: dict
         """
-        trigger_device = self._ll.get_trig()
+        trigger_device = self._get_trig()
         shots = int(shots)
 
         if shots < 1 or shots > int(trigger_device.max_hw_repetitions):
             raise ConfigurationError(f"shots={shots} out of range [1..{int(trigger_device.max_hw_repetitions)}]")
 
-        self._ll.check_result(
+        self._check(
             trigger_device.set_number_of_shots(shots),
             operation="set_number_of_shots",
         )
@@ -91,7 +124,7 @@ class TriggerGeneratorOps:
         :raises ConfigurationError: If duration_cycles is less than 1.
         """
         self._logger.debug("Setting experiment duration. Clock Cycles : %d", duration_cycles)
-        trigger_device = self._ll.get_trig()
+        trigger_device = self._get_trig()
         duration_cycles = int(duration_cycles)
         if duration_cycles < 1:
             raise ConfigurationError(f"duration={duration_cycles} is not valid. Must be positive.")
@@ -131,7 +164,7 @@ class TriggerGeneratorOps:
             drive,
             readout,
         )
-        trigger_device = self._ll.get_trig()
+        trigger_device = self._get_trig()
         drive = drive or {}
         readout = readout or {}
 
@@ -154,7 +187,7 @@ class TriggerGeneratorOps:
 
     def trigger_experiment(self) -> None:
         """Trigger the experiment."""
-        trigger = self._ll.get_trig()
+        trigger = self._get_trig()
         trigger.start_experiment()
 
     def reset_drive_tracking(self) -> None:
@@ -188,7 +221,7 @@ class TriggerGeneratorOps:
                 readout_delay,
             )
 
-            self._ll.check_result(
+            self._check(
                 trigger_device.set_readout_delay(readout_delay, channel),
                 operation="set_readout_delay",
             )
@@ -224,15 +257,17 @@ class TriggerGeneratorOps:
                 channel,
                 entries_list,
             )
-            for k, pair in enumerate(entries_list):
+            for entry_idx, pair in enumerate(entries_list):
                 if not (isinstance(pair, (list, tuple)) and len(pair) == 2):
-                    raise ConfigurationError(f"drive[{channel}] entry #{k} must be (delay, gen_bit), got: {pair}")
+                    raise ConfigurationError(
+                        f"drive[{channel}] entry #{entry_idx} must be (delay, gen_bit), got: {pair}"
+                    )
 
                 delay, generator_bit = pair
                 delay = int(delay)
                 generator_bit = 1 if int(generator_bit) else 0
 
-                fifo_index = start_idx + k  # LL index is 1-based
+                fifo_index = start_idx + entry_idx
                 self._logger.debug(
                     "program_delays: drive ch=%d FIFO[%d] delay=%d generator_bit=%d",
                     channel,
@@ -240,7 +275,7 @@ class TriggerGeneratorOps:
                     delay,
                     generator_bit,
                 )
-                self._ll.check_result(
+                self._check(
                     trigger_device.insert_drive_delay(channel, fifo_index, delay, generator_bit),
                     operation="insert_drive_delay",
                 )
@@ -252,7 +287,7 @@ class TriggerGeneratorOps:
             # Clear only if the new sequence is shorter than the previous one
             if previous_high_water_mark > new_high_water_mark:
                 for fifo_index in range(new_high_water_mark + 1, previous_high_water_mark + 1):
-                    self._ll.check_result(
+                    self._check(
                         trigger_device.insert_drive_delay(channel, fifo_index, int(trigger_device.drive_delay_max), 0),
                         operation="insert_drive_delay",
                     )

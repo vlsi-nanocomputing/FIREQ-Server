@@ -133,7 +133,7 @@ class MessageHandler:
                     timeout=timeout,
                     validate_chunk=True,
                 ):
-                    timing_stats = getattr(self.adapter, "last_timing_stats", {})
+                    timing_stats = getattr(self.adapter.acquisition, "last_timing_stats", {})
                     yield BinaryChunk(
                         type="experiment_binary_chunk",
                         binary_data=chunk,
@@ -147,7 +147,7 @@ class MessageHandler:
                 "type": "experiment_timing",
                 "cmd": cmd,
                 "session_id": session_id,
-                "debug_timing": dict(getattr(self.adapter, "last_timing_stats", {})),
+                "debug_timing": dict(getattr(self.adapter.acquisition, "last_timing_stats", {})),
             }
             yield StreamTiming(type="experiment_timing", metadata=timing_metadata)
 
@@ -262,7 +262,7 @@ class MessageHandler:
             t_wall_clock_start = time.perf_counter()
 
             # Local timing accumulators
-            _has_timing = hasattr(self.adapter, "last_timing_stats")
+            _has_timing = hasattr(self.adapter.acquisition, "last_timing_stats")
             _hw_ms = _dma_ms = _sw_ms = 0.0
             _n_timed = 0
 
@@ -272,7 +272,7 @@ class MessageHandler:
                     acq_indices, mode, shots, samp_per_shot, timeout, validate=True
                 )
                 if _has_timing:
-                    stats = self.adapter.last_timing_stats
+                    stats = self.adapter.acquisition.last_timing_stats
                     _hw_ms += stats.get("fpga_wait_ms", 0.0)
                     _dma_ms += stats.get("dma_overhead_ms", 0.0)
                     _sw_ms += stats.get("sw_overhead_ms", 0.0)
@@ -299,7 +299,7 @@ class MessageHandler:
             t_prepare_start = time.perf_counter()
 
             if acq_indices:
-                self.adapter.experiment.prepare_sweep(mode, acq_indices)
+                self.adapter.acquisition.prepare_sweep(mode, acq_indices)
                 prepare_called = True
 
             sweep_config = current_config
@@ -341,7 +341,7 @@ class MessageHandler:
                     to = float(sweep_config["timeout"]) if plan.has_timeout_var else fixed_timeout
                     yield from self._stream_sweep_point_items(acq_indices, fixed_mode, sh, sp, to, validate=False)
                     if _has_timing:
-                        stats = self.adapter.last_timing_stats
+                        stats = self.adapter.acquisition.last_timing_stats
                         _hw_ms += stats.get("fpga_wait_ms", 0.0)
                         _dma_ms += stats.get("dma_overhead_ms", 0.0)
                         _sw_ms += stats.get("sw_overhead_ms", 0.0)
@@ -357,7 +357,7 @@ class MessageHandler:
             timing.n_points_timed = _n_timed
 
             t_finalize_start = time.perf_counter()
-            self.adapter.experiment.end_sweep()
+            self.adapter.acquisition.end_sweep()
             prepare_called = False  # Mark as handled — skip finally cleanup
             timing.finalize_ms = (time.perf_counter() - t_finalize_start) * 1000.0
             timing.wall_clock_ms = (time.perf_counter() - t_wall_clock_start) * 1000.0
@@ -380,7 +380,7 @@ class MessageHandler:
         finally:
             if prepare_called:
                 try:
-                    self.adapter.experiment.end_sweep()
+                    self.adapter.acquisition.end_sweep()
                 except Exception as cleanup_err:
                     self.logger.error(f"Failed to end sweep during cleanup: {cleanup_err}")
 
@@ -692,7 +692,7 @@ class MessageHandler:
             timeout=timeout,
             validate_chunk=validate,
         ):
-            timing_stats = getattr(self.adapter, "last_timing_stats", {})
+            timing_stats = getattr(self.adapter.acquisition, "last_timing_stats", {})
             yield BinaryChunk(
                 type="sweep_binary_point",
                 binary_data=chunk,
@@ -730,7 +730,7 @@ class MessageHandler:
         all_indices = [acq["acq_index"] for acq in acquisitions]
 
         # Filter out deaf acquisitions (channel == 0)
-        active_indices = [idx for idx in all_indices if self.adapter.acq_trigger_channels.get(idx, 0) != 0]
+        active_indices = [idx for idx in all_indices if self.adapter.acquisition.acq_trigger_channels.get(idx, 0) != 0]
 
         if len(active_indices) < len(all_indices):
             deaf = set(all_indices) - set(active_indices)

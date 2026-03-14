@@ -11,17 +11,17 @@ hardware operations in a single flat class:
 - DDS modulation and Nyquist zone configuration
 - Generator trigger channel assignment
 
-The class owns its own cache state (wave_store, last_fifo, readout_wave_store)
-and requires only a LowLevelAccess instance and a logger.
+The class owns its own cache state (wave_store, last_fifo, readout_wave_store).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from ...models.config_types import Modulation, TriggerCommand
 from ...models.exceptions import ConfigurationError
+from ._errors import check_driver_result
 from .generator_utils._wave_utils import (
     build_wave_entry,
     check_readout_wave_cache,
@@ -34,9 +34,6 @@ from .generator_utils._wave_utils import (
 )
 from .overlay_adapter_types import WaveEntry
 
-if TYPE_CHECKING:
-    from ._low_level_access import LowLevelAccess
-
 
 class GeneratorOps:
     """Generator operations: waves, envelopes, FIFO, modulation, trigger.
@@ -44,27 +41,97 @@ class GeneratorOps:
     This class manages all generator-related hardware operations and owns
     its own cache state for wave definitions, FIFO sequences, and readout waves.
 
-    :param ll: Low-level access helper for driver calls and error handling.
-    :type ll: LowLevelAccess
+    :param fireq_soc: The FIREQ_SoC hardware driver instance.
+    :type fireq_soc: FIREQ_SoC-compatible
     :param logger: Logger instance for debug/error reporting.
     :type logger: logging.Logger
     """
 
-    def __init__(self, ll: LowLevelAccess, logger: logging.Logger) -> None:
+    _DRIVER_NAME = "GeneratorDriver"
+
+    def __init__(self, fireq_soc: object, logger: logging.Logger) -> None:
         """Initialize GeneratorOps with direct dependencies.
 
-        :param ll: Low-level access helper for driver calls and error handling.
-        :type ll: LowLevelAccess
+        :param fireq_soc: The FIREQ_SoC hardware driver instance.
+        :type fireq_soc: FIREQ_SoC-compatible
         :param logger: Logger instance for debug/error reporting.
         :type logger: logging.Logger
         """
-        self._ll = ll
+        self._fireq_soc = fireq_soc
         self._logger = logger
 
-        # Generator cache state (previously in CacheContainers)
         self._wave_store: dict[int, dict[str, WaveEntry]] = {}
         self._last_fifo: dict[int, list[str]] = {}
         self._readout_wave_store: dict[int, WaveEntry] = {}
+
+    # ========================================================================
+    # PRIVATE HELPERS
+    # ========================================================================
+
+    def _get_gen(self, gen_index: int) -> object:
+        """Retrieve the low-level driver for a specific generator.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :return: The low-level generator driver instance.
+        :rtype: object
+        :raises ConfigurationError: If the index is out of bounds or invalid.
+        """
+        try:
+            return self._fireq_soc.generators[int(gen_index)]
+        except Exception as e:
+            raise ConfigurationError(f"Invalid gen_index={gen_index}") from e
+
+    def _check(self, result: object, *, operation: str, hint: str | None = None) -> object:
+        """Check a driver return code and raise on error.
+
+        :param result: Raw return value from the driver method.
+        :type result: object
+        :param operation: Name of the driver operation.
+        :type operation: str
+        :param hint: Explicit diagnostic hint.
+        :type hint: str | None
+        :return: The original result on success.
+        :rtype: object
+        :raises ConfigurationError: If the result is a negative integer.
+        """
+        return check_driver_result(
+            result,
+            operation=operation,
+            driver_name=self._DRIVER_NAME,
+            logger=self._logger,
+            hint=hint,
+        )
+
+    def _configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict | None:
+        """Configure the DAC Mix-Mode (Nyquist zone) for a generator.
+
+        Silently returns ``None`` if the driver does not support mix-mode
+        configuration (e.g. on mock overlays or older bitstreams).
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param label: Modulation context ('drive' or 'readout').
+        :type label: str
+        :param freq_mhz: Target frequency in MHz.
+        :type freq_mhz: float
+        :return: Mix-mode info dictionary from the driver, or ``None`` if unavailable.
+        :rtype: dict | None
+        """
+        try:
+            mix_info = self._fireq_soc.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            if mix_info.get("changed"):
+                self._logger.debug(
+                    "DAC Mix-mode updated: Zone %d (AMD=%d) on tile=%d block=%d",
+                    mix_info["nyquist_zone"],
+                    mix_info["amd_zone"],
+                    mix_info["tile"],
+                    mix_info["block"],
+                )
+            return mix_info
+        except (ValueError, AttributeError, TypeError, KeyError) as e:
+            self._logger.debug("DAC Mix-mode config skipped: %s", e)
+            return None
 
     # ========================================================================
     # PUBLIC METHODS — Wave
@@ -104,14 +171,14 @@ class GeneratorOps:
         """
         self._logger.debug("compile_waves: gen=%d n=%d", gen_index, len(waves))
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
         out, replaced, skipped, failed = [], [], [], []
         cache: dict[str, WaveEntry] = self.get_wave_cache(gen_index)
 
-        for w in waves:
+        for wave_spec in waves:
             try:
-                wave_id = str(w["wave_id"])
-                new_entry = build_wave_entry(w)
+                wave_id = str(wave_spec["wave_id"])
+                new_entry = build_wave_entry(wave_spec)
                 old_entry = cache.get(wave_id)
                 in_hw = wave_id in gen.wave_memory_dict
 
@@ -140,8 +207,8 @@ class GeneratorOps:
                 out.append({"wave_id": wave_id, "WDW": hex(wdw)})
 
             except Exception as ex:
-                self._logger.exception("compile_waves: failed wave=%s", w)
-                failed.append({"wave_id": w.get("wave_id"), "error": str(ex)})
+                self._logger.exception("compile_waves: failed wave=%s", wave_spec)
+                failed.append({"wave_id": wave_spec.get("wave_id"), "error": str(ex)})
 
         self._logger.debug(
             "compile_waves: done gen=%d compiled=%d replaced=%d skipped=%d failed=%d",
@@ -173,7 +240,7 @@ class GeneratorOps:
         """
         self._logger.debug("upload_readout_wave: gen=%d replace=%s", gen_index, replace)
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
 
         # parsing switch iq and keeplast
         switch_iq = wave.get("switch_iq", None)
@@ -216,7 +283,7 @@ class GeneratorOps:
         wdw = self._compile_wdw(gen, new_entry)
         new_entry.wdw = wdw
 
-        self._ll.check_result(
+        self._check(
             gen.write_readout_wave(wdw),
             operation="write_readout_wave",
         )
@@ -271,9 +338,9 @@ class GeneratorOps:
             clear_last_fifo,
         )
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
 
-        self._ll.check_result(
+        self._check(
             gen.reset_wave_memory_dict(),
             operation="reset_wave_memory_dict",
         )
@@ -328,7 +395,7 @@ class GeneratorOps:
         :return: A list of envelope names available in the hardware driver.
         :rtype: list[str]
         """
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
         return list(getattr(gen, "envelope_memory_dict", {}).keys())
 
     def upload_envelopes(
@@ -356,15 +423,15 @@ class GeneratorOps:
             auto_pad_noninterp,
         )
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
         loaded: list[str] = []
         skipped: list[str] = []
         failed: list[dict] = []
 
         env_cache = getattr(gen, "EnvelopeMemoryDict", {})
 
-        for e in envelopes:
-            name = str(e.get("name", ""))
+        for env_spec in envelopes:
+            name = str(env_spec.get("name", ""))
             try:
                 validate_envelope_spec(name)
 
@@ -376,11 +443,11 @@ class GeneratorOps:
                     skipped.append(name)
                     continue
 
-                for_interp = bool(e["for_interpolation"])
-                is_sym = bool(e["is_symmetric"])
-                i_even = bool(e["i_even"])
-                q_even = bool(e["q_even"])
-                samples_iq = e["samples_iq"]
+                for_interp = bool(env_spec["for_interpolation"])
+                is_sym = bool(env_spec["is_symmetric"])
+                i_even = bool(env_spec["i_even"])
+                q_even = bool(env_spec["q_even"])
+                samples_iq = env_spec["samples_iq"]
 
                 env, original_size = process_envelope_samples(
                     samples_iq, for_interp, int(gen.sample_size), int(gen.number_of_channels), auto_pad_noninterp
@@ -395,7 +462,7 @@ class GeneratorOps:
 
                 i_even, q_even = validate_envelope_symmetry(is_sym, i_even, q_even, for_interp)
 
-                self._ll.check_result(
+                self._check(
                     gen.add_envelope_to_envelope_memory(env, for_interp, is_sym, i_even, q_even, name),
                     operation="add_envelope_to_envelope_memory",
                 )
@@ -444,9 +511,9 @@ class GeneratorOps:
             clear_last_fifo,
         )
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
 
-        self._ll.check_result(
+        self._check(
             gen.reset_envelope_dict(),
             operation="reset_envelope_dict",
         )
@@ -515,7 +582,7 @@ class GeneratorOps:
         """
         self._logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
         cache = self.get_wave_cache(gen_index)
         start_index = int(start_index)
 
@@ -536,7 +603,7 @@ class GeneratorOps:
                 wave_id,
                 wave_addr,
             )
-            self._ll.check_result(
+            self._check(
                 gen.add_wave_to_drive_wave_sequence(i, wave_id),
                 operation="add_wave_to_drive_wave_sequence",
             )
@@ -573,7 +640,7 @@ class GeneratorOps:
         """
         self._logger.debug("set_drive_source: gen=%d source=%s seed=%s", gen_index, source, seed)
 
-        gen = self._ll.get_gen(gen_index)
+        gen = self._get_gen(gen_index)
 
         source_lower = str(source).lower()
         if source_lower == "fifo":
@@ -583,14 +650,14 @@ class GeneratorOps:
             source_val = 1
 
             if seed is not None:
-                self._ll.check_result(
+                self._check(
                     gen.set_lfsr_seed(int(seed)),
                     operation="set_lfsr_seed",
                 )
         else:
             raise ConfigurationError(f"set_drive_source: invalid source='{source}'. Use 'fifo' or 'lfsr'.")
 
-        self._ll.check_result(
+        self._check(
             gen.set_drive_order_source(source_val),
             operation="set_drive_order_source",
         )
@@ -632,24 +699,24 @@ class GeneratorOps:
             freq_mhz,
             phase,
         )
-        unit = self._ll.get_gen(gen_index)
+        unit = self._get_gen(gen_index)
 
-        self._ll.configure_dac_mix_mode(gen_index, label, freq_mhz)
+        self._configure_dac_mix_mode(gen_index, label, freq_mhz)
 
         if label == "drive":
-            self._ll.check_result(
+            self._check(
                 unit.set_drive_dds_parameters(
                     frequency=freq_mhz,
-                    dac_samplerate=self._ll.dac_sr_mhz(),
+                    dac_samplerate=float(self._fireq_soc.hw_specs["summary"]["dac_sr_hz"]) / 1e6,
                 ),
                 operation="set_drive_dds_parameters",
             )
         elif label == "readout":
-            self._ll.check_result(
+            self._check(
                 unit.set_readout_dds_parameters(
                     frequency=freq_mhz,
                     phase=phase,
-                    dac_samplerate=self._ll.dac_sr_mhz(),
+                    dac_samplerate=float(self._fireq_soc.hw_specs["summary"]["dac_sr_hz"]) / 1e6,
                 ),
                 operation="set_readout_dds_parameters",
             )
@@ -688,12 +755,12 @@ class GeneratorOps:
 
         try:
             try:
-                dac_nyquist_hz = self._ll.hw_specs["summary"]["dac_nyquist_hz"]
+                dac_nyquist_hz = self._fireq_soc.hw_specs["summary"]["dac_nyquist_hz"]
             except (KeyError, TypeError, AttributeError):
                 dac_nyquist_hz = 2.0e9
 
             freq_mhz = dac_nyquist_hz / 1e6 * (0.5 if zone == 1 else zone - 0.5)
-            mix_info = self._ll.configure_dac_mix_mode(gen_index, label, freq_mhz)
+            mix_info = self._configure_dac_mix_mode(gen_index, label, freq_mhz)
 
             if mix_info is not None:
                 return {
@@ -735,9 +802,9 @@ class GeneratorOps:
             ttype,
             channel,
         )
-        unit = self._ll.get_gen(gen_index)
+        unit = self._get_gen(gen_index)
 
-        self._ll.check_result(
+        self._check(
             unit.set_trigger_channel(channel=channel, ttype=ttype),
             operation="set_trigger_channel",
         )
@@ -771,7 +838,7 @@ class GeneratorOps:
         """
         if entry.kind == "env":
             return int(
-                self._ll.check_result(
+                self._check(
                     gen.create_wave_definition_word(
                         entry.envelope,
                         entry.duration,
@@ -784,7 +851,7 @@ class GeneratorOps:
             )
         else:
             return int(
-                self._ll.check_result(
+                self._check(
                     gen.create_vz_gate_definition_word(entry.vz_phase_rad),
                     operation="create_vz_gate_definition_word",
                 )
@@ -799,12 +866,12 @@ class GeneratorOps:
         :param replace: If True, replace existing wave; else add new.
         """
         if replace:
-            self._ll.check_result(
+            self._check(
                 gen.replace_wave_in_wave_memory(wdw, wave_id, wave_id),
                 operation="replace_wave_in_wave_memory",
             )
         else:
-            self._ll.check_result(
+            self._check(
                 gen.add_wave_in_wave_memory(wdw, wave_id),
                 operation="add_wave_in_wave_memory",
             )

@@ -9,7 +9,7 @@ providing:
 
 import logging
 
-from ...models.exceptions import ConfigurationError, DriverError
+from ...models.exceptions import ConfigurationError
 
 # User-friendly hints for common negative error codes from low-level drivers
 ERROR_HINTS: dict[tuple, str] = {
@@ -47,93 +47,48 @@ ERROR_HINTS: dict[tuple, str] = {
 }
 
 
-def handle_error_result(
+def check_driver_result(
     result: object,
-    *,  # next methods MUST be specified when the function is used
+    *,
     operation: str,
     driver_name: str,
     logger: logging.Logger,
-    config_error: bool = False,
     hint: str | None = None,
-    error_hints: dict[tuple, str] | None = None,
-    error_exc: dict[tuple, type[Exception]] | None = None,
 ) -> object:
-    """Normalize FIREQ low-level driver return codes into Python exceptions.
+    """Check a low-level driver return code and raise on error.
 
-    Low-level FIREQ drivers return integer error codes instead of raising
-    exceptions. This function centralizes the translation logic to:
+    Non-negative results (or non-integers) pass through unchanged.
+    Negative integers are interpreted as error codes and raise
+    ``ConfigurationError`` with a diagnostic hint from ``ERROR_HINTS``.
 
-    - enforce a uniform error-handling policy across all drivers,
-    - attach semantic context (driver name, operation),
-    - optionally upgrade errors to configuration-time failures,
-    - provide user-facing hints for known error patterns.
-
-    Error policy
-    ------------
-    - Non-negative results (or non-integers) are treated as success and
-    passed through unchanged.
-    - Negative integers are interpreted as error codes.
-    - Known error codes may be mapped to:
-        * a specific exception class,
-        * a human-readable diagnostic hint.
-    - Unknown error codes fail fast with a generic DriverError.
-
-    :param result: Return value from a driver method. Negative integers indicate errors.
+    :param result: Return value from a driver method.
     :type result: object
-    :param operation: Name of the operation/method for error reporting.
+    :param operation: Name of the driver operation (for error messages and hint lookups).
     :type operation: str
-    :param driver_name: Name of the driver class.
+    :param driver_name: Name of the driver class (for error messages and hint lookups).
     :type driver_name: str
-    :param logger: Logger instance for telemetry.
+    :param logger: Logger instance for error reporting.
     :type logger: logging.Logger
-    :param config_error: If True, raises ConfigurationError instead of DriverError.
-    :type config_error: bool
-    :param hint: Explicit hint message to override automatic hints.
-    :type hint: Optional[str]
-    :param error_hints: Mapping of (driver, op, code) to specific hint strings.
-    :type error_hints: Optional[Dict[tuple, str]]
-    :param error_exc: Mapping of (driver, op, code) to specific Exception classes.
-    :type error_exc: Optional[Dict[tuple, type[Exception]]]
-    :return: The original result if non-negative.
+    :param hint: Explicit diagnostic hint, overriding the ``ERROR_HINTS`` lookup.
+    :type hint: str | None
+    :return: The original ``result`` on success.
     :rtype: object
-    :raises ConfigurationError: If result < 0 and config_error is True.
-    :raises DriverError: If result < 0 and config_error is False.
+    :raises ConfigurationError: If the result is a negative integer.
     """
-    # Success path: anything non-negative or non-int just passes through
     if not (isinstance(result, int) and result < 0):
         return result
 
     code = int(result)
-    key = (driver_name, operation, code)
-
-    # Resolve hint priority: explicit hint > mapping hint > generic
-    mapping_hint = None
-    if error_hints is not None:
-        mapping_hint = error_hints.get(key)
-
-    message = hint or mapping_hint or f"{driver_name}.{operation} failed with code {code}"
-
-    logger.error(message)
-
-    # Optional: raise a specific exception class for known cases
-    if error_exc is not None:
-        exc_cls = error_exc.get(key)
-        if exc_cls is not None:
-            raise exc_cls(message)
-
-    # Default exceptions
-    if config_error:
-        raise ConfigurationError(message)
-
-    raise DriverError(
-        message,
-        driver_name=driver_name,
-        operation=operation,
-        return_code=code,
+    message = (
+        hint
+        or ERROR_HINTS.get((driver_name, operation, code))
+        or (f"{driver_name}.{operation} failed with code {code}")
     )
+    logger.error(message)
+    raise ConfigurationError(message)
 
 
 __all__ = [
     "ERROR_HINTS",
-    "handle_error_result",
+    "check_driver_result",
 ]
