@@ -289,8 +289,7 @@ class FIREQServer:
 
             elif cmd == "reset_waves":
                 gen_index = msg.get("gen_index", 0)
-                preserve_wave_specs = msg.get("preserve_wave_specs", True)
-                result = self.handler.reset_h.reset_waves(gen_index, preserve_wave_specs)
+                result = self.handler.reset_h.reset_waves(gen_index)
                 self.queue_out.put(self._build_response(cmd, session_id, result))
 
             elif cmd == "reset_envelopes":
@@ -299,8 +298,7 @@ class FIREQServer:
                 self.queue_out.put(self._build_response(cmd, session_id, result))
 
             elif cmd == "reset_all":
-                preserve_wave_specs = msg.get("preserve_wave_specs", False)
-                results = self.handler.reset_h.reset_all_generators(preserve_wave_specs)
+                results = self.handler.reset_h.reset_all_generators()
                 self.queue_out.put(self._build_response(cmd, session_id, ok=True, results=results))
 
             else:
@@ -564,7 +562,7 @@ class FIREQServer:
         """Reset server-side caches and notify the client."""
         self.logger.info("Logout requested, resetting caches...")
         try:
-            results = self.handler.reset_h.reset_all_generators(preserve_wave_specs=False)
+            results = self.handler.reset_h.reset_all_generators()
             for r in results:
                 if not r["waves"]["ok"]:
                     self.logger.warning(f"Wave reset failed for gen {r['gen_index']}")

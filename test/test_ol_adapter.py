@@ -9,6 +9,7 @@ import pytest
 from server import ConfigurationError, OverlayAdapter
 from server.hardware.dma_engine import DMAResult
 from server.hardware.ol_adapter.generator_utils._iq_conversion import iq_float_to_cint16
+from server.hardware.ol_adapter.generator_utils._wave_utils import parse_bool_flag
 
 try:
     from test.mock_hardware import MockOverlay
@@ -452,21 +453,19 @@ def test_fifo_patching_out_of_bounds(ctx: AdapterTestContext) -> None:
     assert "cannot patch" in str(excinfo.value)
 
 
-def test_reset_wave_memory_preserve_specs(ctx: AdapterTestContext) -> None:
-    """Verify that 'preserve_wave_specs' clears WDW compilation but keeps the WaveEntry."""
+def test_reset_wave_memory_clears_cache(ctx: AdapterTestContext) -> None:
+    """Verify that reset_wave_memory fully clears the HL wave cache."""
     # 1. Populate cache
     entry = MagicMock()
     entry.wdw = 12345
     ctx.adapter.generator._wave_store[0] = {"test_wave": entry}
 
-    # 2. Execute reset with preservation
-    ctx.adapter.generator.reset_wave_memory(gen_index=0, preserve_wave_specs=True)
+    # 2. Execute reset
+    ctx.adapter.generator.reset_wave_memory(gen_index=0)
 
     # 3. Assertions
-    # Entry must still exist
-    assert "test_wave" in ctx.adapter.generator._wave_store[0]
-    # WDW must be invalidated (None)
-    assert ctx.adapter.generator._wave_store[0]["test_wave"].wdw is None
+    # Cache must be empty
+    assert len(ctx.adapter.generator._wave_store[0]) == 0
     # Driver must be reset
     ctx.gen.reset_wave_memory_dict.assert_called_once()
 
@@ -587,3 +586,93 @@ def test_run_multi_acquisition_shot_memoization(ctx: AdapterTestContext) -> None
     list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=20, samp_per_shot=100))
     assert ctx.adapter.trigger.set_shots.call_count == 2
     ctx.adapter.trigger.set_shots.assert_called_with(20)
+
+
+# --- F1 regression: upload_envelopes duplicate skip ---
+
+
+def test_upload_envelopes_skip_duplicate(ctx: AdapterTestContext) -> None:
+    """Verify that uploading the same envelope twice skips instead of failing."""
+    envelope_spec = [
+        {
+            "name": "gauss",
+            "for_interpolation": False,
+            "is_symmetric": False,
+            "i_even": False,
+            "q_even": False,
+            "samples_iq": [[0.5, 0.5], [0.5, 0.5]],
+        }
+    ]
+
+    # First upload should load successfully
+    res1 = ctx.adapter.generator.upload_envelopes(gen_index=0, envelopes=envelope_spec)
+    assert res1["loaded"] == ["gauss"]
+    assert res1["skipped"] == []
+    assert res1["failed"] == []
+    assert ctx.gen.add_envelope_to_envelope_memory.call_count == 1
+
+    # Second upload of same name should be skipped (not failed)
+    res2 = ctx.adapter.generator.upload_envelopes(gen_index=0, envelopes=envelope_spec)
+    assert res2["skipped"] == ["gauss"]
+    assert res2["loaded"] == []
+    assert res2["failed"] == []
+    # Driver should NOT have been called a second time
+    assert ctx.gen.add_envelope_to_envelope_memory.call_count == 1
+
+
+# --- F5 regression: parse_bool_flag ---
+
+
+def test_compile_waves_partial_batch_failure(ctx: AdapterTestContext) -> None:
+    """Batch compilation is non-atomic: successful waves persist even if later ones fail.
+
+    When a batch contains both valid and invalid waves, the valid ones are compiled
+    and stored in cache/HW before the invalid ones are processed. This is mitigated
+    by the server always using replace=True, making retries idempotent.
+    """
+    # Setup: envelope "rect" exists in HW
+    ctx.gen.envelope_memory_dict["rect"] = {}
+
+    # Make create_wave_definition_word fail on second call (bad_wave)
+    call_count = [0]
+    original_return = 123456
+
+    def create_wdw_side_effect(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 2:
+            raise RuntimeError("Envelope 'NONEXISTENT' not found in memory")
+        return original_return
+
+    ctx.gen.create_wave_definition_word = MagicMock(side_effect=create_wdw_side_effect)
+
+    waves = [
+        {"wave_id": "good_wave", "kind": "env", "envelope": "rect", "duration": 100, "gain": 0.5},
+        {"wave_id": "bad_wave", "kind": "env", "envelope": "NONEXISTENT", "duration": 100, "gain": 0.5},
+    ]
+
+    result = ctx.adapter.generator.compile_waves(gen_index=0, waves=waves, replace=True)
+
+    # good_wave compiled successfully
+    assert len(result["waves"]) == 1
+    assert result["waves"][0]["wave_id"] == "good_wave"
+
+    # bad_wave failed
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["wave_id"] == "bad_wave"
+
+    # Cache retains good_wave but not bad_wave
+    cache = ctx.adapter.generator.get_wave_cache(0)
+    assert "good_wave" in cache
+    assert "bad_wave" not in cache
+
+
+def test_parse_bool_flag() -> None:
+    """Verify parse_bool_flag preserves current strict case-sensitive behavior."""
+    assert parse_bool_flag("True") is True
+    assert parse_bool_flag("False") is False
+    assert parse_bool_flag(None) is False
+    assert parse_bool_flag("") is False
+    # Case-sensitive: "true" maps to False (current behavior)
+    assert parse_bool_flag("true") is False
+    assert parse_bool_flag(0) is False
+    assert parse_bool_flag(1) is False

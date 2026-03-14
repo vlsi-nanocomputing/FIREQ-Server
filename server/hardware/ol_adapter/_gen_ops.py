@@ -26,6 +26,7 @@ from .generator_utils._wave_utils import (
     build_wave_entry,
     check_readout_wave_cache,
     check_wave_replacement_policy,
+    parse_bool_flag,
     process_envelope_samples,
     validate_envelope_spec,
     validate_envelope_symmetry,
@@ -132,6 +133,31 @@ class GeneratorOps:
         except (ValueError, AttributeError, TypeError, KeyError) as e:
             self._logger.debug("DAC Mix-mode config skipped: %s", e)
             return None
+
+    def _sync_cache_after_reset(self, gen_index: int, clear_last_fifo: bool) -> tuple[int, int]:
+        """Synchronize HL caches after a hardware reset (wave memory or envelopes).
+
+        Clears the wave cache, readout wave store, and optionally the FIFO cache.
+        Used by both ``reset_wave_memory`` and ``reset_envelopes`` to avoid
+        duplicated cache-sync logic.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param clear_last_fifo: If True, clears the record of the last programmed FIFO.
+        :type clear_last_fifo: bool
+        :return: Tuple of (n_before, n_after).
+        :rtype: tuple[int, int]
+        """
+        cache = self.get_wave_cache(gen_index)
+        n_before = len(cache)
+        cache.clear()
+
+        if clear_last_fifo:
+            self._last_fifo.pop(int(gen_index), None)
+
+        self._readout_wave_store.pop(gen_index, None)
+
+        return n_before, len(cache)
 
     # ========================================================================
     # PUBLIC METHODS — Wave
@@ -242,13 +268,8 @@ class GeneratorOps:
 
         gen = self._get_gen(gen_index)
 
-        # parsing switch iq and keeplast
-        switch_iq = wave.get("switch_iq", None)
-        keep_last = wave.get("keep_last", None)
-        # default to false, which removes some possibility for errors
-        # TODO: make this convertion strict
-        switch_iq = True if (switch_iq and switch_iq == "True") else False
-        keep_last = True if (keep_last and keep_last == "True") else False
+        switch_iq = parse_bool_flag(wave.get("switch_iq"))
+        keep_last = parse_bool_flag(wave.get("keep_last"))
 
         new_entry = WaveEntry(
             envelope=str(wave["envelope"]),
@@ -317,24 +338,20 @@ class GeneratorOps:
         self,
         *,
         gen_index: int,
-        preserve_wave_specs: bool = True,
         clear_last_fifo: bool = True,
     ) -> dict:
-        """Reset the generator wave memory and synchronize the High-Level cache.
+        """Reset the generator wave memory and clear the High-Level cache.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param preserve_wave_specs: If True, keeps WaveEntry objects but invalidates WDWs.
-        :type preserve_wave_specs: bool
         :param clear_last_fifo: If True, clears the record of the last programmed FIFO.
         :type clear_last_fifo: bool
         :return: A summary of the cache state after reset.
         :rtype: dict
         """
         self._logger.debug(
-            "reset_wave_memory: gen=%d preserve_wave_specs=%s clear_last_fifo=%s",
+            "reset_wave_memory: gen=%d clear_last_fifo=%s",
             gen_index,
-            preserve_wave_specs,
             clear_last_fifo,
         )
 
@@ -345,41 +362,20 @@ class GeneratorOps:
             operation="reset_wave_memory_dict",
         )
 
-        cache = self.get_wave_cache(gen_index)
-        n_before = len(cache)
-
-        if preserve_wave_specs:
-            for entry in cache.values():
-                entry.wdw = None
-            hl_action = "invalidated_wdw"
-        else:
-            cache.clear()
-            hl_action = "cleared_cache"
-
-        if clear_last_fifo:
-            self._last_fifo.pop(int(gen_index), None)
-
-        # Invalidate readout wave cache (wave memory is shared)
-        readout_entry = self._readout_wave_store.get(gen_index)
-        if readout_entry is not None:
-            if preserve_wave_specs:
-                readout_entry.wdw = None
-            else:
-                self._readout_wave_store.pop(gen_index, None)
+        n_before, n_after = self._sync_cache_after_reset(gen_index, clear_last_fifo)
 
         self._logger.debug(
-            "reset_wave_memory: done gen=%d hl_action=%s n_before=%d n_after=%d",
+            "reset_wave_memory: done gen=%d n_before=%d n_after=%d",
             gen_index,
-            hl_action,
             n_before,
-            len(cache),
+            n_after,
         )
 
         return {
             "gen_index": int(gen_index),
-            "hl_action": hl_action,
+            "reset_action": "cleared_cache",
             "hl_wave_count_before": n_before,
-            "hl_wave_count_after": len(cache),
+            "hl_wave_count_after": n_after,
             "cleared_last_fifo": bool(clear_last_fifo),
         }
 
@@ -428,7 +424,7 @@ class GeneratorOps:
         skipped: list[str] = []
         failed: list[dict] = []
 
-        env_cache = getattr(gen, "EnvelopeMemoryDict", {})
+        env_cache = getattr(gen, "envelope_memory_dict", {})
 
         for env_spec in envelopes:
             name = str(env_spec.get("name", ""))
@@ -490,24 +486,20 @@ class GeneratorOps:
         self,
         *,
         gen_index: int,
-        preserve_wave_specs: bool = True,
         clear_last_fifo: bool = True,
     ) -> dict:
-        """Reset the generator envelope memory and synchronize the High-Level wave cache.
+        """Reset the generator envelope memory and clear the High-Level wave cache.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param preserve_wave_specs: If True, retains WaveEntry specs but invalidates WDWs.
-        :type preserve_wave_specs: bool
         :param clear_last_fifo: If True, clears the record of the last programmed sequence.
         :type clear_last_fifo: bool
         :return: A summary of the actions taken on the cache.
         :rtype: dict
         """
         self._logger.debug(
-            "reset_envelopes: gen=%d preserve_wave_specs=%s clear_last_fifo=%s",
+            "reset_envelopes: gen=%d clear_last_fifo=%s",
             gen_index,
-            preserve_wave_specs,
             clear_last_fifo,
         )
 
@@ -518,43 +510,20 @@ class GeneratorOps:
             operation="reset_envelope_dict",
         )
 
-        cache = self.get_wave_cache(gen_index)
-        n_before = len(cache)
-
-        if preserve_wave_specs:
-            for entry in cache.values():
-                entry.wdw = None
-            hl_action = "invalidated_wdw"
-        else:
-            cache.clear()
-            hl_action = "cleared_cache"
-
-        if clear_last_fifo:
-            self._last_fifo.pop(int(gen_index), None)
-
-        # FIX C8: Invalidate readout_wave_store (was missing in original code).
-        # Envelopes are shared with readout waves, so resetting envelopes must
-        # also invalidate any readout wave that depends on them.
-        readout_entry = self._readout_wave_store.get(gen_index)
-        if readout_entry is not None:
-            if preserve_wave_specs:
-                readout_entry.wdw = None
-            else:
-                self._readout_wave_store.pop(gen_index, None)
+        n_before, n_after = self._sync_cache_after_reset(gen_index, clear_last_fifo)
 
         self._logger.debug(
-            "reset_envelopes: done gen=%d hl_action=%s n_before=%d n_after=%d",
+            "reset_envelopes: done gen=%d n_before=%d n_after=%d",
             gen_index,
-            hl_action,
             n_before,
-            len(cache),
+            n_after,
         )
 
         return {
             "gen_index": int(gen_index),
-            "hl_action": hl_action,
+            "reset_action": "cleared_cache",
             "hl_wave_count_before": n_before,
-            "hl_wave_count_after": len(cache),
+            "hl_wave_count_after": n_after,
             "cleared_last_fifo": bool(clear_last_fifo),
         }
 

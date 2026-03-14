@@ -15,6 +15,31 @@ from ..overlay_adapter_types import WaveEntry, same_spec
 from ._iq_conversion import iq_float_to_cint16
 
 # =============================================================================
+# Boolean Flag Parsing
+# =============================================================================
+
+
+def parse_bool_flag(value: object) -> bool:
+    """Parse a string boolean flag from protocol messages.
+
+    Returns ``True`` only when *value* is exactly the string ``"True"``.
+    Every other input (``None``, ``"False"``, ``""``, ``"true"``, etc.)
+    maps to ``False``.
+
+    .. note::
+       The comparison is intentionally case-sensitive to preserve
+       backward-compatible behavior. A stricter or case-insensitive
+       variant may be introduced later (see TODO in callers).
+
+    :param value: The raw value received from the protocol layer.
+    :type value: object
+    :return: ``True`` only if *value* is exactly ``"True"``.
+    :rtype: bool
+    """
+    return value is not None and value == "True"
+
+
+# =============================================================================
 # Wave Entry Construction
 # =============================================================================
 
@@ -32,13 +57,8 @@ def build_wave_entry(wave_spec: dict) -> WaveEntry:
         raise ConfigurationError(f"Unknown wave kind '{kind}' (use 'env' or 'vz').")
 
     if kind == "env":
-        # parsing switch iq and keeplast
-        switch_iq = wave_spec.get("switch_iq", None)
-        keep_last = wave_spec.get("keep_last", None)
-        # default to false, which removes some possibility for errors
-        # TODO: make this convertion strict
-        switch_iq = True if (switch_iq and switch_iq == "True") else False
-        keep_last = True if (keep_last and keep_last == "True") else False
+        switch_iq = parse_bool_flag(wave_spec.get("switch_iq"))
+        keep_last = parse_bool_flag(wave_spec.get("keep_last"))
 
         return WaveEntry(
             envelope=str(wave_spec["envelope"]),
@@ -272,6 +292,7 @@ def validate_wave_ids_in_cache(
 __all__ = [
     "build_wave_entry",
     "check_wave_replacement_policy",
+    "parse_bool_flag",
     "validate_envelope_spec",
     "validate_envelope_symmetry",
     "process_envelope_samples",

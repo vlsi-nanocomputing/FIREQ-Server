@@ -285,16 +285,39 @@ class TestRobustness:
         assert statuses[1]["ok"] is False
         assert "FPGA timeout" in statuses[1]["error"]
 
-    def test_reset_preserve_specs_flag(self, stack: object) -> None:
-        """Verify reset handler propagates the preserve_wave_specs flag."""
-        # MOCK THE ADAPTER.GENERATOR METHOD to verify arguments
+    def test_compile_waves_partial_failure_raises_first_error(self, stack: object) -> None:
+        """WaveHandler.compile() raises WaveCompilationError on first failure in batch.
+
+        When compile_waves returns a mix of successes and failures, the handler
+        raises on the first failure only, discarding subsequent error details.
+        This is acceptable because replace=True makes retries idempotent.
+        """
+        # Mock compile_waves to return one success + one failure
+        stack.adapter.generator.compile_waves = MagicMock(
+            return_value={
+                "gen_index": 0,
+                "waves": [{"wave_id": "good", "WDW": "0x1"}],
+                "replaced": [],
+                "skipped": [],
+                "failed": [{"wave_id": "bad", "error": "envelope not found"}],
+            }
+        )
+
+        config = {"waves": {"0": [{"wave_id": "good"}, {"wave_id": "bad"}]}}
+
+        with pytest.raises(WaveCompilationError) as exc_info:
+            stack.handler.wave_h.compile(config)
+
+        assert "bad" in str(exc_info.value)
+        assert "envelope not found" in str(exc_info.value)
+
+    def test_reset_clears_wave_memory(self, stack: object) -> None:
+        """Verify reset handler calls reset_wave_memory with only gen_index."""
         stack.adapter.generator.reset_wave_memory = MagicMock(return_value={})
 
-        # Call reset with preserve_wave_specs=True
-        stack.handler.reset_h.reset_waves(gen_index=0, preserve_wave_specs=True)
+        stack.handler.reset_h.reset_waves(gen_index=0)
 
-        # Verify adapter call
-        stack.adapter.generator.reset_wave_memory.assert_called_with(gen_index=0, preserve_wave_specs=True)
+        stack.adapter.generator.reset_wave_memory.assert_called_with(gen_index=0)
 
     def test_sweep_integer_casting_edge_cases(self, stack: object) -> None:
         """Verify strict type casting for discrete hardware parameters."""
