@@ -1,4 +1,4 @@
-"""Flat acquisition operations for OverlayAdapter.
+"""Acquisition operations for OverlayAdapter.
 
 This module provides the AcquisitionOps class that handles all acquisition-related
 hardware operations in a single flat class:
@@ -41,7 +41,7 @@ def _dma_timeout_handler(_signum: int, _frame: FrameType | None) -> NoReturn:
 
 
 class AcquisitionOps:
-    """Flat acquisition operations: DMA orchestration, sweep, modulation, trigger, timing.
+    """Acquisition operations: DMA orchestration, sweep, modulation, trigger, timing.
 
     This class manages all acquisition-related hardware operations and owns
     its own state for sweep mode, shot memoization, timing statistics, and
@@ -134,8 +134,8 @@ class AcquisitionOps:
     def _configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> None:
         """Configure the ADC Mix-Mode (Nyquist zone) for an acquisition unit.
 
-        Logs a warning and continues if the driver does not support mix-mode
-        configuration.
+        Silently returns if the driver does not support mix-mode
+        configuration (e.g. on mock overlays or older bitstreams).
 
         :param acq_index: Index of the acquisition unit.
         :type acq_index: int
@@ -154,6 +154,16 @@ class AcquisitionOps:
                 )
         except ValueError as e:
             self._logger.warning("ADC Mix-mode config skipped: %s", e)
+
+    def _memoize_trigger_shots(self, hw_shots: int) -> None:
+        """Set trigger shot count only if it changed (avoids redundant HW writes).
+
+        :param hw_shots: Number of shots for the hardware run.
+        :type hw_shots: int
+        """
+        if hw_shots != self._last_hw_shots:
+            self._trigger.set_shots(hw_shots)
+            self._last_hw_shots = hw_shots
 
     # ========================================================================
     # PUBLIC PROPERTIES
@@ -293,7 +303,7 @@ class AcquisitionOps:
 
                 # --- Case 2: Multiple Hardware Acquisitions (Pipelined Chunking) ---
                 else:
-                    self._logger.debug(f"Splitting {shots} shots into chunks of {max_hw_shots}")
+                    self._logger.debug("Splitting %d shots into chunks of %d", shots, max_hw_shots)
                     remaining = shots
                     first_acq_idx = acq_indices[0]
 
@@ -309,9 +319,7 @@ class AcquisitionOps:
                         # --- Start current chunk (if not pre-started) ---
                         if inflight_buffer is None:
                             # First iteration: configure trigger, ARM first Acquisition IP, TRIGGER
-                            if hw_shots != self._last_hw_shots:
-                                self._trigger.set_shots(hw_shots)
-                                self._last_hw_shots = hw_shots
+                            self._memoize_trigger_shots(hw_shots)
 
                             self._configure_acq_output_mode(acq_indices, mode)
 
@@ -326,38 +334,20 @@ class AcquisitionOps:
                             inflight_shots = hw_shots
 
                         # --- Complete current chunk: WAIT + COPY all AcquisitionIPs ---
-                        results: dict[int, np.ndarray] = {}
-
-                        # First acquisition unit: wait on pre-armed buffer
-                        dma_result = self._dma_engine.retrieve_acquisition(
-                            buffer=inflight_buffer,
+                        results, fpga_s, dma_s = self._retrieve_all_acq_ips(
+                            acq_indices,
+                            inflight_buffer,
+                            inflight_shots,
+                            samp_per_shot,
+                            mode,
                         )
-                        results[first_acq_idx] = dma_result.buffer.copy()
-                        fpga_wait_accum += dma_result.dma_wait_s
-                        dma_overhead_accum += dma_result.invalidate_s
-
-                        # Remaining acquisition units: ARM + WAIT (data already in FIFO from trigger)
-                        for acq_idx in acq_indices[1:]:
-                            buffer = self._dma_engine.arm_acquisition(
-                                samp_per_shot=samp_per_shot,
-                                shots_per_exp=inflight_shots,
-                                mode=mode,
-                                acq_index=acq_idx,
-                                fast_path=self._sweep_prepared,
-                            )
-                            dma_result = self._dma_engine.retrieve_acquisition(
-                                buffer=buffer,
-                            )
-                            results[acq_idx] = dma_result.buffer.copy()
-                            fpga_wait_accum += dma_result.dma_wait_s
-                            dma_overhead_accum += dma_result.invalidate_s
+                        fpga_wait_accum += fpga_s
+                        dma_overhead_accum += dma_s
 
                         # --- Pre-start next chunk (before yield) for pipelined execution ---
                         if has_next:
                             next_hw_shots = min(max_hw_shots, next_remaining)
-                            if next_hw_shots != self._last_hw_shots:
-                                self._trigger.set_shots(next_hw_shots)
-                                self._last_hw_shots = next_hw_shots
+                            self._memoize_trigger_shots(next_hw_shots)
 
                             inflight_buffer = self._dma_engine.arm_acquisition(
                                 samp_per_shot=samp_per_shot,
@@ -406,14 +396,8 @@ class AcquisitionOps:
         :param acq_indices: List of active acquisition unit indices involved in the sweep.
         :type acq_indices: list[int]
         """
-        # Pre-config acquisition IPs
-        for acq_index in acq_indices:
-            acq = self._get_acq(acq_index)
-            if mode in ("decimated", "accumulated"):
-                self._check(
-                    acq.set_decimated_output_type(mode),
-                    operation="set_decimated_output_type",
-                )
+        # Lock output type for the sweep duration
+        self._configure_acq_output_mode(acq_indices, mode, force=True)
 
         # Update active acquisition units - frees buffers for units not in use
         self._dma_engine.set_active_acq_ip(acq_indices)
@@ -459,12 +443,12 @@ class AcquisitionOps:
             freq_mhz,
             phase,
         )
-        unit = self._get_acq(acq_index)
+        acq = self._get_acq(acq_index)
 
         self._configure_adc_mix_mode(acq_index, freq_mhz)
 
         self._check(
-            unit.set_acquisition_dds_parameters(
+            acq.set_acquisition_dds_parameters(
                 frequency=freq_mhz,
                 phase=phase,
                 adc_samplerate=float(self._fireq_soc.hw_specs["summary"]["adc_sr_hz"]) / 1e6,
@@ -496,10 +480,10 @@ class AcquisitionOps:
         channel = trig["channel"]
 
         self._logger.debug("set_trigger_listener: acq=%d channel=%s", acq_index, channel)
-        unit = self._get_acq(acq_index)
+        acq = self._get_acq(acq_index)
 
         self._check(
-            unit.set_trigger_channel(channel=channel),
+            acq.set_trigger_channel(channel=channel),
             operation="set_trigger_channel",
         )
 
@@ -556,23 +540,77 @@ class AcquisitionOps:
     # INTERNAL HELPERS — DMA
     # ========================================================================
 
-    def _configure_acq_output_mode(self, acq_indices: list[int], mode: str) -> None:
-        """Pre-configure acquisition IP output type when not in sweep mode.
+    def _retrieve_all_acq_ips(
+        self,
+        acq_indices: list[int],
+        inflight_buffer: object,
+        shots: int,
+        samp_per_shot: int,
+        mode: str,
+    ) -> tuple[dict[int, np.ndarray], float, float]:
+        """Retrieve DMA buffers for all acquisition IPs after a trigger.
 
-        In sweep mode the output type is already locked by prepare_sweep(),
-        so this step is skipped to avoid redundant hardware writes.
+        The first acquisition IP waits on its pre-armed buffer.
+        Remaining IPs are armed and retrieved sequentially (data already in FIFO).
+
+        :param acq_indices: Ordered list of acquisition IP indices.
+        :param inflight_buffer: Pre-armed DMA buffer for the first IP.
+        :param shots: Number of shots in this hardware run.
+        :param samp_per_shot: Samples per shot.
+        :param mode: Acquisition mode.
+        :return: (results_dict, fpga_wait_s, dma_overhead_s).
+        """
+        results: dict[int, np.ndarray] = {}
+        fpga_wait_s = 0.0
+        dma_overhead_s = 0.0
+
+        # First acquisition IP: wait on pre-armed buffer
+        dma_result = self._dma_engine.retrieve_acquisition(buffer=inflight_buffer)
+        results[acq_indices[0]] = dma_result.buffer.copy()
+        fpga_wait_s += dma_result.dma_wait_s
+        dma_overhead_s += dma_result.invalidate_s
+
+        # Remaining acquisition IPs: arm + retrieve (data already in FIFO)
+        for acq_idx in acq_indices[1:]:
+            buffer = self._dma_engine.arm_acquisition(
+                samp_per_shot=samp_per_shot,
+                shots_per_exp=shots,
+                mode=mode,
+                acq_index=acq_idx,
+                fast_path=self._sweep_prepared,
+            )
+            dma_result = self._dma_engine.retrieve_acquisition(buffer=buffer)
+            results[acq_idx] = dma_result.buffer.copy()
+            fpga_wait_s += dma_result.dma_wait_s
+            dma_overhead_s += dma_result.invalidate_s
+
+        return results, fpga_wait_s, dma_overhead_s
+
+    def _configure_acq_output_mode(
+        self,
+        acq_indices: list[int],
+        mode: str,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Configure acquisition IP output type (decimated/accumulated).
+
+        Skipped when sweep mode is active (output already locked by
+        ``prepare_sweep``), unless *force* is True.
 
         :param acq_indices: List of acquisition unit indices to configure.
         :param mode: The acquisition mode (e.g., 'raw', 'decimated', 'accumulated').
+        :param force: If True, configure even when sweep mode is active.
         """
-        if not self._sweep_prepared:
-            for acq_idx in acq_indices:
-                acq = self._get_acq(acq_idx)
-                if mode in ("decimated", "accumulated"):
-                    self._check(
-                        acq.set_decimated_output_type(mode),
-                        operation="set_decimated_output_type",
-                    )
+        if not force and self._sweep_prepared:
+            return
+        for acq_idx in acq_indices:
+            acq = self._get_acq(acq_idx)
+            if mode in ("decimated", "accumulated"):
+                self._check(
+                    acq.set_decimated_output_type(mode),
+                    operation="set_decimated_output_type",
+                )
 
     @contextmanager
     def _dma_timeout_context(self, timeout_sec: float | None) -> Iterator[None]:
@@ -620,51 +658,26 @@ class AcquisitionOps:
         :param samp_per_shot: Samples per shot.
         :return: (data_dict, fpga_wait_s, dma_overhead_s).
         """
-        results: dict[int, np.ndarray] = {}
-        fpga_wait_s = 0.0
-        dma_overhead_s = 0.0
-
-        # Memoize trigger shots to skip redundant HW writes in chunked acquisitions.
-        if shots != self._last_hw_shots:
-            self._trigger.set_shots(shots)
-            self._last_hw_shots = shots
-
+        self._memoize_trigger_shots(shots)
         self._configure_acq_output_mode(acq_indices, mode)
 
-        # First acquisition unit: arm before trigger
-        first_acq_idx = acq_indices[0]
+        # ARM first acquisition IP → TRIGGER → RETRIEVE all IPs
         first_buffer = self._dma_engine.arm_acquisition(
             samp_per_shot=samp_per_shot,
             shots_per_exp=shots,
             mode=mode,
-            acq_index=first_acq_idx,
+            acq_index=acq_indices[0],
             fast_path=self._sweep_prepared,
         )
-
-        # Trigger
         self._trigger.trigger_experiment()
 
-        # Retrieve first acquisition unit (blocking)
-        dma_result = self._dma_engine.retrieve_acquisition(buffer=first_buffer)
-        results[first_acq_idx] = dma_result.buffer.copy()
-        fpga_wait_s += dma_result.dma_wait_s
-        dma_overhead_s += dma_result.invalidate_s
-
-        # Remaining acquisition units: arm + retrieve (data already captured in FIFO)
-        for acq_idx in acq_indices[1:]:
-            buffer = self._dma_engine.arm_acquisition(
-                samp_per_shot=samp_per_shot,
-                shots_per_exp=shots,
-                mode=mode,
-                acq_index=acq_idx,
-                fast_path=self._sweep_prepared,
-            )
-            dma_result = self._dma_engine.retrieve_acquisition(buffer=buffer)
-            results[acq_idx] = dma_result.buffer.copy()
-            fpga_wait_s += dma_result.dma_wait_s
-            dma_overhead_s += dma_result.invalidate_s
-
-        return results, fpga_wait_s, dma_overhead_s
+        return self._retrieve_all_acq_ips(
+            acq_indices,
+            first_buffer,
+            shots,
+            samp_per_shot,
+            mode,
+        )
 
 
 __all__ = ["AcquisitionOps"]

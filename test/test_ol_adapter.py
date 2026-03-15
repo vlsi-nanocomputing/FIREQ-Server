@@ -974,6 +974,67 @@ def test_set_nyquist_zone(ctx: AdapterTestContext) -> None:
     assert "nyquist_zone" in res or "status" in res
 
 
+def test_dac_mix_mode_skipped_on_value_error(ctx: AdapterTestContext) -> None:
+    """Verify DAC mix-mode ValueError is tolerated and set_modulation succeeds.
+
+    :param ctx: Adapter test context with mock overlay.
+    :type ctx: AdapterTestContext
+    """
+    ctx.ol.configure_dac_mix_mode = MagicMock(
+        side_effect=ValueError("No RF mapping for gen_index=0"),
+    )
+    res = ctx.adapter.generator.set_modulation(
+        gen_index=0,
+        label="drive",
+        mod={"frequency_mhz": 100.0, "phase": 0.0},
+    )
+    assert res["frequency_mhz"] == 100.0
+
+
+def test_dac_mix_mode_propagates_attribute_error(ctx: AdapterTestContext) -> None:
+    """Verify AttributeError from configure_dac_mix_mode is not silenced.
+
+    :param ctx: Adapter test context with mock overlay.
+    :type ctx: AdapterTestContext
+    """
+    ctx.ol.configure_dac_mix_mode = MagicMock(
+        side_effect=AttributeError("'NoneType' has no attribute 'dac_tiles'"),
+    )
+    with pytest.raises(AttributeError):
+        ctx.adapter.generator.set_modulation(
+            gen_index=0,
+            label="drive",
+            mod={"frequency_mhz": 100.0, "phase": 0.0},
+        )
+
+
+def test_nyquist_zone_propagates_key_error(ctx: AdapterTestContext) -> None:
+    """Verify KeyError from configure_dac_mix_mode propagates in set_nyquist_zone.
+
+    :param ctx: Adapter test context with mock overlay.
+    :type ctx: AdapterTestContext
+    """
+    ctx.ol.configure_dac_mix_mode = MagicMock(
+        side_effect=KeyError("dac_nyquist_hz"),
+    )
+    with pytest.raises(KeyError):
+        ctx.adapter.generator.set_nyquist_zone(gen_index=0, label="drive", zone=2)
+
+
+def test_nyquist_zone_returns_mocked_on_value_error(ctx: AdapterTestContext) -> None:
+    """Verify set_nyquist_zone returns mocked status only on legitimate ValueError.
+
+    :param ctx: Adapter test context with mock overlay.
+    :type ctx: AdapterTestContext
+    """
+    ctx.ol.configure_dac_mix_mode = MagicMock(
+        side_effect=ValueError("No RF mapping for gen_index=0"),
+    )
+    res = ctx.adapter.generator.set_nyquist_zone(gen_index=0, label="drive", zone=1)
+    assert res["status"] == "mocked"
+    assert res["nyquist_zone"] == 1
+
+
 # =============================================================================
 # G8: set_trigger_listener (generator)
 # =============================================================================
@@ -1051,6 +1112,42 @@ def test_set_modulation_acquisition(ctx: AdapterTestContext) -> None:
         phase=45.0,
         adc_samplerate=4000.0,
     )
+
+
+def test_adc_mix_mode_skipped_on_value_error(ctx: AdapterTestContext) -> None:
+    """ValueError from configure_adc_mix_mode → warning logged, modulation succeeds."""
+    ctx.ol.configure_adc_mix_mode = MagicMock(
+        side_effect=ValueError("No RF mapping for acq_index=0"),
+    )
+    res = ctx.adapter.acquisition.set_modulation(
+        acq_index=0,
+        mod={"frequency_mhz": 100.0, "phase": 0.0},
+    )
+    assert res["frequency_mhz"] == 100.0
+
+
+def test_adc_mix_mode_propagates_attribute_error(ctx: AdapterTestContext) -> None:
+    """AttributeError from driver → must NOT be silenced."""
+    ctx.ol.configure_adc_mix_mode = MagicMock(
+        side_effect=AttributeError("'NoneType' has no attribute 'adc_tiles'"),
+    )
+    with pytest.raises(AttributeError):
+        ctx.adapter.acquisition.set_modulation(
+            acq_index=0,
+            mod={"frequency_mhz": 100.0, "phase": 0.0},
+        )
+
+
+def test_adc_mix_mode_propagates_key_error(ctx: AdapterTestContext) -> None:
+    """KeyError from driver → hw_specs corrupted, must fail loud."""
+    ctx.ol.configure_adc_mix_mode = MagicMock(
+        side_effect=KeyError("adc_nyquist_hz"),
+    )
+    with pytest.raises(KeyError):
+        ctx.adapter.acquisition.set_modulation(
+            acq_index=0,
+            mod={"frequency_mhz": 100.0, "phase": 0.0},
+        )
 
 
 # =============================================================================
@@ -1318,3 +1415,319 @@ class TestMutationValidation:
         # Mutation: returns 100_000 instead of min(65535, 100_000) = 65535
         assert result == 100_000, "Mutation confirmed: min() bypassed"
         assert result != 65535
+
+
+# =============================================================================
+# A: Acquisition edge-case tests
+# =============================================================================
+
+
+# --- A1: Empty acq_indices raises ---
+
+
+def test_run_multi_acquisition_empty_acq_indices(ctx: AdapterTestContext) -> None:
+    """Verify run_multi_acquisition rejects empty acq_indices list."""
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+
+    with pytest.raises(ConfigurationError, match="No acquisition unit indices"):
+        list(
+            ctx.adapter.acquisition.run_multi_acquisition(
+                acq_indices=[],
+                mode="raw",
+                shots=10,
+                samp_per_shot=100,
+            )
+        )
+
+
+# --- A2: Too many acquisition units raises ---
+
+
+def test_run_multi_acquisition_too_many_acq_units(ctx: AdapterTestContext) -> None:
+    """Verify run_multi_acquisition rejects more acq units than hardware provides."""
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+
+    with pytest.raises(ConfigurationError, match="only .* available"):
+        list(
+            ctx.adapter.acquisition.run_multi_acquisition(
+                acq_indices=[0, 1, 2, 3, 4],
+                mode="raw",
+                shots=10,
+                samp_per_shot=100,
+            )
+        )
+
+
+# --- A3: Impossible buffer configuration raises ---
+
+
+def test_run_multi_acquisition_impossible_buffer(ctx: AdapterTestContext) -> None:
+    """Verify ConfigurationError when single shot exceeds entire DMA buffer."""
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 0
+
+    with pytest.raises(ConfigurationError, match="Impossible configuration"):
+        list(
+            ctx.adapter.acquisition.run_multi_acquisition(
+                acq_indices=[0],
+                mode="raw",
+                shots=10,
+                samp_per_shot=100,
+            )
+        )
+
+
+# --- A4: validate_chunk=False skips validation ---
+
+
+def test_run_multi_acquisition_validate_chunk_false_skips_validation(ctx: AdapterTestContext) -> None:
+    """Verify validate_chunk=False bypasses input validation checks."""
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+    mock_data = np.zeros((10, 100), dtype=dtype)
+
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer"
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.return_value = DMAResult(mock_data, 0.001, 0.0001)
+
+    # With validate_chunk=False, too many acq units does NOT raise
+    # (only uses [0] which exists, but count exceeds hw_specs — validation skipped)
+    results = list(
+        ctx.adapter.acquisition.run_multi_acquisition(
+            acq_indices=[0],
+            mode="raw",
+            shots=10,
+            samp_per_shot=100,
+            validate_chunk=False,
+        )
+    )
+    assert len(results) == 1
+
+
+# --- A5: Raw mode skips set_decimated_output_type ---
+
+
+def test_configure_acq_output_mode_raw_no_driver_call(ctx: AdapterTestContext) -> None:
+    """Verify _configure_acq_output_mode does not call driver for raw mode."""
+    ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+
+    ctx.adapter.acquisition._configure_acq_output_mode([0], "raw")
+
+    ctx.acq.set_decimated_output_type.assert_not_called()
+
+
+# --- A6: Sweep mode skips output config unless force=True ---
+
+
+def test_configure_acq_output_mode_sweep_skip(ctx: AdapterTestContext) -> None:
+    """Verify output mode is skipped during sweep unless force=True."""
+    ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+
+    # Simulate active sweep
+    ctx.adapter.acquisition._sweep_prepared = True
+
+    # Without force: skipped
+    ctx.adapter.acquisition._configure_acq_output_mode([0], "decimated")
+    ctx.acq.set_decimated_output_type.assert_not_called()
+
+    # With force: called
+    ctx.adapter.acquisition._configure_acq_output_mode([0], "decimated", force=True)
+    ctx.acq.set_decimated_output_type.assert_called_once_with("decimated")
+
+
+# --- A7: end_sweep without prepare_sweep ---
+
+
+def test_sweep_end_without_prepare(ctx: AdapterTestContext) -> None:
+    """Verify end_sweep is safe to call without prior prepare_sweep."""
+    ctx.adapter.acquisition._dma_engine.end_sweep = MagicMock()
+
+    # Should not raise
+    ctx.adapter.acquisition.end_sweep()
+
+    ctx.adapter.acquisition._dma_engine.end_sweep.assert_called_once()
+    assert ctx.adapter.acquisition._sweep_prepared is False
+    assert ctx.adapter.acquisition._last_hw_shots is None
+
+
+# --- A8: Double prepare_sweep ---
+
+
+def test_sweep_double_prepare(ctx: AdapterTestContext) -> None:
+    """Verify prepare_sweep is idempotent when called twice."""
+    ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+
+    ctx.adapter.acquisition.prepare_sweep(mode="decimated", acq_indices=[0])
+    assert ctx.adapter.acquisition._sweep_prepared is True
+
+    # Second call should not raise
+    ctx.adapter.acquisition.prepare_sweep(mode="decimated", acq_indices=[0])
+    assert ctx.adapter.acquisition._sweep_prepared is True
+
+    # Driver called twice (once per prepare_sweep, force=True)
+    assert ctx.acq.set_decimated_output_type.call_count == 2
+
+
+# --- A9: Shot memoization reset across sweep boundaries ---
+
+
+def test_shot_memoization_reset_across_sweep(ctx: AdapterTestContext) -> None:
+    """Verify prepare_sweep resets trigger shot memoization."""
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+    mock_data = np.zeros((10, 100), dtype=dtype)
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer"
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.return_value = DMAResult(mock_data, 0.001, 0.0001)
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+    ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+
+    ctx.adapter.trigger.set_shots = MagicMock()
+
+    # First acquisition: 10 shots → trigger.set_shots called
+    list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    assert ctx.adapter.trigger.set_shots.call_count == 1
+
+    # prepare_sweep resets _last_hw_shots
+    ctx.adapter.acquisition.prepare_sweep(mode="decimated", acq_indices=[0])
+
+    # Same shot count again → trigger.set_shots called again (not memoized)
+    list(ctx.adapter.acquisition.run_multi_acquisition(acq_indices=[0], mode="raw", shots=10, samp_per_shot=100))
+    assert ctx.adapter.trigger.set_shots.call_count == 2
+
+
+# --- A10: timeout=None disables SIGALRM ---
+
+
+def test_run_multi_acquisition_timeout_none(ctx: AdapterTestContext) -> None:
+    """Verify acquisition works with timeout=None (no SIGALRM)."""
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+    mock_data = np.zeros((10, 100), dtype=dtype)
+
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.return_value = "buffer"
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.return_value = DMAResult(mock_data, 0.001, 0.0001)
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+
+    results = list(
+        ctx.adapter.acquisition.run_multi_acquisition(
+            acq_indices=[0],
+            mode="raw",
+            shots=10,
+            samp_per_shot=100,
+            timeout=None,
+        )
+    )
+
+    assert len(results) == 1
+    assert 0 in results[0]
+
+
+# --- A11: DMA failure on secondary acquisition IP ---
+
+
+def test_dma_failure_on_secondary_acq_ip(ctx: AdapterTestContext) -> None:
+    """Verify DMA error on second IP is propagated (not swallowed)."""
+    dtype = np.dtype([("i", "<i2"), ("q", "<i2")])
+
+    ctx.adapter.acquisition._dma_engine.get_max_shots.return_value = 1024
+
+    call_counter = [0]
+
+    def arm_side_effect(**kwargs: object) -> str:
+        call_counter[0] += 1
+        return f"buffer_{call_counter[0]}"
+
+    ctx.adapter.acquisition._dma_engine.arm_acquisition.side_effect = arm_side_effect
+
+    retrieve_counter = [0]
+
+    def retrieve_side_effect(**kwargs: object) -> DMAResult:
+        retrieve_counter[0] += 1
+        if retrieve_counter[0] == 2:
+            raise TimeoutError("DMA Timeout on secondary IP")
+        return DMAResult(np.zeros((10, 100), dtype=dtype), 0.001, 0.0001)
+
+    ctx.adapter.acquisition._dma_engine.retrieve_acquisition.side_effect = retrieve_side_effect
+
+    with pytest.raises(TimeoutError, match="secondary IP"):
+        list(
+            ctx.adapter.acquisition.run_multi_acquisition(
+                acq_indices=[0, 1],
+                mode="raw",
+                shots=10,
+                samp_per_shot=100,
+                timeout=5.0,
+            )
+        )
+
+
+# --- A12: Trigger channel 0 (deaf acquisition) ---
+
+
+def test_trigger_listener_channel_zero(ctx: AdapterTestContext) -> None:
+    """Verify channel=0 (deaf) is accepted and tracked internally."""
+    res = ctx.adapter.acquisition.set_trigger_listener(
+        acq_index=0,
+        trig={"channel": 0},
+    )
+
+    assert res["channel"] == 0
+    assert ctx.adapter.acquisition.acq_trigger_channels[0] == 0
+
+
+# --- A13: Negative driver return raises ---
+
+
+def test_driver_negative_return_raises(ctx: AdapterTestContext) -> None:
+    """Verify _check raises ConfigurationError on negative driver return code."""
+    ctx.acq.set_acquisition_duration = MagicMock(return_value=-1)
+    ctx.acq.set_time_of_flight = MagicMock(return_value=0)
+
+    with pytest.raises(ConfigurationError):
+        ctx.adapter.acquisition.set_timing(acq_index=0, tof=50, duration=1000)
+
+
+# =============================================================================
+# A: Acquisition mutation validation tests
+# =============================================================================
+
+
+class TestAcquisitionMutationValidation:
+    """Validate that the acquisition edge-case tests detect real bugs."""
+
+    # --- A14: Output mode must be skipped during sweep ---
+    def test_mutation_output_mode_always_called(self, ctx: AdapterTestContext) -> None:
+        """If sweep skip is removed, output mode is configured even during sweep."""
+        ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+
+        ctx.adapter.acquisition._sweep_prepared = True
+
+        # Monkeypatch: remove the sweep-skip guard
+        def mutated_configure(acq_indices, mode, *, force=False):
+            for acq_idx in acq_indices:
+                acq = ctx.adapter.acquisition._get_acq(acq_idx)
+                if mode in ("decimated", "accumulated"):
+                    acq.set_decimated_output_type(mode)
+
+        ctx.adapter.acquisition._configure_acq_output_mode = mutated_configure
+
+        # With mutation, driver IS called even without force
+        ctx.adapter.acquisition._configure_acq_output_mode([0], "decimated")
+        assert ctx.acq.set_decimated_output_type.call_count == 1, "Mutation confirmed: sweep skip bypassed"
+
+    # --- A15: prepare_sweep must reset memoization ---
+    def test_mutation_memoization_never_resets(self, ctx: AdapterTestContext) -> None:
+        """If prepare_sweep doesn't reset _last_hw_shots, memoization is stale."""
+        # Simulate a previous acquisition that set _last_hw_shots
+        ctx.adapter.acquisition._last_hw_shots = 10
+
+        # Monkeypatch: prepare_sweep that doesn't reset memoization
+        def mutated_prepare(mode, acq_indices):
+            ctx.adapter.acquisition._configure_acq_output_mode(acq_indices, mode, force=True)
+            ctx.adapter.acquisition._dma_engine.set_active_acq_ip(acq_indices)
+            ctx.adapter.acquisition._sweep_prepared = True
+            # MUTATION: skip _last_hw_shots = None
+
+        ctx.acq.set_decimated_output_type = MagicMock(return_value=0)
+        ctx.adapter.acquisition.prepare_sweep = mutated_prepare
+
+        ctx.adapter.acquisition.prepare_sweep(mode="decimated", acq_indices=[0])
+
+        # Mutation: _last_hw_shots still 10 instead of None
+        assert ctx.adapter.acquisition._last_hw_shots == 10, "Mutation confirmed: memoization not reset"

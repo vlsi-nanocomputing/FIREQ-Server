@@ -6,7 +6,6 @@ types, validation logic, and signal-processing helpers:
 - **Types**: EnvelopeSpec, ReadoutWaveSpec, WaveEntry, WaveKind
 - **Protocol**: parse_bool_flag
 - **Validation**: envelope spec/symmetry, FIFO capacity, wave-ID checks
-- **Cache policy**: wave replacement policy, readout wave cache
 - **Signal processing**: IQ quantization (float → cint16), envelope padding
 """
 

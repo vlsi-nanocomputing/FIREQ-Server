@@ -236,8 +236,8 @@ class GeneratorOps:
                     mix_info["block"],
                 )
             return mix_info
-        except (ValueError, AttributeError, TypeError, KeyError) as e:
-            self._logger.debug("DAC Mix-mode config skipped: %s", e)
+        except ValueError as e:
+            self._logger.warning("DAC Mix-mode config skipped: %s", e)
             return None
 
     def _update_fifo_cache(
