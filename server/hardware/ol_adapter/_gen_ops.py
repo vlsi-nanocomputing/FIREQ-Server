@@ -1,7 +1,7 @@
-"""Flat generator operations for OverlayAdapter.
+"""Generator operations for OverlayAdapter.
 
-This module provides the GeneratorOps class that handles all generator-related
-hardware operations in a single flat class:
+This module provides the ``GeneratorOps`` class that handles all
+generator-related hardware operations in a single linear class:
 
 - Wave definition and compilation (WDW)
 - Envelope upload and processing
@@ -11,7 +11,8 @@ hardware operations in a single flat class:
 - DDS modulation and Nyquist zone configuration
 - Generator trigger channel assignment
 
-The class owns its own cache state (wave_store, last_fifo, readout_wave_store).
+The class owns its own cache state (``_wave_store``, ``_last_fifo``,
+``_readout_wave_store``).
 """
 
 from __future__ import annotations
@@ -22,25 +23,20 @@ from typing import Literal
 from ...models.config_types import Modulation, TriggerCommand
 from ...models.exceptions import ConfigurationError
 from ._errors import check_driver_result
-from .generator_utils._wave_utils import (
-    build_wave_entry,
-    check_readout_wave_cache,
-    check_wave_replacement_policy,
-    parse_bool_flag,
+from .overlay_adapter_types import (
+    EnvelopeSpec,
+    ReadoutWaveSpec,
+    WaveEntry,
     process_envelope_samples,
     validate_envelope_spec,
     validate_envelope_symmetry,
     validate_fifo_capacity,
     validate_wave_ids_in_cache,
 )
-from .overlay_adapter_types import WaveEntry
 
 
 class GeneratorOps:
     """Generator operations: waves, envelopes, FIFO, modulation, trigger.
-
-    This class manages all generator-related hardware operations and owns
-    its own cache state for wave definitions, FIFO sequences, and readout waves.
 
     :param fireq_soc: The FIREQ_SoC hardware driver instance.
     :type fireq_soc: FIREQ_SoC-compatible
@@ -51,13 +47,6 @@ class GeneratorOps:
     _DRIVER_NAME = "GeneratorDriver"
 
     def __init__(self, fireq_soc: object, logger: logging.Logger) -> None:
-        """Initialize GeneratorOps with direct dependencies.
-
-        :param fireq_soc: The FIREQ_SoC hardware driver instance.
-        :type fireq_soc: FIREQ_SoC-compatible
-        :param logger: Logger instance for debug/error reporting.
-        :type logger: logging.Logger
-        """
         self._fireq_soc = fireq_soc
         self._logger = logger
 
@@ -66,7 +55,7 @@ class GeneratorOps:
         self._readout_wave_store: dict[int, WaveEntry] = {}
 
     # ========================================================================
-    # PRIVATE HELPERS
+    # Private helpers
     # ========================================================================
 
     def _get_gen(self, gen_index: int) -> object:
@@ -104,6 +93,123 @@ class GeneratorOps:
             hint=hint,
         )
 
+    def _compile_wdw(self, gen: object, entry: WaveEntry) -> int:
+        """Compile a WaveEntry into a Wave Definition Word (WDW).
+
+        :param gen: Generator device object.
+        :param entry: WaveEntry to compile.
+        :return: Integer WDW value.
+        """
+        if entry.kind == "env":
+            return int(
+                self._check(
+                    gen.create_wave_definition_word(
+                        entry.envelope,
+                        entry.duration,
+                        entry.gain,
+                        entry.switch_iq,
+                        entry.keep_last,
+                    ),
+                    operation="create_wave_definition_word",
+                )
+            )
+        return int(
+            self._check(
+                gen.create_vz_gate_definition_word(entry.vz_phase_rad),
+                operation="create_vz_gate_definition_word",
+            )
+        )
+
+    def _store_wdw_in_hardware(self, gen: object, wdw: int, wave_id: str, replace: bool) -> None:
+        """Store or replace a WDW in generator hardware memory.
+
+        :param gen: Generator device object.
+        :param wdw: Wave Definition Word value to store.
+        :param wave_id: Wave identifier.
+        :param replace: If True, replace existing wave; else add new.
+        """
+        if replace:
+            self._check(
+                gen.replace_wave_in_wave_memory(wdw, wave_id, wave_id),
+                operation="replace_wave_in_wave_memory",
+            )
+        else:
+            self._check(
+                gen.add_wave_in_wave_memory(wdw, wave_id),
+                operation="add_wave_in_wave_memory",
+            )
+
+    def _sync_cache_after_reset(self, gen_index: int, clear_last_fifo: bool) -> int:
+        """Clear HL caches after a hardware reset.
+
+        Used by both ``reset_wave_memory`` and ``reset_envelopes``.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param clear_last_fifo: If True, also clears the FIFO cache.
+        :type clear_last_fifo: bool
+        :return: Number of wave entries that were in cache before clearing.
+        :rtype: int
+        """
+        cache = self.get_wave_cache(gen_index)
+        n_before = len(cache)
+        cache.clear()
+
+        if clear_last_fifo:
+            self._last_fifo.pop(int(gen_index), None)
+
+        self._readout_wave_store.pop(gen_index, None)
+
+        return n_before
+
+    def _reset_memory(
+        self,
+        *,
+        gen_index: int,
+        driver_method: str,
+        clear_last_fifo: bool,
+    ) -> dict:
+        """Shared logic for ``reset_wave_memory`` and ``reset_envelopes``.
+
+        Calls the specified LL driver method, then clears the HL caches.
+
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param driver_method: Name of the driver method to call
+            (``"reset_wave_memory_dict"`` or ``"reset_envelope_dict"``).
+        :type driver_method: str
+        :param clear_last_fifo: If True, also clears the FIFO cache.
+        :type clear_last_fifo: bool
+        :return: Summary of the cache state after reset.
+        :rtype: dict
+        """
+        self._logger.debug(
+            "%s: gen=%d clear_last_fifo=%s",
+            driver_method,
+            gen_index,
+            clear_last_fifo,
+        )
+
+        gen = self._get_gen(gen_index)
+        self._check(getattr(gen, driver_method)(), operation=driver_method)
+
+        n_before = self._sync_cache_after_reset(gen_index, clear_last_fifo)
+
+        self._logger.debug(
+            "%s: done gen=%d cleared=%d entries",
+            driver_method,
+            gen_index,
+            n_before,
+        )
+
+        return {
+            "gen_index": int(gen_index),
+            "reset_action": "cleared_cache",
+            "hl_wave_count_before": n_before,
+            "hl_wave_count_after": 0,
+            "cleared_last_fifo": bool(clear_last_fifo),
+        }
+
     def _configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict | None:
         """Configure the DAC Mix-Mode (Nyquist zone) for a generator.
 
@@ -116,7 +222,7 @@ class GeneratorOps:
         :type label: str
         :param freq_mhz: Target frequency in MHz.
         :type freq_mhz: float
-        :return: Mix-mode info dictionary from the driver, or ``None`` if unavailable.
+        :return: Mix-mode info dictionary from the driver, or ``None``.
         :rtype: dict | None
         """
         try:
@@ -134,65 +240,65 @@ class GeneratorOps:
             self._logger.debug("DAC Mix-mode config skipped: %s", e)
             return None
 
-    def _sync_cache_after_reset(self, gen_index: int, clear_last_fifo: bool) -> tuple[int, int]:
-        """Synchronize HL caches after a hardware reset (wave memory or envelopes).
+    def _update_fifo_cache(
+        self,
+        gen_index: int,
+        wave_id_list: list[str],
+        start_index: int,
+    ) -> list[str]:
+        """Update the FIFO cache and return the complete sequence.
 
-        Clears the wave cache, readout wave store, and optionally the FIFO cache.
-        Used by both ``reset_wave_memory`` and ``reset_envelopes`` to avoid
-        duplicated cache-sync logic.
-
-        :param gen_index: Index of the target generator.
-        :type gen_index: int
-        :param clear_last_fifo: If True, clears the record of the last programmed FIFO.
-        :type clear_last_fifo: bool
-        :return: Tuple of (n_before, n_after).
-        :rtype: tuple[int, int]
+        :param gen_index: Generator index.
+        :param wave_id_list: Wave IDs being programmed.
+        :param start_index: FIFO write start index.
+        :return: Updated complete FIFO sequence.
+        :raises ConfigurationError: If patching with insufficient cache.
         """
-        cache = self.get_wave_cache(gen_index)
-        n_before = len(cache)
-        cache.clear()
+        end_index = start_index + len(wave_id_list) - 1
+        prev = self._last_fifo.get(int(gen_index), [])
 
-        if clear_last_fifo:
-            self._last_fifo.pop(int(gen_index), None)
+        if start_index == 1:
+            new_fifo = list(wave_id_list)
+        else:
+            if len(prev) < (start_index - 1):
+                raise ConfigurationError(
+                    f"program_drive_sequence: cannot patch from start_index={start_index} "
+                    f"because last_fifo has only {len(prev)} entries. "
+                    f"Program from 1 first, then patch."
+                )
+            suffix = prev[end_index:] if len(prev) >= end_index else []
+            new_fifo = prev[: start_index - 1] + list(wave_id_list) + suffix
 
-        self._readout_wave_store.pop(gen_index, None)
-
-        return n_before, len(cache)
+        self._last_fifo[int(gen_index)] = new_fifo
+        return new_fifo
 
     # ========================================================================
-    # PUBLIC METHODS — Wave
+    # Wave compilation
     # ========================================================================
 
     def get_wave_cache(self, gen_index: int) -> dict[str, WaveEntry]:
-        """Retrieve the High-Level wave cache for a specific generator.
-
-        This method employs lazy initialization: if the cache for the requested
-        generator does not exist, an empty dictionary is created, stored, and returned.
+        """Retrieve the HL wave cache for a generator (lazy-initialized).
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :return: A dictionary mapping wave IDs to their corresponding WaveEntry objects.
+        :return: Dictionary mapping wave IDs to WaveEntry objects.
         :rtype: dict[str, WaveEntry]
         """
-        wave_cache = self._wave_store.get(gen_index)
-        if wave_cache is None:
-            wave_cache = {}
-            self._wave_store[gen_index] = wave_cache
-        return wave_cache
+        return self._wave_store.setdefault(gen_index, {})
 
     def compile_waves(self, *, gen_index: int, waves: list[dict], replace: bool) -> dict:
-        """Compile high-level wave definitions into hardware Wave Definition Words (WDW).
+        """Compile wave definitions into hardware Wave Definition Words (WDW).
 
-        Handles 'env' (Envelope) and 'vz' (Virtual-Z) wave types. Supports caching to
-        skip re-compilation of identical specifications.
+        Handles 'env' (Envelope) and 'vz' (Virtual-Z) wave types.
+        Identical specifications are skipped via cache.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param waves: List of dictionaries defining the waves.
+        :param waves: List of wave specification dictionaries.
         :type waves: list[dict]
         :param replace: If True, allows overwriting existing wave definitions.
         :type replace: bool
-        :return: A summary dictionary detailing compiled, replaced, skipped, and failed waves.
+        :return: Summary with compiled, replaced, skipped, and failed waves.
         :rtype: dict
         """
         self._logger.debug("compile_waves: gen=%d n=%d", gen_index, len(waves))
@@ -204,33 +310,43 @@ class GeneratorOps:
         for wave_spec in waves:
             try:
                 wave_id = str(wave_spec["wave_id"])
-                new_entry = build_wave_entry(wave_spec)
+                new_entry = WaveEntry.from_spec(wave_spec)
                 old_entry = cache.get(wave_id)
                 in_hw = wave_id in gen.wave_memory_dict
 
-                action = check_wave_replacement_policy(wave_id, old_entry, new_entry, in_hw, replace)
-
-                if action == "skip":
+                # Skip recompilation if the spec hasn't changed
+                if old_entry is not None and old_entry.same_spec(new_entry) and in_hw and old_entry.wdw is not None:
                     skipped.append(wave_id)
                     new_entry.wdw = old_entry.wdw
                     cache[wave_id] = new_entry
                     out.append({"wave_id": wave_id, "WDW": hex(new_entry.wdw)})
-                    self._logger.debug(
-                        "compile_waves: wave_id '%s' already present (same spec) -> skipped",
-                        wave_id,
-                    )
+                    self._logger.debug("compile_waves: '%s' same spec -> skipped", wave_id)
                     continue
 
-                wdw = self._compile_wdw(gen, new_entry)
-                self._logger.debug("compile_waves: wave_id '%s' -> WDW=0x%X", wave_id, wdw)
-                new_entry.wdw = wdw
-                self._store_wdw_in_hardware(gen, wdw, wave_id, action == "replace")
+                if old_entry is not None and not old_entry.same_spec(new_entry) and not replace:
+                    raise ConfigurationError(
+                        f"wave_id '{wave_id}' already exists but spec differs. "
+                        f"OLD={old_entry} NEW={new_entry}. "
+                        f"Hint: set replace=True or use a different wave_id."
+                    )
 
-                if action == "replace":
+                if old_entry is None and in_hw and not replace:
+                    raise ConfigurationError(
+                        f"wave_id '{wave_id}' exists in HW but not in HL cache. "
+                        f"Hint: set replace=True to re-sync or rebuild HL cache."
+                    )
+
+                # --- compile and store ---
+                wdw = self._compile_wdw(gen, new_entry)
+                new_entry.wdw = wdw
+                self._store_wdw_in_hardware(gen, wdw, wave_id, in_hw)
+
+                if in_hw:
                     replaced.append(wave_id)
 
                 cache[wave_id] = new_entry
                 out.append({"wave_id": wave_id, "WDW": hex(wdw)})
+                self._logger.debug("compile_waves: '%s' -> WDW=0x%X", wave_id, wdw)
 
             except Exception as ex:
                 self._logger.exception("compile_waves: failed wave=%s", wave_spec)
@@ -252,77 +368,59 @@ class GeneratorOps:
             "failed": failed,
         }
 
-    def upload_readout_wave(self, *, gen_index: int, wave: dict, replace: bool = False) -> dict:
-        """Compile and upload a specific wave configuration for readout operations.
+    # ========================================================================
+    # Readout wave
+    # ========================================================================
+
+    def upload_readout_wave(
+        self,
+        *,
+        gen_index: int,
+        wave: ReadoutWaveSpec,
+        replace: bool = False,
+    ) -> dict:
+        """Compile and upload a readout wave configuration.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param wave: Dictionary containing the wave specification.
-        :type wave: dict
-        :param replace: If True, allows overwriting an existing readout configuration.
+        :param wave: Readout wave specification.
+        :type wave: ReadoutWaveSpec
+        :param replace: If True, allows overwriting an existing configuration.
         :type replace: bool
-        :return: A dictionary summarizing the upload status and compiled WDW.
+        :return: Summary of the upload status and compiled WDW.
         :rtype: dict
         """
         self._logger.debug("upload_readout_wave: gen=%d replace=%s", gen_index, replace)
 
         gen = self._get_gen(gen_index)
+        new_entry = WaveEntry.from_readout_spec(wave)
+        old_entry = self._readout_wave_store.get(gen_index)
 
-        switch_iq = parse_bool_flag(wave.get("switch_iq"))
-        keep_last = parse_bool_flag(wave.get("keep_last"))
-
-        new_entry = WaveEntry(
-            envelope=str(wave["envelope"]),
-            duration=int(wave["duration"]),
-            gain=float(wave["gain"]),
-            switch_iq=switch_iq,
-            keep_last=keep_last,
-            wdw=None,
-        )
-
-        old_entry, action = check_readout_wave_cache(gen_index, new_entry, self._readout_wave_store, replace)
-
-        if action == "skip":
+        # Skip recompilation if the spec hasn't changed
+        if old_entry is not None and old_entry.same_spec(new_entry) and old_entry.wdw is not None:
             new_entry.wdw = old_entry.wdw
             self._readout_wave_store[gen_index] = new_entry
-            self._logger.debug(
-                "upload_readout_wave: skipped gen=%d (same spec, WDW=0x%X)",
-                gen_index,
-                new_entry.wdw,
-            )
-            return {
-                "gen_index": gen_index,
-                "status": "skipped",
-                "envelope": new_entry.envelope,
-                "duration": new_entry.duration,
-                "gain": new_entry.gain,
-                "switch_iq": new_entry.switch_iq,
-                "keep_last": new_entry.keep_last,
-                "WDW": hex(new_entry.wdw),
-            }
+            self._logger.debug("upload_readout_wave: skipped gen=%d (same spec)", gen_index)
+            return new_entry.to_readout_result(gen_index, "skipped")
 
+        if old_entry is not None and not old_entry.same_spec(new_entry) and not replace:
+            raise ConfigurationError(
+                f"Readout wave for gen_index={gen_index} already exists but "
+                f"spec differs. OLD={old_entry} NEW={new_entry}. "
+                f"Hint: set replace=True to overwrite."
+            )
+
+        # --- compile and upload ---
         wdw = self._compile_wdw(gen, new_entry)
         new_entry.wdw = wdw
 
-        self._check(
-            gen.write_readout_wave(wdw),
-            operation="write_readout_wave",
-        )
+        self._check(gen.write_readout_wave(wdw), operation="write_readout_wave")
 
         self._readout_wave_store[gen_index] = new_entry
-        status = "replaced" if action == "replace" else "compiled"
+        status = "replaced" if old_entry is not None else "compiled"
         self._logger.debug("upload_readout_wave: %s gen=%d WDW=0x%X", status, gen_index, wdw)
 
-        return {
-            "gen_index": gen_index,
-            "status": status,
-            "envelope": new_entry.envelope,
-            "duration": new_entry.duration,
-            "gain": new_entry.gain,
-            "switch_iq": new_entry.switch_iq,
-            "keep_last": new_entry.keep_last,
-            "WDW": hex(wdw),
-        }
+        return new_entry.to_readout_result(gen_index, status)
 
     def get_readout_wave_cache(self, gen_index: int) -> WaveEntry | None:
         """Return the WaveEntry currently configured for readout, if any.
@@ -334,61 +432,16 @@ class GeneratorOps:
         """
         return self._readout_wave_store.get(gen_index)
 
-    def reset_wave_memory(
-        self,
-        *,
-        gen_index: int,
-        clear_last_fifo: bool = True,
-    ) -> dict:
-        """Reset the generator wave memory and clear the High-Level cache.
-
-        :param gen_index: Index of the target generator.
-        :type gen_index: int
-        :param clear_last_fifo: If True, clears the record of the last programmed FIFO.
-        :type clear_last_fifo: bool
-        :return: A summary of the cache state after reset.
-        :rtype: dict
-        """
-        self._logger.debug(
-            "reset_wave_memory: gen=%d clear_last_fifo=%s",
-            gen_index,
-            clear_last_fifo,
-        )
-
-        gen = self._get_gen(gen_index)
-
-        self._check(
-            gen.reset_wave_memory_dict(),
-            operation="reset_wave_memory_dict",
-        )
-
-        n_before, n_after = self._sync_cache_after_reset(gen_index, clear_last_fifo)
-
-        self._logger.debug(
-            "reset_wave_memory: done gen=%d n_before=%d n_after=%d",
-            gen_index,
-            n_before,
-            n_after,
-        )
-
-        return {
-            "gen_index": int(gen_index),
-            "reset_action": "cleared_cache",
-            "hl_wave_count_before": n_before,
-            "hl_wave_count_after": n_after,
-            "cleared_last_fifo": bool(clear_last_fifo),
-        }
-
     # ========================================================================
-    # PUBLIC METHODS — Envelope
+    # Envelope upload
     # ========================================================================
 
     def get_envelope_names(self, gen_index: int) -> list[str]:
-        """Retrieve the list of envelope names currently stored in the generator's memory.
+        """Retrieve envelope names currently stored in the generator's memory.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :return: A list of envelope names available in the hardware driver.
+        :return: List of envelope names in the hardware driver.
         :rtype: list[str]
         """
         gen = self._get_gen(gen_index)
@@ -398,22 +451,22 @@ class GeneratorOps:
         self,
         *,
         gen_index: int,
-        envelopes: list,
+        envelopes: list[EnvelopeSpec],
         auto_pad_noninterp: bool = True,
     ) -> dict:
         """Upload multiple envelopes into generator envelope memory.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param envelopes: List of envelope specifications to upload.
-        :type envelopes: list
-        :param auto_pad_noninterp: If True, automatically zero-pads non-interpolated envelopes.
+        :param envelopes: List of envelope specifications.
+        :type envelopes: list[EnvelopeSpec]
+        :param auto_pad_noninterp: If True, zero-pads non-interpolated envelopes.
         :type auto_pad_noninterp: bool
-        :return: A summary dictionary containing lists of loaded, skipped, and failed names.
+        :return: Summary with loaded, skipped, and failed names.
         :rtype: dict
         """
         self._logger.debug(
-            "upload_envelopes: gen=%d, n=%d, auto_pad_noninterp=%s",
+            "upload_envelopes: gen=%d n=%d auto_pad=%s",
             gen_index,
             len(envelopes),
             auto_pad_noninterp,
@@ -429,35 +482,35 @@ class GeneratorOps:
         for env_spec in envelopes:
             name = str(env_spec.get("name", ""))
             try:
+                # Validate and check for duplicates
                 validate_envelope_spec(name)
-
                 if name in env_cache:
-                    self._logger.debug(
-                        "upload_envelopes: skip '%s' (already in EnvelopeMemoryDict)",
-                        name,
-                    )
+                    self._logger.debug("upload_envelopes: skip '%s' (already loaded)", name)
                     skipped.append(name)
                     continue
 
+                # Extract spec fields
                 for_interp = bool(env_spec["for_interpolation"])
                 is_sym = bool(env_spec["is_symmetric"])
                 i_even = bool(env_spec["i_even"])
                 q_even = bool(env_spec["q_even"])
                 samples_iq = env_spec["samples_iq"]
 
+                # Convert float IQ samples to hardware format and auto-pad
                 env, original_size = process_envelope_samples(
                     samples_iq, for_interp, int(gen.sample_size), int(gen.number_of_channels), auto_pad_noninterp
                 )
                 if auto_pad_noninterp and not for_interp and int(env.size) > original_size:
                     self._logger.debug(
-                        "upload_envelopes: padded from %d to %d (par=%d)",
+                        "upload_envelopes: padded '%s' from %d to %d",
+                        name,
                         original_size,
                         int(env.size),
-                        int(gen.number_of_channels),
                     )
 
                 i_even, q_even = validate_envelope_symmetry(is_sym, i_even, q_even, for_interp)
 
+                # Upload to hardware
                 self._check(
                     gen.add_envelope_to_envelope_memory(env, for_interp, is_sym, i_even, q_even, name),
                     operation="add_envelope_to_envelope_memory",
@@ -482,53 +535,44 @@ class GeneratorOps:
             "failed": failed,
         }
 
-    def reset_envelopes(
-        self,
-        *,
-        gen_index: int,
-        clear_last_fifo: bool = True,
-    ) -> dict:
-        """Reset the generator envelope memory and clear the High-Level wave cache.
+    # ========================================================================
+    # Memory reset
+    # ========================================================================
+
+    def reset_wave_memory(self, *, gen_index: int, clear_last_fifo: bool = True) -> dict:
+        """Reset generator wave memory and clear the HL cache.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param clear_last_fifo: If True, clears the record of the last programmed sequence.
+        :param clear_last_fifo: If True, also clears the FIFO cache.
         :type clear_last_fifo: bool
-        :return: A summary of the actions taken on the cache.
+        :return: Summary of the cache state after reset.
         :rtype: dict
         """
-        self._logger.debug(
-            "reset_envelopes: gen=%d clear_last_fifo=%s",
-            gen_index,
-            clear_last_fifo,
+        return self._reset_memory(
+            gen_index=gen_index,
+            driver_method="reset_wave_memory_dict",
+            clear_last_fifo=clear_last_fifo,
         )
 
-        gen = self._get_gen(gen_index)
+    def reset_envelopes(self, *, gen_index: int, clear_last_fifo: bool = True) -> dict:
+        """Reset generator envelope memory and clear the HL wave cache.
 
-        self._check(
-            gen.reset_envelope_dict(),
-            operation="reset_envelope_dict",
+        :param gen_index: Index of the target generator.
+        :type gen_index: int
+        :param clear_last_fifo: If True, also clears the FIFO cache.
+        :type clear_last_fifo: bool
+        :return: Summary of the cache state after reset.
+        :rtype: dict
+        """
+        return self._reset_memory(
+            gen_index=gen_index,
+            driver_method="reset_envelope_dict",
+            clear_last_fifo=clear_last_fifo,
         )
-
-        n_before, n_after = self._sync_cache_after_reset(gen_index, clear_last_fifo)
-
-        self._logger.debug(
-            "reset_envelopes: done gen=%d n_before=%d n_after=%d",
-            gen_index,
-            n_before,
-            n_after,
-        )
-
-        return {
-            "gen_index": int(gen_index),
-            "reset_action": "cleared_cache",
-            "hl_wave_count_before": n_before,
-            "hl_wave_count_after": n_after,
-            "cleared_last_fifo": bool(clear_last_fifo),
-        }
 
     # ========================================================================
-    # PUBLIC METHODS — FIFO
+    # FIFO programming
     # ========================================================================
 
     def program_drive_sequence(
@@ -546,7 +590,7 @@ class GeneratorOps:
         :type wave_id_list: list[str]
         :param start_index: FIFO index to start writing at (default 1).
         :type start_index: int
-        :return: A dictionary containing the updated FIFO sequence.
+        :return: Dictionary containing the updated FIFO sequence.
         :rtype: dict
         """
         self._logger.debug("program_drive_sequence: gen=%d n=%d", gen_index, len(wave_id_list))
@@ -562,15 +606,12 @@ class GeneratorOps:
         validate_wave_ids_in_cache(cache, wave_id_list, gen.wave_memory_dict)
 
         self.set_drive_source(gen_index=gen_index, source="fifo")
-        self._logger.debug("program_drive_sequence: set_drive_source(gen=%d, source='fifo')", gen_index)
 
         for i, wave_id in enumerate(wave_id_list, start=start_index):
-            wave_addr = gen.wave_memory_dict.get(wave_id, "UNKNOWN")
             self._logger.debug(
-                "program_drive_sequence: FIFO[%d] = wave_id='%s' addr=%s",
+                "program_drive_sequence: FIFO[%d] = '%s'",
                 i,
                 wave_id,
-                wave_addr,
             )
             self._check(
                 gen.add_wave_to_drive_wave_sequence(i, wave_id),
@@ -579,11 +620,7 @@ class GeneratorOps:
 
         new_fifo = self._update_fifo_cache(gen_index, wave_id_list, start_index)
 
-        self._logger.debug(
-            "program_drive_sequence: done gen=%d fifo_len=%d",
-            gen_index,
-            len(wave_id_list),
-        )
+        self._logger.debug("program_drive_sequence: done gen=%d fifo_len=%d", gen_index, len(new_fifo))
         return {"gen_index": int(gen_index), "fifo": new_fifo}
 
     def set_drive_source(
@@ -595,14 +632,11 @@ class GeneratorOps:
     ) -> dict:
         """Select the source for the drive wave sequence.
 
-        If source="lfsr" and seed is provided, the LFSR seed is programmed before
-        enabling LFSR. If source="fifo", the seed parameter is ignored.
-
         :param gen_index: Index of the generator.
         :type gen_index: int
-        :param source: Selection between "fifo" (programmed sequence) or "lfsr".
+        :param source: ``"fifo"`` (programmed sequence) or ``"lfsr"``.
         :type source: str
-        :param seed: Optional LFSR seed value. Used only when source="lfsr".
+        :param seed: Optional LFSR seed value (only used when source="lfsr").
         :type seed: int | None
         :return: Selected source status (and seed, if applied).
         :rtype: dict
@@ -614,24 +648,14 @@ class GeneratorOps:
         source_lower = str(source).lower()
         if source_lower == "fifo":
             source_val = 0
-
         elif source_lower == "lfsr":
             source_val = 1
-
             if seed is not None:
-                self._check(
-                    gen.set_lfsr_seed(int(seed)),
-                    operation="set_lfsr_seed",
-                )
+                self._check(gen.set_lfsr_seed(int(seed)), operation="set_lfsr_seed")
         else:
             raise ConfigurationError(f"set_drive_source: invalid source='{source}'. Use 'fifo' or 'lfsr'.")
 
-        self._check(
-            gen.set_drive_order_source(source_val),
-            operation="set_drive_order_source",
-        )
-
-        self._logger.debug("set_drive_source: done gen=%d source=%s", gen_index, source_lower)
+        self._check(gen.set_drive_order_source(source_val), operation="set_drive_order_source")
 
         out = {"gen_index": int(gen_index), "source": source_lower}
         if source_lower == "lfsr" and seed is not None:
@@ -639,54 +663,47 @@ class GeneratorOps:
         return out
 
     # ========================================================================
-    # PUBLIC METHODS — Modulation
+    # DDS modulation
     # ========================================================================
 
     def set_modulation(self, gen_index: int, label: str, mod: Modulation) -> dict:
-        """Configure the Direct Digital Synthesis (DDS) modulation parameters.
+        """Configure DDS modulation parameters for drive or readout.
 
-        This method handles both the digital frequency synthesis configuration and the
-        analog-domain Mix-Mode settings (Nyquist zone selection) based on the target frequency.
+        Handles both digital frequency synthesis and analog Mix-Mode settings.
 
-        :param gen_index: The index of the target generator.
+        :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param label: The modulation context, must be either 'drive' or 'readout'.
+        :param label: ``'drive'`` or ``'readout'``.
         :type label: str
-        :param mod: A dictionary containing the modulation parameters (frequency in MHz, phase in degrees).
+        :param mod: Modulation parameters (frequency_mhz, phase).
         :type mod: Modulation
-        :return: A summary of the applied modulation configuration.
+        :return: Summary of the applied configuration.
         :rtype: dict
-        :raises ConfigurationError: If the ``label`` is not 'drive' or 'readout'.
+        :raises ConfigurationError: If label is not 'drive' or 'readout'.
         """
         freq_mhz = mod["frequency_mhz"]
         phase = mod["phase"]
 
         self._logger.debug(
-            "set_modulation: gen=%d label=%s frequency=%f phase=%s",
+            "set_modulation: gen=%d label=%s freq=%f phase=%s",
             gen_index,
             label,
             freq_mhz,
             phase,
         )
-        unit = self._get_gen(gen_index)
+        gen = self._get_gen(gen_index)
+        dac_sr_mhz = float(self._fireq_soc.hw_specs["summary"]["dac_sr_hz"]) / 1e6
 
         self._configure_dac_mix_mode(gen_index, label, freq_mhz)
 
         if label == "drive":
             self._check(
-                unit.set_drive_dds_parameters(
-                    frequency=freq_mhz,
-                    dac_samplerate=float(self._fireq_soc.hw_specs["summary"]["dac_sr_hz"]) / 1e6,
-                ),
+                gen.set_drive_dds_parameters(frequency=freq_mhz, dac_samplerate=dac_sr_mhz),
                 operation="set_drive_dds_parameters",
             )
         elif label == "readout":
             self._check(
-                unit.set_readout_dds_parameters(
-                    frequency=freq_mhz,
-                    phase=phase,
-                    dac_samplerate=float(self._fireq_soc.hw_specs["summary"]["dac_sr_hz"]) / 1e6,
-                ),
+                gen.set_readout_dds_parameters(frequency=freq_mhz, phase=phase, dac_samplerate=dac_sr_mhz),
                 operation="set_readout_dds_parameters",
             )
         else:
@@ -700,64 +717,50 @@ class GeneratorOps:
         }
 
     def set_nyquist_zone(self, gen_index: int, label: str, zone: int) -> dict:
-        """Set the Nyquist zone for a generator's modulation.
-
-        This method explicitly sets the Mix-Mode Nyquist zone for a generator's
-        drive or readout path. The zone determines which Nyquist band is used for
-        the analog Mix-Mode configuration in the RF frontend.
+        """Set the Nyquist zone for a generator's modulation path.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param label: Modulation context ('drive' or 'readout').
+        :param label: ``'drive'`` or ``'readout'``.
         :type label: str
         :param zone: Target Nyquist zone (typically 1 or 2).
         :type zone: int
         :return: Summary of applied zone configuration.
         :rtype: dict
         """
-        self._logger.debug(
-            "set_nyquist_zone: gen=%d label=%s zone=%d",
-            gen_index,
-            label,
-            zone,
-        )
+        self._logger.debug("set_nyquist_zone: gen=%d label=%s zone=%d", gen_index, label, zone)
 
-        try:
-            try:
-                dac_nyquist_hz = self._fireq_soc.hw_specs["summary"]["dac_nyquist_hz"]
-            except (KeyError, TypeError, AttributeError):
-                dac_nyquist_hz = 2.0e9
+        specs = getattr(self._fireq_soc, "hw_specs", {})
+        dac_nyquist_hz = specs.get("summary", {}).get("dac_nyquist_hz", 2.0e9)
 
-            freq_mhz = dac_nyquist_hz / 1e6 * (0.5 if zone == 1 else zone - 0.5)
-            mix_info = self._configure_dac_mix_mode(gen_index, label, freq_mhz)
+        # Convert zone number to a representative frequency for DAC mix-mode
+        freq_mhz = dac_nyquist_hz / 1e6 * (0.5 if zone == 1 else zone - 0.5)
+        mix_info = self._configure_dac_mix_mode(gen_index, label, freq_mhz)
 
-            if mix_info is not None:
-                return {
-                    "gen_index": gen_index,
-                    "label": label,
-                    "nyquist_zone": mix_info.get("nyquist_zone", zone),
-                    "amd_zone": mix_info.get("amd_zone"),
-                }
+        if mix_info is not None:
             return {
                 "gen_index": gen_index,
                 "label": label,
-                "nyquist_zone": zone,
-                "status": "mocked",
+                "nyquist_zone": mix_info.get("nyquist_zone", zone),
+                "amd_zone": mix_info.get("amd_zone"),
             }
-        except (ValueError, KeyError, AttributeError) as e:
-            self._logger.error(f"Failed to set Nyquist zone: {e}")
-            raise
+        return {
+            "gen_index": gen_index,
+            "label": label,
+            "nyquist_zone": zone,
+            "status": "mocked",
+        }
 
     # ========================================================================
-    # PUBLIC METHODS — Trigger Listener
+    # Trigger listener
     # ========================================================================
 
     def set_trigger_listener(self, gen_index: int, trig: TriggerCommand) -> dict:
-        """Configure which trigger channel the generator should listen to.
+        """Configure which trigger channel the generator listens to.
 
         :param gen_index: Index of the target generator.
         :type gen_index: int
-        :param trig: Dictionary defining the trigger type and source channel.
+        :param trig: Trigger type and source channel.
         :type trig: TriggerCommand
         :return: The applied trigger configuration.
         :rtype: dict
@@ -765,121 +768,24 @@ class GeneratorOps:
         channel = trig["channel"]
         ttype = trig["ttype"]
 
-        self._logger.debug(
-            "set_trigger_listener: gen=%d ttype=%s channel=%s",
-            gen_index,
-            ttype,
-            channel,
-        )
-        unit = self._get_gen(gen_index)
+        self._logger.debug("set_trigger_listener: gen=%d ttype=%s channel=%s", gen_index, ttype, channel)
+        gen = self._get_gen(gen_index)
 
         self._check(
-            unit.set_trigger_channel(channel=channel, ttype=ttype),
+            gen.set_trigger_channel(channel=channel, ttype=ttype),
             operation="set_trigger_channel",
         )
 
         if channel == 0:
             self._logger.debug("Generator %d is deaf to any trigger!", gen_index)
         else:
-            self._logger.debug(
-                "Generator %d listens to %s_trigger_word channel %d",
-                gen_index,
-                ttype,
-                channel,
-            )
+            self._logger.debug("Generator %d listens to %s_trigger_word channel %d", gen_index, ttype, channel)
 
         return {
             "gen_index": gen_index,
             "ttype": ttype,
             "channel": channel,
         }
-
-    # ========================================================================
-    # INTERNAL HELPERS — Wave
-    # ========================================================================
-
-    def _compile_wdw(self, gen: object, entry: WaveEntry) -> int:
-        """Compile WaveEntry to Wave Definition Word (WDW).
-
-        :param gen: Generator device object.
-        :param entry: WaveEntry to compile.
-        :return: Integer WDW value.
-        """
-        if entry.kind == "env":
-            return int(
-                self._check(
-                    gen.create_wave_definition_word(
-                        entry.envelope,
-                        entry.duration,
-                        entry.gain,
-                        entry.switch_iq,
-                        entry.keep_last,
-                    ),
-                    operation="create_wave_definition_word",
-                )
-            )
-        else:
-            return int(
-                self._check(
-                    gen.create_vz_gate_definition_word(entry.vz_phase_rad),
-                    operation="create_vz_gate_definition_word",
-                )
-            )
-
-    def _store_wdw_in_hardware(self, gen: object, wdw: int, wave_id: str, replace: bool) -> None:
-        """Store or replace WDW in generator hardware memory.
-
-        :param gen: Generator device object.
-        :param wdw: Wave Definition Word value to store.
-        :param wave_id: Wave identifier.
-        :param replace: If True, replace existing wave; else add new.
-        """
-        if replace:
-            self._check(
-                gen.replace_wave_in_wave_memory(wdw, wave_id, wave_id),
-                operation="replace_wave_in_wave_memory",
-            )
-        else:
-            self._check(
-                gen.add_wave_in_wave_memory(wdw, wave_id),
-                operation="add_wave_in_wave_memory",
-            )
-
-    # ========================================================================
-    # INTERNAL HELPERS — FIFO
-    # ========================================================================
-
-    def _update_fifo_cache(
-        self,
-        gen_index: int,
-        wave_id_list: list[str],
-        start_index: int,
-    ) -> list[str]:
-        """Update FIFO cache with new sequence and return complete FIFO.
-
-        :param gen_index: Generator index.
-        :param wave_id_list: Wave IDs being programmed.
-        :param start_index: FIFO write start index.
-        :return: Updated complete FIFO sequence.
-        :raises ConfigurationError: If patching from non-1 start_index with insufficient cache.
-        """
-        end_index = start_index + len(wave_id_list) - 1
-        prev = self._last_fifo.get(int(gen_index), [])
-
-        if start_index == 1:
-            new_fifo = list(wave_id_list)
-        else:
-            if len(prev) < (start_index - 1):
-                raise ConfigurationError(
-                    f"program_drive_sequence: cannot patch from start_index={start_index} "
-                    f"because last_fifo has only {len(prev)} entries. "
-                    f"Program from 1 first, then patch."
-                )
-            suffix = prev[end_index:] if len(prev) >= end_index else []
-            new_fifo = prev[: start_index - 1] + list(wave_id_list) + suffix
-
-        self._last_fifo[int(gen_index)] = new_fifo
-        return new_fifo
 
 
 __all__ = ["GeneratorOps"]

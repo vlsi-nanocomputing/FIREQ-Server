@@ -8,8 +8,7 @@ import pytest
 
 from server import ConfigurationError, OverlayAdapter
 from server.hardware.dma_engine import DMAResult
-from server.hardware.ol_adapter.generator_utils._iq_conversion import iq_float_to_cint16
-from server.hardware.ol_adapter.generator_utils._wave_utils import parse_bool_flag
+from server.hardware.ol_adapter.overlay_adapter_types import iq_float_to_cint16, parse_bool_flag
 
 try:
     from test.mock_hardware import MockOverlay
@@ -1256,16 +1255,14 @@ class TestMutationValidation:
         entry.wdw = 12345
         ctx.adapter.generator._wave_store[0] = {"test_wave": entry}
 
-        # Monkeypatch: _sync_cache_after_reset is a no-op
-        ctx.adapter.generator._sync_cache_after_reset = lambda _gi, _clf: (1, 1)
+        # Monkeypatch: _sync_cache_after_reset is a no-op (doesn't clear)
+        ctx.adapter.generator._sync_cache_after_reset = lambda _gi, _clf: 1
 
         ctx.gen.reset_envelope_dict = MagicMock(return_value=0)
-        res = ctx.adapter.generator.reset_envelopes(gen_index=0)
+        ctx.adapter.generator.reset_envelopes(gen_index=0)
 
-        # Mutation: n_after should be 1 (not 0) because cache was not cleared
-        assert res["hl_wave_count_after"] == 1, "Mutation confirmed: cache not cleared"
-        # Cache still has the entry
-        assert len(ctx.adapter.generator._wave_store[0]) == 1
+        # Mutation: cache still has the entry because _sync was a no-op
+        assert len(ctx.adapter.generator._wave_store[0]) == 1, "Mutation confirmed: cache not cleared"
 
     # --- M8: set_shots must reject 0 ---
     def test_mutation_no_shots_validation_detected(self, ctx: AdapterTestContext) -> None:

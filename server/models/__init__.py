@@ -11,7 +11,6 @@ from ..hardware.ol_adapter.overlay_adapter_types import (
     EnvelopeSpec,
     WaveEntry,
     WaveKind,
-    same_spec,
 )
 from .config_types import (
     AcquisitionConfig,
@@ -60,7 +59,6 @@ __all__ = [
     "EnvelopeSpec",
     "WaveEntry",
     "WaveKind",
-    "same_spec",
     # Results
     "HardwareStatusResult",
     "ResetResult",
