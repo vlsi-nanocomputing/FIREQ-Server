@@ -516,7 +516,7 @@ class FIREQServer:
         """Build the server -> client handshake message."""
         return {
             "type": "handshake",
-            "protocol_version": "0.3.0",
+            "protocol_version": "0.1.0",
             "hw_summary": self.handler.status_h.hw_summary,
         }
 

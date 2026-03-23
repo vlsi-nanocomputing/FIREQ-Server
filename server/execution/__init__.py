@@ -8,6 +8,7 @@ Provides:
 """
 
 from .handlers import EnvelopeHandler, ResetHandler, StatusHandler, WaveHandler
+from .hardware_config import HardwareConfigurator
 from .message_handler import MessageHandler
 from .sweep_planning import (
     FLAG_RULES,
@@ -24,6 +25,7 @@ from .sweep_planning import (
 __all__ = [
     # Main orchestrator
     "MessageHandler",
+    "HardwareConfigurator",
     # Sweep infrastructure
     "SweepPlan",
     "plan_sweep",

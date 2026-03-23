@@ -155,6 +155,24 @@ class AcquisitionOps:
         except ValueError as e:
             self._logger.warning("ADC Mix-mode config skipped: %s", e)
 
+    def _update_timing_stats(self, t_start: float, fpga_accum: float, dma_accum: float) -> None:
+        """Update ``_last_timing_stats`` with running accumulators.
+
+        :param t_start: ``perf_counter`` value at routine start.
+        :type t_start: float
+        :param fpga_accum: Accumulated FPGA wait time in seconds.
+        :type fpga_accum: float
+        :param dma_accum: Accumulated DMA overhead time in seconds.
+        :type dma_accum: float
+        """
+        total = time.perf_counter() - t_start
+        self._last_timing_stats = {
+            "total_ms": total * 1000.0,
+            "fpga_wait_ms": fpga_accum * 1000.0,
+            "dma_overhead_ms": dma_accum * 1000.0,
+            "sw_overhead_ms": (total - fpga_accum - dma_accum) * 1000.0,
+        }
+
     def _memoize_trigger_shots(self, hw_shots: int) -> None:
         """Set trigger shot count only if it changed (avoids redundant HW writes).
 
@@ -299,6 +317,7 @@ class AcquisitionOps:
                     )
                     fpga_wait_accum += fpga_s
                     dma_overhead_accum += dma_s
+                    self._update_timing_stats(t_start_routine, fpga_wait_accum, dma_overhead_accum)
                     yield data
 
                 # --- Case 2: Multiple Hardware Acquisitions (Pipelined Chunking) ---
@@ -362,24 +381,14 @@ class AcquisitionOps:
                             inflight_buffer = None  # No more chunks
 
                         # --- Yield current chunk (DMA for next chunk already running) ---
+                        self._update_timing_stats(t_start_routine, fpga_wait_accum, dma_overhead_accum)
                         yield results
 
                         remaining = next_remaining
 
         finally:
-            # --- Performance Calculation ---
-            # Placed in finally so stats are always updated, even if caller breaks early.
-            t_end_routine = time.perf_counter()
-            total_duration = t_end_routine - t_start_routine
-            sw_overhead = total_duration - fpga_wait_accum - dma_overhead_accum
-
-            # Update statistics for telemetry (detailed breakdown)
-            self._last_timing_stats = {
-                "total_ms": total_duration * 1000.0,
-                "fpga_wait_ms": fpga_wait_accum * 1000.0,
-                "dma_overhead_ms": dma_overhead_accum * 1000.0,
-                "sw_overhead_ms": sw_overhead * 1000.0,
-            }
+            # Safety net: ensure stats are current even if caller breaks early.
+            self._update_timing_stats(t_start_routine, fpga_wait_accum, dma_overhead_accum)
 
     # ========================================================================
     # PUBLIC METHODS — Sweep Mode
