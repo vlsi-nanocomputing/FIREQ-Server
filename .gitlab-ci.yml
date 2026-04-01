@@ -2,26 +2,40 @@ stages:
   - code-style
   - test
 
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  key:
+    files:
+      # Invalidate the cache if requirements changes
+      - requirements.txt
+  paths:
+    # pip download cache folder
+    - .cache/pip/
+
 style:
   stage: code-style
   tags: ["python3.10"]
   script:
     - python3.10 -m venv venv
     - source venv/bin/activate
-    - pip3.10 install -r requirements.txt
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
     - python -m black --check .
     - python -m ruff check .
-  artifacts:
-    paths:
-      - venv/
-    expire_in: 1 hour
-    when: always
 
 pytest:
   stage: test
   tags: ["python3.10"]
-  dependencies:
-    - style
   script:
+    - python3.10 -m venv venv
     - source venv/bin/activate
-    - pytest
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pytest --junitxml=report.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+    expire_in: 7 days
