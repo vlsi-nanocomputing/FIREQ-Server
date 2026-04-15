@@ -24,18 +24,12 @@ style:
     - pip install -r requirements.txt
     - python -m black --check .
     - python -m ruff check .
-  artifacts:
-    paths:
-      - venv/
-    expire_in: 1 hour
-    when: always
 
 pytest:
   stage: test
   tags: ["python3.10"]
-  dependencies:
-    - style
   script:
+    - python3.10 -m venv venv
     - source venv/bin/activate
     - python -m pip install --upgrade pip
     - pip install -r requirements.txt
