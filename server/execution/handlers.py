@@ -58,6 +58,14 @@ class StatusHandler:
         """
         return self._hw_summary.get("num_acquisitions", 0)
 
+    def get_rf_mapping(self) -> dict:
+        """Return RF topology mapping for generators/acquisitions.
+
+        :return: Dict containing generator and acquisition RF mappings.
+        :rtype: dict
+        """
+        return self.adapter.rf_mapping()
+
     def get_all_generators_status(self) -> list[dict]:
         """Get status for all generators.
 
@@ -120,21 +128,16 @@ class ResetHandler:
         self.adapter = adapter
         self.logger = logger or logging.getLogger(__name__)
 
-    def reset_waves(self, gen_index: int, preserve_wave_specs: bool = True) -> ResetResult:
+    def reset_waves(self, gen_index: int) -> ResetResult:
         """Reset wave memory for a generator.
 
         :param gen_index: Target generator index.
         :type gen_index: int
-        :param preserve_wave_specs: If True, keeps definitions but invalidates compiled WDWs.
-        :type preserve_wave_specs: bool
         :return: Outcome of the wave reset.
         :rtype: ResetResult
         """
         try:
-            res = self.adapter.generator.reset_wave_memory(
-                gen_index=gen_index,
-                preserve_wave_specs=preserve_wave_specs,
-            )
+            res = self.adapter.generator.reset_wave_memory(gen_index=gen_index)
             return ResetResult(ok=True, gen_index=gen_index, action="wave_reset", details=res)
         except Exception as e:
             return ResetResult(ok=False, gen_index=gen_index, action="wave_reset", details={}, error=str(e))
@@ -153,11 +156,9 @@ class ResetHandler:
         except Exception as e:
             return ResetResult(ok=False, gen_index=gen_index, action="envelope_reset", details={}, error=str(e))
 
-    def reset_all_generators(self, preserve_wave_specs: bool = False) -> list[dict]:
+    def reset_all_generators(self) -> list[dict]:
         """Reset waves and envelopes for ALL generators.
 
-        :param preserve_wave_specs: Whether to preserve wave specs.
-        :type preserve_wave_specs: bool
         :return: List of results (one per generator).
         :rtype: list[dict]
         """
@@ -165,7 +166,7 @@ class ResetHandler:
         summary = self.adapter.summary()
         num_gens = summary.get("num_generators", 0)
         for gen_idx in range(num_gens):
-            wave_res = self.reset_waves(gen_idx, preserve_wave_specs=preserve_wave_specs)
+            wave_res = self.reset_waves(gen_idx)
             env_res = self.reset_envelopes(gen_idx)
             results.append(
                 {

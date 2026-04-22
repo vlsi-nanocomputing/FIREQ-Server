@@ -6,7 +6,7 @@ fireq_utils.server.hardware.ol_adapter
 Purpose
 -------
 This package implements a *server-facing adapter layer* on top of the low-level
-FIREQ hardware drivers exposed by `FIREQ_LL_API.overlay_driver.FIREQ_SoC`.
+FIREQ hardware drivers exposed by ``FIREQ_LL_API.FIREQ_SoC``.
 
 It applies the Adapter pattern to:
 - expose an API for experiment execution,
@@ -15,11 +15,12 @@ It applies the Adapter pattern to:
 
 Architecture
 ------------
-The OverlayAdapter uses composition to integrate four operation classes:
-- GeneratorOps: Wave management, envelope upload, FIFO programming
+The OverlayAdapter uses flat operation classes:
+- GeneratorOps: Wave management, envelope upload, FIFO, modulation, triggering
 - TriggerGeneratorOps: Trigger generator configuration and execution
-- AcquisitionOps: DMA-based acquisition with chunking and sweep optimization
-- ExperimentOps: High-level multi-acquisition orchestration
+- AcquisitionOps: DMA-based acquisition with chunking, sweep, modulation, timing
+
+Each operation class owns its own state. No shared mutable containers.
 
 Key design principles
 ---------------------

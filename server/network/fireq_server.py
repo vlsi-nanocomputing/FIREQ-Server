@@ -9,7 +9,7 @@ Architecture: 3 threads communicate via queue_in/queue_out.
 Protocol:
 - Requests: 4-byte big-endian length prefix + UTF-8 JSON payload.
 - Responses: JSON messages (4-byte length) and streamed binary data (acquistion frames + timing).
-  For run_experiment/run_sweep: StreamHeader (JSON) → BinaryChunk (frames) → StreamTiming (JSON).
+  For run_experiment/run_sweep: StreamHeader (JSON) -> BinaryChunk (frames) -> StreamTiming (JSON).
 """
 import json
 import logging
@@ -111,6 +111,7 @@ class FIREQServer:
         self._abort_in_progress = Event()
         self._sweep_active = Event()  # Tracks active sweep for cleanup sync
         self._sender_dead = Event()  # Signals sender thread death
+        self._cleanup_done = Event()  # Main-thread cleanup acknowledgment
 
         self._server_socket: socket.socket | None = None
         self._client_socket: socket.socket | None = None
@@ -161,6 +162,10 @@ class FIREQServer:
             try:
                 msg = self.queue_in.get(timeout=1.0)
             except Empty:
+                if self._stop_event.is_set():
+                    self._do_hardware_cleanup("Client disconnect")
+                    self._stop_event.clear()
+                    self._cleanup_done.set()
                 continue
 
             if msg is None:
@@ -242,13 +247,49 @@ class FIREQServer:
                     )
                 )
 
+            elif cmd == "rf_mapping":
+                self.queue_out.put(
+                    self._build_response(
+                        cmd,
+                        session_id,
+                        ok=True,
+                        rf_mapping=self.handler.status_h.get_rf_mapping(),
+                    )
+                )
+
+            elif cmd == "calibrate_adc":
+                try:
+                    acq_index = int(msg["acq_index"])
+                    gen_index = int(msg["gen_index"])
+                    label = str(msg["label"])
+                    freq_mhz = float(msg["freq_mhz"])
+                except KeyError as e:
+                    raise ValueError(f"Missing required field for calibrate_adc: {e.args[0]}") from e
+
+                self.handler.adapter.calibrate_adc(
+                    acq_index=acq_index,
+                    gen_index=gen_index,
+                    label=label,
+                    freq_mhz=freq_mhz,
+                )
+                self.queue_out.put(
+                    self._build_response(
+                        cmd,
+                        session_id,
+                        ok=True,
+                        acq_index=acq_index,
+                        gen_index=gen_index,
+                        label=label,
+                        freq_mhz=freq_mhz,
+                    )
+                )
+
             elif cmd == "logout":
                 self._handle_logout()
 
             elif cmd == "reset_waves":
                 gen_index = msg.get("gen_index", 0)
-                preserve_wave_specs = msg.get("preserve_wave_specs", True)
-                result = self.handler.reset_h.reset_waves(gen_index, preserve_wave_specs)
+                result = self.handler.reset_h.reset_waves(gen_index)
                 self.queue_out.put(self._build_response(cmd, session_id, result))
 
             elif cmd == "reset_envelopes":
@@ -257,8 +298,7 @@ class FIREQServer:
                 self.queue_out.put(self._build_response(cmd, session_id, result))
 
             elif cmd == "reset_all":
-                preserve_wave_specs = msg.get("preserve_wave_specs", False)
-                results = self.handler.reset_h.reset_all_generators(preserve_wave_specs)
+                results = self.handler.reset_h.reset_all_generators()
                 self.queue_out.put(self._build_response(cmd, session_id, ok=True, results=results))
 
             else:
@@ -345,13 +385,20 @@ class FIREQServer:
         finally:
             self.logger.info("Client teardown...")
             self._stop_event.set()
-            self._do_hardware_cleanup("Cleanup", wait_for_sweep=True)
 
+            # Drain stale messages from disconnected client
             while not self.queue_in.empty():
                 try:
                     self.queue_in.get_nowait()
                 except Empty:
                     break
+
+            # Wait for main loop to finish current message + do cleanup
+            self._cleanup_done.clear()
+            cleanup_timeout = SWEEP_WAIT_TIMEOUT_SECONDS + 5.0
+            if not self._cleanup_done.wait(timeout=cleanup_timeout):
+                self.logger.warning("Cleanup acknowledgment timeout (%.1fs)", cleanup_timeout)
+
             self.queue_out.clear()
 
             try:
@@ -469,7 +516,7 @@ class FIREQServer:
         """Build the server -> client handshake message."""
         return {
             "type": "handshake",
-            "protocol_version": "0.3.0",
+            "protocol_version": "0.1.0",
             "hw_summary": self.handler.status_h.hw_summary,
         }
 
@@ -515,7 +562,7 @@ class FIREQServer:
         """Reset server-side caches and notify the client."""
         self.logger.info("Logout requested, resetting caches...")
         try:
-            results = self.handler.reset_h.reset_all_generators(preserve_wave_specs=False)
+            results = self.handler.reset_h.reset_all_generators()
             for r in results:
                 if not r["waves"]["ok"]:
                     self.logger.warning(f"Wave reset failed for gen {r['gen_index']}")
@@ -584,29 +631,28 @@ class FIREQServer:
             payload = json.dumps(msg).encode("utf-8")
         sock.sendall(len(payload).to_bytes(4, "big") + payload)
 
-    def _send_binary_frame(self, sock: socket.socket, acq_ip_index: int, data: np.ndarray) -> None:
+    def _send_binary_frame(self, sock: socket.socket, acq_index: int, data: np.ndarray) -> None:
         """Send binary frame: [4B AcqIP][data].
 
         Client computes data length and valid_words from request params + acq_ip_metadata.
 
         :param sock: Connected socket.
         :type sock: socket.socket
-        :param acq_ip_index: Acquisition index.
-        :type acq_ip_index: int
+        :param acq_index: Acquisition IP index.
+        :type acq_index: int
         :param data: Numpy array to transmit.
         :type data: np.ndarray
         """
         t_start = time.perf_counter()
         self.logger.debug(
-            f"Sending binary frame: AcqIp={acq_ip_index}, size={data.nbytes}B, "
-            f"dtype={data.dtype}, shape={data.shape}"
+            f"Sending binary frame: AcqIp={acq_index}, size={data.nbytes}B, " f"dtype={data.dtype}, shape={data.shape}"
         )
-        sock.sendall(struct.pack(">I", acq_ip_index))
+        sock.sendall(struct.pack(">I", acq_index))
         sock.sendall(memoryview(data))
         elapsed_ms = (time.perf_counter() - t_start) * 1000
         data_bytes_len = data.nbytes
         if elapsed_ms > 50:
-            self.logger.warning(f"Slow send: AcqIp {acq_ip_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
+            self.logger.warning(f"Slow send: AcqIp {acq_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
 
     def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
         """Send timing trailer (2x float32 big-endian).
@@ -737,12 +783,15 @@ class FIREQServer:
         :rtype: StreamTiming | None
         """
         last_timing = None
-        for item in items_generator:
-            if isinstance(item, StreamTiming):
-                last_timing = item
-                continue
-            if not self._safe_queue_put(item):
-                break
+        try:
+            for item in items_generator:
+                if isinstance(item, StreamTiming):
+                    last_timing = item
+                    continue
+                if not self._safe_queue_put(item):
+                    break
+        finally:
+            items_generator.close()
         return last_timing
 
     def _handle_command_error(self, cmd: str, session_id: str, exc: Exception) -> None:
@@ -764,23 +813,14 @@ class FIREQServer:
             self.logger.exception(f"Command '{cmd}' failed")
         self.queue_out.put(self._build_response(cmd, session_id, ok=False, error=str(exc), error_type=error_type))
 
-    def _do_hardware_cleanup(self, context: str, wait_for_sweep: bool = False) -> None:
+    def _do_hardware_cleanup(self, context: str) -> None:
         """Best-effort hardware cleanup to avoid stale DMA/acquisition state.
 
-        :param context: Description for log messages (e.g., "Cleanup", "Pre-sweep").
-        :type context: str
-        :param wait_for_sweep: If True, wait for active sweep to finish first.
-        :type wait_for_sweep: bool
-        """
-        if wait_for_sweep and self._sweep_active.is_set():
-            self.logger.info("Waiting for active sweep...")
-            elapsed = 0.0
-            while self._sweep_active.is_set() and elapsed < SWEEP_WAIT_TIMEOUT_SECONDS:
-                time.sleep(0.1)
-                elapsed += 0.1
-            if self._sweep_active.is_set():
-                self.logger.warning(f"Sweep timeout ({elapsed:.1f}s), proceeding anyway")
+        Must be called from the main thread only — serialized with hardware ops.
 
+        :param context: Description for log messages (e.g., "Client disconnect").
+        :type context: str
+        """
         try:
             self.handler.cleanup()
         except Exception as e:

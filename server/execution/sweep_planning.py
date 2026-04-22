@@ -38,35 +38,6 @@ SweepFlagsDict = dict[str, dict[int, set[str]] | set[str]]
 # ====================================================
 
 
-class ValueTracker:
-    """Tracks last-applied values to skip redundant hardware calls.
-
-    :ivar _cache: Internal cache mapping keys to their last-applied values.
-    :vartype _cache: dict[tuple, object]
-    """
-
-    __slots__ = ("_cache",)
-
-    def __init__(self) -> None:
-        """Initialize an empty value tracker."""
-        self._cache: dict[tuple, object] = {}
-
-    def changed(self, key: tuple, new_value: object) -> bool:
-        """Check if value changed and update cache.
-
-        :param key: Unique identifier for the tracked value (e.g., ("gen", 0, "drive_mod")).
-        :type key: tuple
-        :param new_value: Current value to compare against cached value.
-        :type new_value: object
-        :return: True if value changed (or first call for this key), False otherwise.
-        :rtype: bool
-        """
-        if key not in self._cache or self._cache[key] != new_value:
-            self._cache[key] = new_value
-            return True
-        return False
-
-
 @dataclass
 class SweepPlan:
     """Sweep execution plan with precomputed metadata."""
@@ -425,84 +396,6 @@ def generate_sweep_points(
 
 
 # ====================================================
-#        FAST-PATH HELPERS
-# ====================================================
-
-
-def extract_mod_value(cfg: dict) -> tuple[float, float]:
-    """Extract (frequency_mhz, phase) tuple for comparison.
-
-    :param cfg: Configuration dict containing frequency_mhz and optional phase.
-    :type cfg: dict
-    :return: Tuple of (frequency_mhz, phase).
-    :rtype: tuple[float, float]
-    """
-    return (float(cfg["frequency_mhz"]), float(cfg.get("phase", 0.0)))
-
-
-def make_hashable(obj: object) -> object:
-    """Convert nested structure to hashable representation.
-
-    :param obj: Any object (dict, list, or scalar).
-    :type obj: object
-    :return: Hashable representation (tuples for containers, scalars unchanged).
-    :rtype: object
-    """
-    if isinstance(obj, dict):
-        return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
-    if isinstance(obj, list):
-        return tuple(make_hashable(item) for item in obj)
-    return obj
-
-
-def apply_gen_type(adapter: object, gi: int, cfg: dict, flags: set, ttype: str, tracker: ValueTracker) -> None:
-    """Apply generator updates for drive or readout, skipping unchanged values.
-
-    :param adapter: Hardware adapter.
-    :type adapter: object
-    :param gi: Generator index.
-    :type gi: int
-    :param cfg: Configuration dict for this type (drive or readout section).
-    :type cfg: dict
-    :param flags: Set of flags for this type.
-    :type flags: set
-    :param ttype: Type string ("drive" or "readout").
-    :type ttype: str
-    :param tracker: Value tracker for change detection.
-    :type tracker: ValueTracker
-    """
-    prefix = f"{ttype}_"
-
-    if f"{prefix}mod" in flags and "frequency_mhz" in cfg:
-        val = extract_mod_value(cfg)
-        if tracker.changed(("gen", gi, f"{prefix}mod"), val):
-            adapter.generator.set_modulation(gi, ttype, {"frequency_mhz": val[0], "phase": val[1]})
-
-    if f"{prefix}nyquist" in flags and "nyquist_zone" in cfg:
-        val = int(cfg["nyquist_zone"])
-        if tracker.changed(("gen", gi, f"{prefix}nyquist"), val):
-            adapter.generator.set_nyquist_zone(gi, ttype, val)
-
-    if f"{prefix}channel" in flags and "channel" in cfg:
-        val = int(cfg["channel"])
-        if tracker.changed(("gen", gi, f"{prefix}channel"), val):
-            adapter.generator.set_trigger_listener(gi, {"ttype": ttype, "channel": val})
-
-    # Type-specific final action
-    if ttype == "drive" and "drive_fifo" in flags and "fifo" in cfg:
-        val = (tuple(cfg["fifo"]), cfg.get("fifo_start_index", 1))
-        if tracker.changed(("gen", gi, "drive_fifo"), val):
-            adapter.generator.program_drive_sequence(gen_index=gi, wave_id_list=cfg["fifo"], start_index=val[1])
-
-    elif ttype == "readout" and "readout_wave" in flags and "wave" in cfg:
-        # Deep conversion to capture nested values (config is mutated in-place by apply_point)
-        wave_cfg = cfg["wave"]
-        val = make_hashable(wave_cfg)
-        if tracker.changed(("gen", gi, "readout_wave"), val):
-            adapter.generator.upload_readout_wave(gen_index=gi, wave=wave_cfg, replace=True)
-
-
-# ====================================================
 #        SWEEP PLANNING
 # ====================================================
 
@@ -589,7 +482,6 @@ __all__ = [
     "SimplePath",
     "SweepFlagsDict",
     # Classes
-    "ValueTracker",
     "SweepPlan",
     # Flag computation
     "FLAG_RULES",
@@ -603,8 +495,4 @@ __all__ = [
     # Sweep planning
     "plan_sweep",
     "apply_sweep_point",
-    # Fast-path helpers
-    "apply_gen_type",
-    "extract_mod_value",
-    "make_hashable",
 ]

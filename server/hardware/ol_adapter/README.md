@@ -1,47 +1,30 @@
 # Overlay Adapter
 
-Server-oriented adapter layer on top of the low-level FIREQ hardware drivers (`FIREQ_SoC`).
+Server-oriented adapter layer on top of the low-level FIREQ hardware drivers.
 
 ## Architecture
 
-`OverlayAdapter`integrates four operation classes sharing a common `AdapterContext` for dependency injection.
+`OverlayAdapter` composes three flat operation classes, each receiving the
+overlay driver directly.
 
-```
+```text
 OverlayAdapter
- ├── TriggerGeneratorOps – trigger generator: shots, duration, delays, experiment start
- ├── GeneratorOps        – wave/envelope management, FIFO, modulation  (generator/)
- ├── AcquisitionOps      – DMA-based multi-acquisition ip acquisition, sweep mode (acquisition/)
- └── ExperimentOps       – high-level sweep orchestration
+├── GeneratorOps        - wave/envelope management, FIFO, modulation, triggering
+├── TriggerGeneratorOps - trigger generator: shots, duration, delays, experiment start
+└── AcquisitionOps      - DMA-based multi-acquisition, sweep mode, timing
 ```
 
-`GeneratorOps` and `AcquisitionOps` are facades that delegate to specialized `*Ops`(Operations) classes inside their respective subpackages.
+Each ops class owns its own mutable state (wave caches, FIFO tracking, sweep
+flags). Shared low-level error translation lives in `_errors.py`.
 
 ## Files
 
 | File | Class / Role | Responsibility |
 |---|---|---|
-| `overlay_adapter.py` | `OverlayAdapter` | Main entry point. Composes operation classes, exposes proxy access to the low-level driver, and provides timing statistics. |
-| `overlay_adapter_types.py` | `EnvelopeSpec`, `WaveEntry`, `same_spec` | Data structures for envelope specs, wave cache entries, and wave equivalence checks. |
-| `cache.py` | `CacheContainers`, `AdapterContext` | Shared mutable state (wave store, FIFO tracking, sweep flags) and the context dataclass injected into every operation class. |
-| `low_level_access.py` | `LowLevelAccess` | Safe access to generator/acquisition/trigger drivers with bounds checking and centralized error handling. |
-| `errors.py` | `handle_error_result`, `ERROR_HINTS` | Translates low-level integer return codes into Python exceptions with hints. |
-| `trigger_generator_ops.py` | `TriggerGeneratorOps` | Trigger generator control: shot count, experiment duration, drive/readout delay programming, experiment start. |
-| `experiment_ops.py` | `ExperimentOps` | High-level sweep coordination: prepare and finalize sweep-mode experiments. |
-| `__init__.py` | — | Exports `OverlayAdapter` as the package's public API. |
-
-## Subpackages
-
-| Folder | Facade | Purpose |
-|--------|--------|---------|
-| [`generator/`](generator/README.md) | `GeneratorOps` | Wave compilation, envelope upload, FIFO sequencing, modulation, trigger channel assignment. |
-| [`acquisition/`](acquisition/README.md) | `AcquisitionOps` | DMA acquisition orchestration, sweep optimization, modulation, trigger channel assignment, timing configuration. |
-
-## Note on `trigger_ops.py` naming
-
-Two subpackage files share the name `trigger_ops.py` — this is intentional, as they handle which trigger channel the Acquisition IP and Generator IP should listen to, respectively. The root-level file `trigger_generator_ops.py` controls the Trigger Generator IP itself.
-
-| Location | Class | Controls |
-|----------|-------|----------|
-| `ol_adapter/trigger_generator_ops.py` | `TriggerGeneratorOps` | The **Trigger Generator** IP (shots, duration, delays, experiment start) |
-| `acquisition/trigger_ops.py` | `TriggerOps` | Which trigger channel each **acquisition unit** listens to |
-| `generator/trigger_ops.py` | `TriggerOps` | Which trigger channel each **generator** listens to |
+| `overlay_adapter.py` | `OverlayAdapter` | Main entry point. Composes the operation classes and provides explicit delegations to the overlay driver for `summary()`, `rf_mapping()`, and `hw_specs`. |
+| `overlay_adapter_types.py` | `EnvelopeSpec`, `WaveEntry`, `WaveKind`, `same_spec` | Data structures for envelope specs, wave cache entries, wave kinds, and wave equivalence checks. |
+| `_errors.py` | `check_driver_result`, `ERROR_HINTS` | Translates low-level integer return codes into Python exceptions with diagnostic hints. Shared by all ops classes. |
+| `_gen_ops.py` | `GeneratorOps` | Wave compilation, envelope upload, readout-wave config, FIFO sequencing, DDS modulation, Nyquist zone, trigger-channel assignment, and generator-side reset behavior. |
+| `_acq_ops.py` | `AcquisitionOps` | DMA acquisition orchestration with automatic chunking, sweep-mode fast path, DDS modulation, trigger-channel assignment, timing configuration, and timing-stat collection. |
+| `_trigger_gen_ops.py` | `TriggerGeneratorOps` | Trigger-generator control: shot count, experiment duration, drive/readout delay programming, and experiment start. |
+| `__init__.py` | `OverlayAdapter` | Re-exports the package public API. |

@@ -1,10 +1,13 @@
 """Low-level driver for the FIREQ acquisition IP."""
 
+import logging
 from typing import Any
 
 from ._utils import _compute_pinc_poff, _FIREQDriver, _set_bit, _set_bits
 
 __all__ = ["AcquisitionDriver"]
+
+logger = logging.getLogger(__name__)
 
 
 class AcquisitionDriver(_FIREQDriver):
@@ -89,7 +92,7 @@ class AcquisitionDriver(_FIREQDriver):
         :type frequency: float
         :param phase: Phase offset of the demodulation signal in RADs
         :type phase: float
-        :param adc_samplerate: Sampling frequency of the ADC in MHz
+        :param adc_samplerate: Sampling frequency of the ADC in MSps
         :type adc_samplerate: float
         :return: Error code (0 on success)
         :rtype: int
@@ -99,7 +102,7 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency * 1000000, phase, adc_samplerate, self.phase_depth)
+        phase_parameters = _compute_pinc_poff(frequency, phase, adc_samplerate, self.phase_depth)
 
         # masking off the LSB of the phases. This is done in an effort to keep the generation and acquisition in phase.
         # Generation is done (at the DAC) at a frequency that is double the one used for the ADC. As a result, the phase
@@ -111,6 +114,13 @@ class AcquisitionDriver(_FIREQDriver):
 
         # write registers
         self._set_readout_pinc_poff(pinc, poff)
+
+        logger.debug(
+            "acquistion, set_dds_parameters, got the following for frequency: %s, phase: %s, " "adc_samplerate: %s",
+            frequency,
+            phase,
+            adc_samplerate,
+        )
 
         return 0
 
@@ -142,6 +152,10 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
         self._axi_lite_interface_mmio.write(0, control_register)
 
+        logger.debug("acquistion, trigger_manually, triggered manually")
+
+        return 0
+
     def set_acquisition_duration(self, duration: int) -> int:
         """Set the acquisition duration.
 
@@ -157,6 +171,9 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
+
+        logger.debug(f"acquistion, set_acquisition_duration, got the following for duration: {duration}")
+
         return 0
 
     def set_trigger_channel(self, channel: int) -> int:
@@ -175,6 +192,9 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
+
+        logger.debug(f"acquistion, set_trigger_channel, got the following for channel: {channel}")
+
         return 0
 
     def set_time_of_flight(self, time_of_flight: int) -> int:
@@ -197,6 +217,9 @@ class AcquisitionDriver(_FIREQDriver):
             time_of_flight - 1,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
+
+        logger.debug(f"acquistion, set_trigger_channel, got the following for time_of_flight: {time_of_flight}")
+
         return 0
 
     def set_decimated_output_type(self, output_type: str) -> int:
@@ -223,4 +246,7 @@ class AcquisitionDriver(_FIREQDriver):
             output_mode_bit,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
+
+        logger.debug(f"acquistion, set_decimated_output_type, got the following for output_type: {output_type}")
+
         return 0

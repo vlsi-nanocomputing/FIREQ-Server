@@ -242,11 +242,13 @@ def _get_bits(value: int, start: int, length: int) -> int:
 def _compute_pinc_poff(frequency: float, phase: float, samplerate: float, phase_depth: int) -> tuple[int, int]:
     """Compute the phase increment and phase offset.
 
-    :param frequency: Frequency in Hz
+    Frequency units must be the same for both the frequency and samplerate inputs, but the actual unit is not important.
+
+    :param frequency: Wanted frequency of the DDS
     :type frequency: float
     :param phase: Phase in radians
     :type phase: float
-    :param samplerate: Sample rate in samples per second
+    :param samplerate: Sampling rate of the DDS
     :type samplerate: float
     :param phase_depth: Depth of the phase registers
     :type phase_depth: int

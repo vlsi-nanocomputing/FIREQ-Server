@@ -6,11 +6,10 @@ This package provides:
 - DMAEngine: High-level DMA acquisition manager
 - Data structures: WaveEntry, Modulation, TriggerCommand, EnvelopeSpec
 
-The OverlayAdapter composes four operation classes:
-- GeneratorOps: Wave management and generator modulation/triggering
-- TriggerGeneratorOps: Trigger generator control
-- AcquisitionOps: DMA-based multi-acquisition with chunking
-- ExperimentOps: High-level experiment orchestration
+The OverlayAdapter composes three flat operation classes:
+- GeneratorOps: Wave management, envelope upload, FIFO, modulation, triggering
+- TriggerGeneratorOps: Trigger generator control (shots, duration, delays)
+- AcquisitionOps: DMA-based multi-acquisition with chunking and sweep mode
 """
 
 from ..models.config_types import Modulation, TriggerCommand
@@ -21,7 +20,6 @@ from .ol_adapter.overlay_adapter_types import EnvelopeSpec, WaveEntry
 __all__ = [
     "OverlayAdapter",
     "DMAEngine",
-    # Re-export from types for backwards compatibility
     "WaveEntry",
     "Modulation",
     "TriggerCommand",
