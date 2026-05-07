@@ -1,4 +1,7 @@
-"""Public API exports for the FIREQ low-level drivers."""
+"""Public API exports for the FIREQ low-level drivers.
+All drivers in this collection work with low level units, such as clock cycles, number of samples,
+frequency as ratio to sampling rate and phases as ratio to pi.
+"""
 
 from .acquisition_driver import AcquisitionDriver
 from .fireq_soc import FIREQSoC, load_fireq

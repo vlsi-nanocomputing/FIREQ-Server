@@ -85,64 +85,58 @@ class AcquisitionDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def set_acquisition_dds_parameters(self, frequency: float, phase: float, adc_samplerate: float) -> int:
-        """Set acquisition demodulation parameters.
+    def set_demodulation_frequency(self, frequency: float):
+        """Set acquisition demodulation frequency.
 
-        :param frequency: Frequency of the demodulation signal in MHz
+        :param frequency: Frequency of the demodulation signal, normalized to the ADC sampling frequency
         :type frequency: float
-        :param phase: Phase offset of the demodulation signal in RADs
-        :type phase: float
-        :param adc_samplerate: Sampling frequency of the ADC in MSps
-        :type adc_samplerate: float
         :return: Error code (0 on success)
         :rtype: int
         """
-        if frequency < 0:
-            print("input parameters out of range")
-            return -3
+        normalized_frequency = frequency % 1.0
 
-        # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency, phase, adc_samplerate, self.phase_depth)
+        # compute the phase increment
+        pinc = int(2**self.phase_depth * normalized_frequency)
 
         # masking off the LSB of the phases. This is done in an effort to keep the generation and acquisition in phase.
         # Generation is done (at the DAC) at a frequency that is double the one used for the ADC. As a result, the phase
         # increment for the acquisition (at equal modulation and demodulation frequencies) is equal to double the one
         # of the generation. Masking the LSB accounts for the truncation done in the generation portion, and keeps the
         # two systems in sync.
-        pinc = phase_parameters[0] & (2**self.phase_depth - 2)
-        poff = phase_parameters[1] & (2**self.phase_depth - 2)
+        pinc = pinc & (2**self.phase_depth - 2)
 
-        # write registers
-        self._set_readout_pinc_poff(pinc, poff)
+        # write inc LOW
+        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
+        # write inc HIGH
+        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
-        logger.debug(
-            "acquistion, set_dds_parameters, got the following for frequency: %s, phase: %s, " "adc_samplerate: %s",
-            frequency,
-            phase,
-            adc_samplerate,
-        )
+        # log with deferred formatting string arguments to avoid eager evaluation
+        logger.debug("set frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
-    def _set_readout_pinc_poff(self, inc: int, off: int) -> int:
-        """Set readout increment and offset values.
+    def set_demodulation_initial_phase(self, phase: float):
+        """Set acquisition demodulation frequency.
 
-        :param inc: Increment value for readout
-        :type inc: int
-        :param off: Offset value for readout
-        :type off: int
+        :param phase: Phase offset of the demodulation signal, normalized to pi
+        :type frequency: float
         :return: Error code (0 on success)
         :rtype: int
         """
-        # write inc LOW
-        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, inc & 0xFFFFFFFF)
-        # write inc HIGH
-        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, inc >> 32)
 
-        # write off LOW
-        self._axi_lite_interface_mmio.write(self._readout_off_l * 4, off & 0xFFFFFFFF)
-        # write off HIGH
-        self._axi_lite_interface_mmio.write(self._readout_off_h * 4, off >> 32)
+        # get poff and pinc
+        phase_parameters = _compute_pinc_poff(0, phase, self._adc_samplerate, self.phase_depth)
+
+        # TODO: check that this is ok even when moving away from the first nyquist zone.
+        #       I am unsure if I have to invert the phase or not when in the second nyquist zone.
+        poff = phase_parameters[1] & (2**self.phase_depth - 2)
+
+        # write inc LOW
+        self._axi_lite_interface_mmio.write(self._readout_off_l * 4, poff & 0xFFFFFFFF)
+        # write inc HIGH
+        self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
+
+        logger.debug("set initial phase to %s and phase offset to %s", phase, poff)
 
         return 0
 
@@ -152,27 +146,28 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
         self._axi_lite_interface_mmio.write(0, control_register)
 
-        logger.debug("acquistion, trigger_manually, triggered manually")
+        logger.debug("acquistion triggered manually")
 
         return 0
 
     def set_acquisition_duration(self, duration: int) -> int:
         """Set the acquisition duration.
 
-        :param duration: Duration in clock cycles
+        :param duration: Duration in fabric clock cycles
         :type duration: int
         :return: Error code (0 on success)
         :rtype: int
         """
         if duration < 1 or duration > self.maximum_duration:
             print("acquisition duration is out of range")
+            logger.error(f"acquistion duration: {duration} out of range")
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug(f"acquistion, set_acquisition_duration, got the following for duration: {duration}")
+        logger.debug("set the acquisition duration to %s fabric clock cycles", duration)
 
         return 0
 
@@ -185,7 +180,7 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 0 or channel > self.trigger_channels:
-            print("channel choice is out of range")
+            logger.error(f"channel choice: {channel} out of range")
             return -3
 
         channel_mask = (1 << channel) >> 1
@@ -193,20 +188,20 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug(f"acquistion, set_trigger_channel, got the following for channel: {channel}")
+        logger.debug("set the trigger channel to %s", channel)
 
         return 0
 
     def set_time_of_flight(self, time_of_flight: int) -> int:
         """Set time of flight.
 
-        :param time_of_flight: Time of flight in clock cycles
+        :param time_of_flight: Time of flight in fabric clock cycles
         :type time_of_flight: int
         :return: Error code (0 on success)
         :rtype: int
         """
         if time_of_flight < 1 or time_of_flight > self.time_of_flight_max:
-            print("time of flight is out of range")
+            logger.error(f"time of flight: {time_of_flight} out of range")
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
@@ -218,7 +213,7 @@ class AcquisitionDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug(f"acquistion, set_trigger_channel, got the following for time_of_flight: {time_of_flight}")
+        logger.debug("set the time of flight to %s fabric clock cycles", time_of_flight)
 
         return 0
 
@@ -237,7 +232,7 @@ class AcquisitionDriver(_FIREQDriver):
         elif output_type == "accumulated":
             output_mode_bit = 1
         else:
-            print("output_type is not recognized, allowed values are 'decimated' and 'accumulated'")
+            logger.error(f"output_type: {output_type} not recognized")
             return -3
 
         updated_control = _set_bit(
@@ -247,6 +242,6 @@ class AcquisitionDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
 
-        logger.debug(f"acquistion, set_decimated_output_type, got the following for output_type: {output_type}")
+        logger.debug("set the decimated output type to %s", output_type)
 
         return 0
