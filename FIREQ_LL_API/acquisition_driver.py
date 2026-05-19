@@ -85,7 +85,7 @@ class AcquisitionDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def set_demodulation_frequency(self, frequency: float):
+    def set_demodulation_frequency(self, frequency: float) -> int:
         """Set acquisition demodulation frequency.
 
         :param frequency: Frequency of the demodulation signal, normalized to the ADC sampling frequency
@@ -115,7 +115,7 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def set_demodulation_initial_phase(self, phase: float):
+    def set_demodulation_initial_phase(self, phase: float) -> int:
         """Set acquisition demodulation frequency.
 
         :param phase: Phase offset of the demodulation signal, normalized to pi
@@ -123,7 +123,6 @@ class AcquisitionDriver(_FIREQDriver):
         :return: Error code (0 on success)
         :rtype: int
         """
-
         # get poff and pinc
         phase_parameters = _compute_pinc_poff(0, phase, self._adc_samplerate, self.phase_depth)
 

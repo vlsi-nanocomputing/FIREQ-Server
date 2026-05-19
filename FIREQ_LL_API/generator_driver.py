@@ -121,7 +121,7 @@ class GeneratorDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def write_envelope_memory(self, start_address: int, envelope: np.ndarray, common: bool = False):
+    def write_envelope_memory(self, start_address: int, envelope: np.ndarray, common: bool = False) -> int:
         """Write samples to the envelope memory starting at the given address.
 
         :param start_address: Start address in the envelope memory (word aligned)
@@ -166,9 +166,8 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def clear_envelope_memory(self):
+    def clear_envelope_memory(self) -> int:
         """Clear the envelope memory by writing all zeros to it."""
-
         rval = self.write_envelope_memory(0, np.zeros(self.channel_sample_memory_depth, dtype=complex), common=True)
         if rval != 0:
             logger.error("failed to clear envelope memory")
@@ -274,7 +273,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_readout_modulation_frequency(self, frequency: float):
+    def set_readout_modulation_frequency(self, frequency: float) -> int:
         """Set modulation carrier of readout wave.
 
         :param frequency: Frequency of the modulation signal, normalized to the DAC sampling frequency
@@ -297,7 +296,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_readout_modulation_initial_phase(self, phase: float):
+    def set_readout_modulation_initial_phase(self, phase: float) -> int:
         """Set readout modulation initial phase.
 
         :param phase: Phase offset of the modulation signal, normalized to pi
@@ -305,7 +304,6 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code (0 on success)
         :rtype: int
         """
-
         # TODO: check that this is ok even when moving away from the first nyquist zone.
         #       I am unsure if I have to invert the phase or not when in the second nyquist zone.
         poff = int(2**self.phase_depth * phase)
@@ -319,7 +317,7 @@ class GeneratorDriver(_FIREQDriver):
 
         return 0
 
-    def set_drive_modulation_frequency(self, frequency: float):
+    def set_drive_modulation_frequency(self, frequency: float) -> int:
         """Set the modulation frequency for the drive pulses.
 
         :param frequency: Frequency of the modulation signal, normalized to the DAC sampling frequency
