@@ -17,6 +17,17 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
     bindto = ["user.org:user:axisTriggerGeneratorIP:1.0"]
 
+    # Register offset definitions
+    _ctrl = 0
+    _experiment_dur_l = 2
+    _experiment_dur_h = 3
+    _readout_delay_l = 4
+    _readout_delay_h = 5
+    _shots_num_l = 1
+
+    # Bit position definition
+    _manual_trigger_pos = 31
+
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the TriggerGeneratorDriver.
 
@@ -38,16 +49,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         self.experiment_timer_max = pow(2, int(description["parameters"]["ExperimentTimerWidth"]))
         # parse the size of the repetition counter
         self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
-
-        self._ctrl = 0
-        self._experiment_dur_l = 2
-        self._experiment_dur_h = 3
-        self._readout_delay_l = 4
-        self._readout_delay_h = 5
-        self._shots_num_l = 1
-
-        # Bit position definition
-        self._manual_trigger_pos = 31
 
     def print_description(self) -> None:
         """Print the description of the trigger generator IP."""

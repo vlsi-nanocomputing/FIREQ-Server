@@ -7,6 +7,7 @@ __all__ = ["FireqParser"]
 
 # strings found in .hwh file that define a module as a master for a certain axi connection
 MASTER_TYPE_LIST = ["MASTER", "INITIATOR"]
+
 # names of ips that are considered to be transparent to a master slave connection for our purposes
 PASS_THROUGH_MODULES = [
     "xilinx.com:ip:axis_dwidth_converter:",

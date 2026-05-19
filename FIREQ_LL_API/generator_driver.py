@@ -6,10 +6,7 @@ import numpy as np
 from pynq import MMIO
 
 from ._utils import (
-    _compute_pinc_poff,
     _FIREQDriver,
-    _get_bit,
-    _get_bits,
     _set_bit,
     _set_bits,
 )
@@ -27,6 +24,21 @@ class GeneratorDriver(_FIREQDriver):
 
     bindto = ["user.org:user:axisGeneratorIP:2.0"]
 
+    # Offset definition
+    _ctrl = 0
+    _readout_wave_l = 1
+    _readout_inc_l = 5
+    _readout_inc_h = 6
+    _readout_off_l = 9
+    _readout_off_h = 10
+    _drive_inc_l = 7
+    _drive_inc_h = 8
+
+    # Bit position definition
+    man_trig_sel = 28
+    source_pos = 27
+    manual_trigger_pos = 31
+
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the GeneratorDriver.
 
@@ -36,7 +48,10 @@ class GeneratorDriver(_FIREQDriver):
         super().__init__(description=description)
 
         # set the axi full interface
-        self._axi_full_interface_mmio = None
+        self._envelope_memory_interface = None
+        self._common_envelope_memory_interface = None
+        self._memory_mapped_fifo_interface = None
+        self._wdw_memory_interface = None
 
         # address width of the envelope memory, word aligned
         self.sample_memory_address_width = int(description["parameters"]["SampleMemoryAddressWidth"])
@@ -67,21 +82,6 @@ class GeneratorDriver(_FIREQDriver):
         # set debug level
         self.debug_level = 0
 
-        # Offset definition
-        self._ctrl = 0
-        self._readout_wave_l = 1
-        self._readout_inc_l = 5
-        self._readout_inc_h = 6
-        self._readout_off_l = 9
-        self._readout_off_h = 10
-        self._drive_inc_l = 7
-        self._drive_inc_h = 8
-
-        # Bit position definition
-        self.source_pos = 27
-        self.man_trig_sel = 28
-        self.manual_trigger_pos = 31
-
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface segments and clear memory.
 
@@ -91,20 +91,20 @@ class GeneratorDriver(_FIREQDriver):
         :type axi_depth: int
         """
 
-        def _next_segment(mmio: MMIO):
+        def _next_segment(mmio: MMIO) -> int:
             return mmio.base_addr + mmio.length
 
-        self.envelope_memory_interface = MMIO(
+        self._envelope_memory_interface = MMIO(
             base_address, self.channel_sample_memory_depth * self.number_of_channels * 4
         )
-        self.common_envelope_memory_interface = MMIO(
-            _next_segment(self.envelope_memory_interface), self.channel_sample_memory_depth * 4
+        self._common_envelope_memory_interface = MMIO(
+            _next_segment(self._envelope_memory_interface), self.channel_sample_memory_depth * 4
         )
-        self.wdw_memory_interface = MMIO(
-            _next_segment(self.common_envelope_memory_interface), self.wave_memory_segment_depth
+        self._wdw_memory_interface = MMIO(
+            _next_segment(self._common_envelope_memory_interface), self.wave_memory_segment_depth
         )
-        self.memory_mapped_fifo_interface = MMIO(
-            _next_segment(self.wdw_memory_interface), self.memory_mapped_fifo_segment_depth
+        self._memory_mapped_fifo_interface = MMIO(
+            _next_segment(self._wdw_memory_interface), self.memory_mapped_fifo_segment_depth
         )
         # reset envelope dictionary and memory
         self.clear_envelope_memory()
@@ -153,13 +153,12 @@ class GeneratorDriver(_FIREQDriver):
         to_write_array = (envelope.real.astype(np.int32) << 16) + envelope.imag.astype(np.int16)
         if common:
             # write the samples to all sub-channels, there is a specific space in the generator memory to do just that
-            write_address_start = start_address + self.channel_sample_memory_depth * self.number_of_channels
-            self._axi_full_interface_mmio.write(write_address_start * 4, to_write_array.tobytes())
+            self._common_envelope_memory_interface.write(start_address * 4, to_write_array.tobytes())
         else:
             for channel in range(self.number_of_channels):
                 write_address_start = start_address + self.channel_sample_memory_depth * channel
                 to_write_to_channel = to_write_array[channel :: self.number_of_channels]
-                self._axi_full_interface_mmio.write(write_address_start * 4, to_write_to_channel.tobytes())
+                self._envelope_memory_interface.write(write_address_start * 4, to_write_to_channel.tobytes())
 
         logger.debug(
             "wrote %s samples to envelope memory at address %s (common: %s)", len(envelope), start_address, common
@@ -391,9 +390,7 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         # write to wave memory
-        self._axi_full_interface_mmio.write(
-            self.total_sample_memory_segment_depth + wdw_index * (128 // 8), wdw.to_bytes(128 // 8, "little")
-        )
+        self._wdw_memory_interface.write(wdw_index * (128 // 8), wdw.to_bytes(128 // 8, "little"))
 
         logger.debug("added wave definition %s to wave memory at index %s", wdw, wdw_index)
 
@@ -416,8 +413,7 @@ class GeneratorDriver(_FIREQDriver):
             logger.error("wdw index %s is out of range", wdw_index)
             return -3
 
-        actual_address = self.total_sample_memory_segment_depth + self.wave_memory_segment_depth + order_index * 4
-        self._axi_full_interface_mmio.write(actual_address, wdw_index)
+        self._memory_mapped_fifo_interface.write(order_index * 4, wdw_index)
         return 0
 
     def write_readout_wave(self, wave_definition: int) -> int | None:

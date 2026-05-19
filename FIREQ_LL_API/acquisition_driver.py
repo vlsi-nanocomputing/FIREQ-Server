@@ -18,6 +18,17 @@ class AcquisitionDriver(_FIREQDriver):
 
     bindto = ["user.org:user:axisAcquisitionIP:1.0"]
 
+    # Register offset definitions
+    _ctrl = 0
+    _readout_inc_l = 3
+    _readout_inc_h = 4
+    _readout_off_l = 1
+    _readout_off_h = 2
+
+    # Bit position definitions
+    _manual_trigger_pos = 31
+    _accumulate_select_pos = 27
+
     def __init__(self, description: dict[str, Any]) -> None:
         """Initialize the AcquisitionDriver with the given description.
 
@@ -44,17 +55,6 @@ class AcquisitionDriver(_FIREQDriver):
         self.non_decimated_output_width = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
         # decimated output width in bits
         self.decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
-
-        # Register offset definitions
-        self._ctrl = 0
-        self._readout_inc_l = 3
-        self._readout_inc_h = 4
-        self._readout_off_l = 1
-        self._readout_off_h = 2
-
-        # Bit position definitions
-        self._manual_trigger_pos = 31
-        self._accumulate_select_pos = 27
 
     def print_description(self) -> None:
         """Print the driver configuration parameters to stdout."""

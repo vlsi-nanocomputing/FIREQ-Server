@@ -7,6 +7,7 @@ from .acquisition_driver import AcquisitionDriver
 from .fireq_soc import FIREQSoC, load_fireq
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
+from .axi_stream_switch_driver import AXIStreamSwitchDriver
 
 __all__ = [
     "AcquisitionDriver",
@@ -14,4 +15,5 @@ __all__ = [
     "load_fireq",
     "GeneratorDriver",
     "TriggerGeneratorDriver",
+    "AXIStreamSwitchDriver",
 ]
