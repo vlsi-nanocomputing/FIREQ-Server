@@ -93,9 +93,9 @@ class _GenericNode(Node):
         """Create a child node of the specified type."""
         raise NotImplementedError("create_child not implemented for this node type")
 
-    def get_child(self, name: str, of_type: str) -> _GenericNode:
+    def get_child(self, name: str) -> _GenericNode:
         for child in self.children:
-            if child.name == name and child.of_type == of_type:
+            if child.name == name:
                 return child
         logger.error("child %s not found", name)
         raise KeyError("child not found")
@@ -104,16 +104,18 @@ class _GenericNode(Node):
         """Apply a configuration dictionary to the tree, starting from this node.
 
         The configuration dictionary is a nested dictionary of parameters, with the following structure:
-          - keys are the names of the parameters or sub-systems:
+          - keys are the names of the parameters, sub-systems or the type of object to create:
             - if the key starts with a $, it is a parameter to apply to the current node
-            - otherwise, it is the name of a sub-system or the type of subsystems to create
+            - otherwise, it is the name of a sub-system
+            - if the value is a list of dictionaries, each dict creates an object of the type defined by the key
           - values are either:
-            - a string, which is the value of the parameter or a sweepable parameter (if it starts with #)
+            - a value, which is the value of the parameter or a sweepable parameter (if it is a string starting with #)
             - a dictionary, which is the configuration of a pre-existing sub-system
             - a list of dictionaries, which are the configurations of multiple sub-systems of the same type
-              - must contain a "_name" key, that is used to create the object
-              - can contain other keys starting with "_", used at object creation
-              - the type of object is defined by the key
+              - each dictionary must contain metadata key-value pairs:
+                - _name: the name of the object to create
+                - other metadata depending on the object type
+              - each dictionary can also contain the configuration of the object, which is applied after creation
 
         Returns a list of paramters to sweep, where each element is a tuple of:
             - the callback
@@ -154,8 +156,13 @@ class _GenericNode(Node):
                         if "_name" not in dictitem.keys():
                             logger.error("item in list does not have a name key")
                             raise KeyError("item in list must have a name key")
+                        if dictitem["_name"].startswith("_"):
+                            logger.error("item name cannot start with an underscore")
+                            raise ValueError("item name cannot start with an underscore")
                         child = self.create_child(
-                            dictitem["_name"], key, **{k: v for k, v in dictitem.items() if k.startswith("_")}
+                            name=dictitem["_name"],
+                            of_type=key,
+                            **{k: v for k, v in dictitem.items() if k.startswith("_")},
                         )
                         item_copy = {k: v for k, v in dictitem.items() if not k.startswith("_")}
                         callback_list |= child.apply_configuration(item_copy)

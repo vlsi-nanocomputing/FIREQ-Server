@@ -6,47 +6,105 @@ import numpy as np
 from _generic_node import _GenericNode
 from _utils import _get_periods_from_clock
 
+from FIREQ_LL_API import GeneratorDriver
+
 logger = logging.getLogger(__name__)
 
 
-class _GenericEnvelopeItem(_GenericNode):
+class _GenericEnvelope(_GenericNode):
     """Object representing a pulse envelope.
 
     Dict definition:
         _name: str, name of the envelope, _RECTANGULAR is a protected keyword
-        _for_interpolation: true/false, uses hardware interpolation
-        _is_symmetric: true/false, only specify in case of interpolation
-        _i_even: true/false, only specify if symmetric
-        _q_even: true/false
+        _for_interpolation: bool (false), uses hardware interpolation
+        _is_symmetric: bool (false), only specify in case of interpolation
+        _i_even: bool, only specify if symmetric
+        _q_even: bool, only specify if symmetric
         $samples: [complex], list of complex values
     """
 
     nodetype = "envelope"
 
-    def __init__(self, name: str, parent: SignalGeneratorNode = None, **kwargs: dict[str, Any]):
-        super().__init__(name, parent, **kwargs)
+    def __init__(
+        self,
+        name: str,
+        parent: SignalGeneratorNode,
+        _for_interpolation: bool = False,
+        _is_symmetric: bool = False,
+        _i_even: bool = None,
+        _q_even: bool = None,
+    ):
+        super().__init__(name, parent)
         # validation of arguments
-        if self._for_interpolation is None:
-            logger.error("for_interpolation not specified")
-            raise ValueError("for_interpolation not specified")
-        if self._for_interpolation:
-            if self._is_symmetric is None:
-                logger.error("is_symmetric not specified")
-                raise ValueError("is_symmetric not specified")
-            if self._is_symmetric:
-                if self._i_even is None or self._q_even is None:
-                    logger.error("i_even and/or q_even not specified")
-                    raise ValueError("i_even and/or q_even not specified")
+        self._for_interpolation = _for_interpolation
+        self._is_symmetric = _is_symmetric
+        self._i_even = _i_even
+        self._q_even = _q_even
+        # check inputs in case of interpolation
+        if self._for_interpolation and self._is_symmetric:
+            if self._i_even is None or self._q_even is None:
+                logger.error("i_even and/or q_even not specified")
+                raise ValueError("i_even and/or q_even not specified")
+        self.natural_length = None
+        # create the envelope part of the wdw
+        # FIXME handle the rectanguar waves
+        self.envelope_wdw = self.parent._ll_handler.build_envelope_specific_wdw(
+            is_symmetric=self._envelope_ref._is_symmetric,
+            i_even=self._envelope_ref._i_even,
+            q_even=self._envelope_ref._q_even,
+            forceone=False,
+            interpolate=self._envelope_ref._for_interpolation,
+        )
 
     @_GenericNode.parameter_callback("$samples", sweepable=False, cost=1000)
     def write_samples(self, samples: np.array) -> int:
-        """Write samples to envelope memory"""
+        """Write the envelope samples to generator memory."""
         address = self.parent.reserve_envelope_segment(len(samples), self._for_interpolation)
         # FIXME
-        self._natural_length = len(samples)
+        self.natural_length = len(samples)
         return self.parent._ll_handler.write_envelope_memory(
             start_address=address, envelope=samples, common=self._for_interpolation
         )
+
+
+class _RectangularEnvelope(_GenericEnvelope):
+    """Object representing a rectangular envelope.
+
+    Reserved for rectangular shaped pulses, only created once at init time.
+    """
+
+    def __init__(self, name: str, parent: SignalGeneratorNode):
+        super().__init__(name, parent)
+        self.natural_length = 1
+        self.envelope_wdw = self.parent._ll_handler.build_envelope_specific_wdw(
+            is_symmetric=False, i_even=False, q_even=False, forceone=True, interpolate=False
+        )
+
+
+class _VZGate(_GenericNode):
+    """Object representing a pulse (wave definition word).
+
+    Dictionary definition:
+        - _name: str, name of pulse (gate)
+        - _readout: bool (false), if set, the pulse is a readout pulse
+        - $vz_rotation: float, phase of vz rotation normalized to 2pi
+    """
+
+    nodetype = "vzgate"
+
+    def __init__(self, name: str, parent: SignalGeneratorNode, _readout: bool = False):
+        super().__init__(name, parent)
+        self._readout = _readout
+
+    # TODO: change this system so that sweepable can be modified at run-time
+    @_GenericNode.parameter_callback("$vz_rotation", sweepable=True, cost=10)
+    def write_pulse(self, normalized_phase: float) -> int:
+        """Write the wdw to memory with the specified phase."""
+        wdw = self.parent._ll_handler.build_vz_wdw(normalized_phase)
+        if self._readout:
+            return self.parent._ll_handler.write_readout_wave(wdw)
+        else:
+            return self.parent._ll_handler.add_wave_in_wave_memory(wdw, self._address)
 
 
 class _Pulse(_GenericNode):
@@ -54,88 +112,77 @@ class _Pulse(_GenericNode):
 
     Dictionary definition:
         - _name: str, name of pulse (gate)
-        - _vz: bool, if set, the pulse is a virtual z gate
-        - _readout: bool, if set, the pulse is a readout pulse
+        - _readout: bool (false), if set, the pulse is a readout pulse
         - _envelope": str, envelope to use for the pulse
-        - _gain: float, gain of pulse, between -1 and 1
-        - _switch_iq: bool, if set, the IQ values are switched
-        - _keep_last: bool, if set, the last samples will be placed at the output
-        - $value: float, duration of the pulse in nanoseconds or rotation in radiants
+        - _switch_iq: bool (false), if set, the IQ values are switched
+        - _keep_last: bool (false), if set, the last samples will be placed at the output
+        - $duration: float, duration of the pulse in nanoseconds or rotation in radiants
+        - $gain: float, between -1 and 1
     """
 
     nodetype = "pulse"
 
-    def __init__(self, name, parent, _vz, _readout=False, _envelope=None, _gain=None, _switch_iq=None, _keep_last=None):
+    def __init__(
+        self,
+        name: str,
+        parent: SignalGeneratorNode,
+        _readout: bool = False,
+        _envelope: str = None,
+        _switch_iq: bool = False,
+        _keep_last: bool = False,
+    ) -> None:
         super().__init__(name, parent)
-        self._vz = _vz
         self._readout = _readout
         self._envelope = _envelope
-        self._gain = _gain
         self._switch_iq = _switch_iq
         self._keep_last = _keep_last
-        if not _vz:
-            if _envelope is None:
-                logger.error("envelope not specified")
-                raise ValueError("envelope not specified")
-            if _gain is None:
-                logger.error("gain not specified")
-                raise ValueError("gain not specified")
-            if _switch_iq is None:
-                logger.error("switch_iq not specified")
-                raise ValueError("switch_iq not specified")
-            if _keep_last is None:
-                logger.error("keep_last not specified")
-                raise ValueError("keep_last not specified")
-            # check if envelope exists and get the reference to use it later
-            if self._envelope not in [child.name for child in self.parent.children if child.nodetype == "envelope"]:
-                logger.error("envelope %s not found", self._envelope)
-                raise ValueError("envelope not found")
-            self._envelope_ref = next(
-                child for child in self.parent.children if child.name == self._envelope and child.nodetype == "envelope"
-            )
+        if _envelope is None:
+            logger.error("envelope not specified")
+            raise ValueError("envelope not specified")
+        # check if envelope exists and get the reference to use it later
+        if self._envelope not in [child.name for child in self.parent.children if child.nodetype == "envelope"]:
+            logger.error("envelope %s not found", self._envelope)
+            raise ValueError("envelope not found")
+        self._envelope_ref = next(
+            child for child in self.parent.children if child.name == self._envelope and child.nodetype == "envelope"
+        )
         if not self._readout:
             # TODO: implement this func
             self._address = self.parent.reserve_wdw()
         else:
             self._address = None
+        # starting values for duration and gain
+        self._wanted_duration = self._envelope_ref.natural_length
+        self._wanted_gain = 1.0
 
     # TODO: change this system so that sweepable can be modified at run-time
-    @_GenericNode.parameter_callback("$value", sweepable=True, cost=10)
-    def write_pulse(self, value: int) -> int:
-        """write the wdw to memory"""
-        wdw = self._build_wdw(value)
+    @_GenericNode.parameter_callback("$duration", sweepable=True, cost=10)
+    def set_duration(self, duration: float) -> int:
+        self._wanted_duration = _get_periods_from_clock(duration, self.parent._sampling_frequency)
+        return self._write_pulse()
+
+    @_GenericNode.parameter_callback("$gain", sweepable=True, cost=10)
+    def set_gain(self, value: float) -> int:
+        self._wanted_gain = value
+        return self._write_pulse()
+
+    def _write_pulse(self) -> int:
+        """Write the wdw to memory."""
+        # build the wdw
+        wdw = self.parent._ll_handler.build_pulse_wdw(
+            envelope_wdw=self._envelope_ref.envelope_wdw,
+            for_interpolation=self._envelope_ref._for_interpolation,
+            start_address=self._envelope_ref._address,
+            duration=self._wanted_duration,
+            natural_duration=self._envelope_ref.natural_length,
+            normalized_gain=self._wanted_gain,
+            switch_iq=self._switch_iq,
+            keep_last=self._keep_last,
+        )
         if self._readout:
-            return self.parent.ll_handler.write_readout_wave(wdw)
+            return self.parent._ll_handler.write_readout_wave(wdw)
         else:
             return self.parent._ll_handler.add_wave_in_wave_memory(wdw, self._address)
-
-    def _build_wdw(self, value: float) -> int:
-        """Build the wave definition word."""
-        if self._vz:
-            normal_phase = value/(2*np.pi)
-            # FIXME
-        else:
-            
-
-
-class _VZGateItem(_GenericPulseItem):
-    """Object representing a pulse (wave definition word).
-
-    TYPE 2: Virtual Z Gate (phase rotation)
-        - "_name": str, name of the virtual z gate
-        - "_readout": bool, if set, the pulse is a readout pulse
-        - "$vz_rotation": float, phase of vz rotation
-    """
-
-    nodetype = "vzgate"
-
-    def __init__(self, name, parent=None, **kwargs):
-        super().__init__(name, parent, **kwargs)
-        self._address = self.parent.reserve_wdw()
-
-    @_GenericNode.parameter_callback("$vz_rotation", sweepable=True, cost=10)
-    def write_pulse(self, duration: int) -> int:
-        """write the wdw to memory"""
 
 
 class SignalGeneratorNode(_GenericNode):
@@ -153,23 +200,25 @@ class SignalGeneratorNode(_GenericNode):
         $rchannel: int, readout trigger channel, set to 0 to deactivate
         $dchannel: int, drive trigger channel, set to 0 to deactivate
         $lfsr_seed: int, seed for the lfsr
+        $drive_order: list, ordered list of pulses to be generated
     """
 
-    def __init__(self, name: str, parent: _GenericNode = None, **kwargs: dict[str, Any]) -> None:
-        super().__init__(name, parent, **kwargs)
-        # attribute validation
-        if self._clock_frequency is None:
-            logger.error("clock_frequency not specified")
-            raise ValueError("clock_frequency not specified")
-        if self._sampling_frequency is None:
-            logger.error("sampling_frequency not specified")
-            raise ValueError("sampling_requency not specified")
-        if self._ll_handler is None:
-            logger.error("ll_handler not specified")
-            raise ValueError("ll_handler not specified")
+    def __init__(
+        self,
+        name: str,
+        parent: _GenericNode,
+        _clock_frequency: float,
+        _sampling_frequency: float,
+        _ll_handler: GeneratorDriver,
+    ) -> None:
+        super().__init__(name, parent)
+        self._clock_frequency = _clock_frequency
+        self._sampling_frequency = _sampling_frequency
+        self._ll_handler = _ll_handler
         # envelope and wdw memory caching
-        self._envelope_next_address = 0
-        self._wdw_next_address = 0
+        self.init_memory()
+        # create the rectangular envelope
+        _RectangularEnvelope(name="_RECTANGULAR", parent=self)
 
     def init_memory(self) -> int:
         """Initialize the memory of the signal generator."""
@@ -215,19 +264,47 @@ class SignalGeneratorNode(_GenericNode):
         """Set the lfsr seed."""
         return self._ll_handler.set_lfsr_seed(seed)
 
-    def create_child(
-        self, name: str, of_type: str, **kwargs: dict[str, Any]
-    ) -> _GenericEnvelopeItem | _PulseItem | _VZGateItem:
+    @_GenericNode.parameter_callback("$drive_order", sweepable=False, cost=1)
+    def set_drive_order(self, order: list[str]) -> int:
+        """Set the order of drive generation."""
+        # for each element in the list, search the wdw for them and create another list of addresses
+        addresses = []
+        for pulse_name in order:
+            pulse = next(
+                (
+                    child
+                    for child in self.children
+                    if child.name == pulse_name and child.nodetype in ("pulse", "vzgate")
+                ),
+                None,
+            )
+            if pulse is None:
+                logger.error("pulse %s not found in children", pulse_name)
+                raise ValueError(f"pulse {pulse_name} not found")
+            if pulse._readout:
+                logger.error("pulse %s is a readout pulse and cannot be placed in the drive order", pulse_name)
+                raise ValueError(f"pulse {pulse_name} is a readout pulse and cannot be placed in the drive order")
+            addresses.append(pulse._address)
+        # write the addresses to the memory mapped fifo
+        for order_index, wdw_index in enumerate(addresses):
+            ret = self._ll_handler.add_wave_to_drive_wave_sequence(order_index, wdw_index)
+            if ret != 0:
+                logger.error("failed to write drive order at index %s", order_index)
+                return ret
+        return 0
+
+    def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericEnvelope | _Pulse | _VZGate:
         """Create a child node of the specified type."""
+        # check that the name is not already taken by an existing child
+        if any(child.name == name for child in self.children):
+            logger.error("child with name %s already exists", name)
+            raise ValueError(f"child with name {name} already exists")
         if of_type == "envelope":
-            if name == "_RECTANGULAR":
-                logger.error("envelope name %s is reserved", name)
-                raise ValueError("envelope name is reserved")
-            return _GenericEnvelopeItem(name=name, parent=self, **kwargs)
+            return _GenericEnvelope(name=name, parent=self, **kwargs)
         elif of_type == "pulse":
-            return _PulseItem(name=name, parent=self, **kwargs)
+            return _Pulse(name=name, parent=self, **kwargs)
         elif of_type == "vzgate":
-            return _VZGateItem(name=name, parent=self, **kwargs)
+            return _VZGate(name=name, parent=self, **kwargs)
         else:
             logger.error("unsupported child type %s", of_type)
             raise ValueError("unsupported child type")

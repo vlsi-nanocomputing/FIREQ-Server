@@ -142,8 +142,8 @@ class GeneratorDriver(_FIREQDriver):
         else:
             size = int(np.ceil(len(envelope) / self.number_of_channels))
 
-        if start_address < 0 or start_address >= size:
-            logger.error("start_address %s is out of range", start_address)
+        if start_address < 0:
+            logger.error("start_address %s cannot be negative", start_address)
             return -3
 
         if start_address + size > self.channel_sample_memory_depth:
@@ -437,6 +437,130 @@ class GeneratorDriver(_FIREQDriver):
         logger.debug("wrote the readout wave definition to the IP %s", wave_definition)
 
         return 0
+
+    def build_envelope_specific_wdw(
+        self,
+        is_symmetric: bool,
+        i_even: bool,
+        q_even: bool,
+        forceone: bool,
+        interpolate: bool,
+    ) -> int:
+        """Build the envelope specific part of the wdw.
+
+        :param is_symmetric: If True, the envelope is symmetric
+        :type is_symmetric: bool
+        :param i_even: If True, the I sample symmetry is even
+        :type i_even: bool
+        :param q_even: If True, the Q sample symmetry is even
+        :type q_even: bool
+        :param switch_iq: If True, the I and Q channels are switched
+        :type switch_iq: bool
+        :param forceone: If True, the envelope is forced to be one
+        :type forceone: bool
+        :param interpolate: If True, the envelope is interpolated
+        :type interpolate: bool
+        :return: Envelope specific part of the wdw
+        :rtype: int
+        """
+        wdw = int(is_symmetric) << 127
+        wdw |= int(i_even) << 126
+        wdw |= int(q_even) << 125
+        wdw |= int(forceone) << 121
+        wdw |= int(interpolate) << 120
+        return wdw
+
+    def build_vz_wdw(self, normalized_phase: float) -> int:
+        """Build the wave definition word for vz gates.
+
+        :param normalized_phase: Phase of the vz gate normalized to 2pi
+        :type normalized_phase: float
+        :return: Wave definition word
+        :rtype: int
+        """
+        wdw = 1 << 119
+        phase = int(normalized_phase * 2 ** (self.phase_depth))
+        wdw |= phase & (2**self.phase_depth - 1)
+        return wdw
+
+    def build_pulse_wdw(
+        self,
+        envelope_wdw: int,
+        for_interpolation: bool,
+        start_address: int,
+        duration: int,
+        natural_duration: int,
+        normalized_gain: float,
+        switch_iq: bool,
+        keep_last: bool,
+    ) -> int:
+        """Build the wave definition word for pulses.
+
+        :param envelope_wdw: Envelope specific part of the wdw
+        :type envelope_wdw: int
+        :param start_address: Start address of the envelope in the envelope memory
+        :type start_address: int
+        :param duration: Duration of the pulse in samples
+        :type duration: int
+        :param natural_duration: Natural duration of the pulse in samples
+        :type natural_duration: int
+        :param normalized_gain: Normalized gain of the pulse
+        :type normalized_gain: float
+        :param switch_iq: If True, the I and Q channels are switched
+        :type switch_iq: bool
+        :param keep_last: If True, the last sample is kept
+        :type keep_last: bool
+        :return: Wave definition word
+        :rtype: int
+        """
+        wdw = envelope_wdw
+        if normalized_gain < 0:
+            wdw |= 1 << 124
+            gain = -normalized_gain
+        else:
+            gain = normalized_gain
+        wdw |= int(switch_iq) << 123
+        wdw |= int(keep_last) << 122
+        if gain >= 1:
+            gain = 2**self.sample_size - 1
+        else:
+            gain = int(2**self.sample_size * gain)
+        wdw |= (gain & (2**self.sample_size - 1)) << 90
+        # get the duration
+        if duration > self.maximum_duration:
+            logger.warning("duration %s is out of range", duration)
+            real_duration = self.maximum_duration
+        else:
+            real_duration = duration
+        wdw |= (real_duration - 1) << 2 * (self.sample_memory_address_width + self.fractional_precision)
+        # set sample generator offsets
+        start_offset = 0
+        increment = 0
+        if for_interpolation:
+            # NOTE (fixed-point interpolation fix):
+            # We compute the fractional address increment as num/den in Q(FractionalPrecision).
+            # Using integer division (//) truncates the ideal increment, introducing a small
+            # quantization error that accumulates along the envelope and biases the last samples.
+            # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
+            # half of it to start_offset we "center" the quantization error, reducing the peak
+            # error at the end without changing the hardware behavior.
+            start_offset = start_address << self.fractional_precision
+            num = (natural_duration - 1) << self.fractional_precision
+            den = real_duration - 1
+
+            increment = num // den
+            reminder = num % den
+
+            # shift by half remainder to "center" the error (reduces peak error at the end)
+            start_offset = start_offset + (reminder // 2)
+        else:
+            start_offset = start_address << self.fractional_precision
+            # set the increment to 1/(number_of_channels), usually 1/16
+            increment = 1 << (self.fractional_precision - self.log_number_of_channels)
+        # set the start offset and increment bits
+        wdw |= start_offset << (self.sample_memory_address_width + self.fractional_precision)
+        wdw |= increment
+        return wdw
 
     def print_description(self) -> None:
         """Print a detailed description of the generator IP configuration parameters."""

@@ -31,18 +31,18 @@ class AcquisitionNode(_GenericNode):
 
     nodetype = "acquisition"
 
-    def __init__(self, name: str, parent: _GenericNode = None, **kwargs: dict[str, Any]) -> None:
-        super().__init__(name=name, parent=parent, **kwargs)
-        # verification of init parameters
-        if self._clock_frequency is None:
-            logger.error("clock_frequency not specified")
-            raise ValueError("clock_frequency not specified")
-        if kwargs._sampling_frequency is None:
-            logger.error("sampling_frequency not specified")
-            raise ValueError("sampling_frequency not specified")
-        if kwargs._ll_handler is None:
-            logger.error("ll_handler not specified")
-            raise ValueError("ll_handler not specified")
+    def __init__(
+        self,
+        name: str,
+        parent: _GenericNode,
+        _clock_frequency: float,
+        _sampling_frequency: float,
+        _ll_handler: AcquisitionDriver,
+    ) -> None:
+        super().__init__(name=name, parent=parent)
+        self._clock_frequency = _clock_frequency
+        self._sampling_frequency = _sampling_frequency
+        self._ll_handler = _ll_handler
 
     @_GenericNode.propagate_dependency("$duration")  # to know length for each shot
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=1)
