@@ -29,6 +29,13 @@ class AcquisitionDriver(_FIREQDriver):
     _manual_trigger_pos = 31
     _accumulate_select_pos = 27
 
+    # Output interfaces mapping the acquisition mode to the interface responsable for the output
+    _output_interfaces = {
+        "raw": "m00_axis",
+        "decimated": "m01_axis",
+        "accumulated": "m01_axis",
+    }
+
     def __init__(self, description: dict[str, Any]) -> None:
         """Initialize the AcquisitionDriver with the given description.
 
@@ -55,6 +62,27 @@ class AcquisitionDriver(_FIREQDriver):
         self.non_decimated_output_width = int(description["parameters"]["C_M00_AXIS_TDATA_WIDTH"])
         # decimated output width in bits
         self.decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
+        # payload of the acquisition, calculated depending on the parameters set
+        # should be recalculated any time that the duration, output mode and trigger channel are set
+        self._cache = {
+            "active": False,
+            "duration": 0,
+            "output_mode": "raw",
+        }
+        self.payload = {}
+
+    def _calculate_payload(self):
+        """Calculate the payload of the acquisition."""
+        if self._cache["active"] and self._cache["duration"] > 0:
+            if self._cache["output_mode"] == "raw":
+                self.payload["size"] = self._cache["duration"] * self.non_decimated_output_width // 8
+            elif self._cache["output_mode"] == "decimated":
+                self.payload["size"] = ((self._cache["duration"] + 1) % 2) * 2 * self.decimated_output_width // 8
+            elif self._cache["output_mode"] == "accumulated":
+                self.payload["size"] = self.decimated_output_width // 8
+            self.payload["on_output"] = self._output_interfaces[self._cache["output_mode"]]
+        else:
+            self.payload = {}
 
     def print_description(self) -> None:
         """Print the driver configuration parameters to stdout."""
@@ -167,6 +195,8 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
         logger.debug("set the acquisition duration to %s fabric clock cycles", duration)
+        self._cache["duration"] = duration
+        self._calculate_payload()
 
         return 0
 
@@ -188,6 +218,8 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
         logger.debug("set the trigger channel to %s", channel)
+        self._cache["active"] = channel > 0
+        self._calculate_payload()
 
         return 0
 
@@ -216,22 +248,27 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def set_decimated_output_type(self, output_type: str) -> int:
+    def set_output_mode(self, output_mode: str) -> int:
         """Set the type of output data of the decimated stream.
 
         Can be set to output the decimated samples or the accumulated values.
 
-        :param output_type: Selection, allowed values are 'decimated' and 'accumulated'
+        :param output_type: Selection, allowed values are 'raw', 'decimated' and 'accumulated'
         :type output_type: str
         :return: Error code (0 on success)
         :rtype: int
         """
-        if output_type == "decimated":
+        if output_mode == "raw":
+            self._cache["output_mode"] = "raw"
+            return 0
+        elif output_mode == "decimated":
+            self._cache["output_mode"] = "decimated"
             output_mode_bit = 0
-        elif output_type == "accumulated":
+        elif output_mode == "accumulated":
+            self._cache["output_mode"] = "accumulated"
             output_mode_bit = 1
         else:
-            logger.error(f"output_type: {output_type} not recognized")
+            logger.error(f"output_type: {output_mode} not recognized")
             return -3
 
         updated_control = _set_bit(
@@ -241,6 +278,7 @@ class AcquisitionDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
 
-        logger.debug("set the decimated output type to %s", output_type)
+        logger.debug("set the decimated output type to %s", output_mode)
+        self._calculate_payload()
 
         return 0

@@ -36,6 +36,15 @@ class AXIStreamSwitchDriver(DefaultIP):
         if self.number_of_masters > 1:
             raise NotImplementedError("only one master is supported for data switches")
 
+    @property
+    def slave_number_to_interface_map(self) -> dict:
+        """The map between the slave number sand the slave interface name."""
+        slave_map = {}
+        for i in range(self.number_of_slaves):
+            # the slave interface is S00_AXIS, S01_AXIS, S02_AXIS, etc.
+            slave_map[i] = f"S{i:02d}_AXIS"
+        return slave_map
+
     def switch_to_input(self, input_number: int = 0) -> int:
         """Switch the switch to the selected input.
 
