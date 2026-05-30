@@ -71,8 +71,8 @@ class AcquisitionDriver(_FIREQDriver):
         }
         self.payload = {}
 
-    def _calculate_payload(self):
-        """Calculate the payload of the acquisition."""
+    def _calculate_payload(self) -> None:
+        """Calculate the payload of the acquisition for a single shot."""
         if self._cache["active"] and self._cache["duration"] > 0:
             if self._cache["output_mode"] == "raw":
                 self.payload["size"] = self._cache["duration"] * self.non_decimated_output_width // 8
