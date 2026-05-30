@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from functools import wraps
-from typing import Any, Callable, Dict, List, Tuple, Union
+from collections.abc import Callable
+from typing import Any
 
-from _utils import _safe_float_cast
 from anytree import Node
 
 logger = logging.getLogger(__name__)
@@ -28,7 +26,6 @@ class _GenericNode(Node):
 
     def __init__(self, name: str, parent: _GenericNode = None, **kwargs: dict[str, Any]) -> None:
         super().__init__(name=name, parent=parent, **kwargs)
-        self._dependency_callback_registry = {}
 
     def __init_subclass__(cls) -> None:
         super().__init_subclass__()
@@ -53,33 +50,6 @@ class _GenericNode(Node):
             return func
 
         return deco
-
-    def propagate_dependency(key) -> Callable:
-        """Decorate the function to call dependencies.
-
-        Calls all dependencies to a parameter before calling the function and returning its return value.
-        """
-
-        def deco(func: Callable) -> Callable:
-            @wraps(func)
-            def wrapper(self: _GenericNode, *args: tuple[Any], **kwargs: dict[str, Any]) -> int:
-                if key in self._dependency_callback_registry.keys():
-                    for callback in self._dependency_callback_registry[key]:
-                        callback(*args, **kwargs)
-                return func(self, *args, **kwargs)
-
-            return wrapper
-
-        return deco
-
-    def register_dependency(self, key: str, callback: Callable) -> None:
-        """Register a dependency callback for a parameter.
-
-        More than one dependency can be registered for a single parameter.
-        """
-        if key not in self._dependency_callback_registry.keys():
-            self._dependency_callback_registry[key] = []
-        self._dependency_callback_registry[key].append(callback)
 
     def _get_callback(self, key: str) -> tuple:
         """Get the callback for a parameter."""

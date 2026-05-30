@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from typing import Any, Callable, Dict, List, Tuple, Union
-
-from anytree import Node
 
 logger = logging.getLogger(__name__)
 
@@ -31,3 +27,8 @@ def _require_attributes(obj: object, attributes: list[str]) -> None:
         if not hasattr(obj, attribute):
             logger.error("object does not have attribute %s", attribute)
             raise AttributeError(f"object does not have attribute {attribute}")
+
+
+def _get_dict_hash(dictionary: dict[str, Any]) -> int:
+    """Calculate a hash of a dictionary."""
+    return hash(frozenset(dictionary.items()))
