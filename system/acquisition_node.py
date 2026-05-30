@@ -1,3 +1,5 @@
+"""Acquisition Node class for FIREQ system node representation."""
+
 from __future__ import annotations
 
 import logging
@@ -5,10 +7,9 @@ import logging
 import numpy as np
 from _generic_node import _GenericNode
 
-from ._utils import _get_dict_hash
 from FIREQ_LL_API import AcquisitionDriver
 
-from ._utils import _get_periods_from_clock
+from ._utils import _get_dict_hash, _get_periods_from_clock
 
 logger = logging.getLogger(__name__)
 
@@ -29,12 +30,6 @@ class AcquisitionNode(_GenericNode):
         $tof: float, time of flight in ns
     """
 
-    # TODO: associate a number of fifos to the acquisition to account for a call stack like:
-    #       1) param callback changes the single shot payload
-    #       2) single shot payload triggers the change in max hw shots and also payload size
-    #       1) hw_shots change
-    #       2) payload size change triggers the experiment payload change
-
     nodetype = "acquisition"
 
     def __init__(
@@ -45,11 +40,23 @@ class AcquisitionNode(_GenericNode):
         _sampling_frequency: float,
         _ll_handler: AcquisitionDriver,
     ) -> None:
+        """Initialize the acquisition node.
+
+        :param name: Name of the node
+        :type name: str
+        :param parent: Parent node
+        :type parent: _GenericNode
+        :param _clock_frequency: Clock frequency in MHz
+        :type _clock_frequency: float
+        :param _sampling_frequency: Sampling frequency in MHz
+        :type _sampling_frequency: float
+        :param _ll_handler: Low level handler
+        :type _ll_handler: AcquisitionDriver
+        """
         super().__init__(name=name, parent=parent)
         self._clock_frequency = _clock_frequency
         self._sampling_frequency = _sampling_frequency
         self._ll_handler = _ll_handler
-        self._fifo_sizes = {}
         # link payload to ll handler one
         # payload is either empty ({}) or has "size" and "on_inteface" keys
         self.payload = self._ll_handler.payload
@@ -61,7 +68,10 @@ class AcquisitionNode(_GenericNode):
     def set_acquisition_duration(self, duration: float) -> int:
         """Set the acquisition duration.
 
-        Also calls the "on_max_hw_shots_change" callback if the single shot payload size has changed.
+        :param duration: Duration in nanoseconds of the acquisition window
+        :type duration: float
+        :return: Error code (0 on success)
+        :rtype: int
         """
         clock_cycles = _get_periods_from_clock(duration, self._clock_frequency)
         return self._ll_handler.set_acquisition_duration(int(clock_cycles))
@@ -70,19 +80,34 @@ class AcquisitionNode(_GenericNode):
     def set_decimated_output_type(self, output_type: str) -> int:
         """Set the decimated output type.
 
-        Also calls the "on_max_hw_shots_change" callback if the single shot payload size has changed.
+        :param output_type: Output type, can be "raw", "decimated" or "accumulated"
+        :type output_type: str
+        :return: Error code (0 on success)
+        :rtype: int
         """
-        return self._ll_handler.set_decimated_output_type(output_type)
+        return self._ll_handler.set_output_mode(output_type)
 
     @_GenericNode.parameter_callback("$rfrequency", sweepable=True, cost=1)
     def set_demodulation_frequency(self, frequency: float) -> int:
-        """Set the demodulation frequency."""
+        """Set the demodulation frequency.
+
+        :param frequency: Frequency in MHz
+        :type frequency: float
+        :return: Error code (0 on success)
+        :rtype: int
+        """
         normal_frequency = frequency / self._sampling_frequency
         return self._ll_handler.set_demodulation_frequency(normal_frequency)
 
     @_GenericNode.parameter_callback("$rphase", sweepable=True, cost=1)
     def set_demodulation_initial_phase(self, phase: float) -> int:
-        """Set the demodulation initial phase."""
+        """Set the demodulation initial phase.
+
+        :param phase: Initial phase in radians
+        :type phase: float
+        :return: Error code (0 on success)
+        :rtype: int
+        """
         normal_phase = phase / (2 * np.pi)
         return self._ll_handler.set_demodulation_initial_phase(normal_phase)
 
@@ -90,14 +115,23 @@ class AcquisitionNode(_GenericNode):
     def set_trigger_channel(self, channel: int) -> int:
         """Set the trigger channel.
 
-        Also calls the "on_max_hw_shots_change" callback if the acquisition becomes active.
+        :param channel: Trigger channel number, set to 0 for no trigger
+        :type channel: int
+        :return: Error code (0 on success)
+        :rtype: int
         """
         return self._ll_handler.set_trigger_channel(channel)
 
     @_GenericNode.parameter_callback("$tof", sweepable=True, cost=1)
     def set_time_of_flight(self, time_of_flight: float) -> int:
-        """Set the time of flight."""
-        clock_cycles = _get_periods_from_clock(time_of_flight, self.clock_frequency)
+        """Set the time of flight.
+
+        :param time_of_flight: Time of flight in nanoseconds
+        :type time_of_flight: float
+        :return: Error code (0 on success)
+        :rtype: int
+        """
+        clock_cycles = _get_periods_from_clock(time_of_flight, self._clock_frequency)
         return self._ll_handler.set_time_of_flight(int(clock_cycles))
 
     def update_payload(self) -> bool:

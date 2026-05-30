@@ -1,9 +1,12 @@
+"""Switch Node class for FIREQ system node representation."""
+
 from __future__ import annotations
 
 import logging
 
-import numpy as np
 from _generic_node import _GenericNode
+
+from FIREQ_LL_API import AXIStreamSwitchDriver
 
 from ._utils import _get_dict_hash
 
@@ -21,19 +24,32 @@ class SwitchNode(_GenericNode):
         _output_interface: str, name of the output interface of this node
     """
 
-    # TODO: actually handle dependencies, handle the sampling frequencies and so on
-
     nodetype = "acquisition"
 
     def __init__(
         self,
         name: str,
         parent: _GenericNode,
-        _ll_handler: SwitchDriver,
+        _ll_handler: AXIStreamSwitchDriver,
         _input_nodes: _GenericNode,
         _input_interfaces: list[str],
         _output_interface: str,
     ) -> None:
+        """Initialize the switch node.
+
+        :param name: Name of the node
+        :type name: str
+        :param parent: Parent node
+        :type parent: _GenericNode
+        :param _ll_handler: Low level handler
+        :type _ll_handler: AXIStreamSwitchDriver
+        :param _input_nodes: Input nodes to this switch
+        :type _input_nodes: list[_GenericNode]
+        :param _input_interfaces: Name of the interfaces connected to each node
+        :type _input_interfaces: list[str]
+        :param _output_interface: Name of the output interface of this node
+        :type _output_interface: str
+        """
         super().__init__(name=name, parent=parent)
         self._ll_handler = _ll_handler
         self._input_nodes = _input_nodes
@@ -47,13 +63,28 @@ class SwitchNode(_GenericNode):
         self.extraction_order_hash = _get_dict_hash(self.extraction_order)
         self.payloads = {}
         self.payload_hash = _get_dict_hash(self.payloads)
-        self._build_dependencies()
+        # register the update functions with the orchestrator
+        self.parent.register_update_function(
+            identifier=f"{self.name}/update_extraction_order", func=self.update_extraction_order
+        )
+        self.parent.register_update_function(identifier=f"{self.name}/payloads", func=self.update_payload)
 
-    def _build_dependencies(self):
+    def _build_dependencies(self) -> None:
         """Build the dependency for this node."""
-        # the switch depends on the input nodes payload to compute the extraction order and the maximum payload size
-        # TODO also register the payload update with the execution order update
-        pass
+        # the extraction order and the output payloads depend on the input nodes payloads
+        self.parent.add_dependency(
+            identifier=f"{self.name}/update_extraction_order",
+            dependencies=[f"{node.name}/payload" for node in self._input_nodes],
+        )
+        self.parent.add_dependency(
+            identifier=f"{self.name}/payloads",
+            dependencies=[f"{node.name}/payload" for node in self._input_nodes],
+        )
+        # the output payloads depend on the extraction order
+        self.parent.add_dependency(
+            identifier=f"{self.name}/update_extraction_order",
+            dependencies=[f"{self.name}/payloads"],
+        )
 
     def set_master_to_first_payload(self) -> dict:
         """Set the master to the first payload in the extraction order."""
@@ -72,10 +103,14 @@ class SwitchNode(_GenericNode):
         return self.payloads[self.current_input_index]
 
     def update_extraction_order(self) -> bool:
-        """Update the extraction order."""
+        """Update the extraction order.
+
+        :return: True if the extraction order has changed
+        :rtype: bool
+        """
         self.extraction_order = []
         slave_index = 0
-        for node, inteface in zip(self._input_nodes, self._input_interfaces):
+        for node, inteface in zip(self._input_nodes, self._input_interfaces, strict=True):
             # if a payload exists on the slave interface, add it to the extraction order
             if node.payload and node.payload["on_interface"] == inteface:
                 self.extraction_order.append(slave_index)
@@ -93,6 +128,9 @@ class SwitchNode(_GenericNode):
         """Update the payload.
 
         This update depends on the extraction order update and on the input payload.
+
+        :return: True if the payload has changed
+        :rtype: bool
         """
         self.payloads = {}
         for slave_index in self.extraction_order:

@@ -1,12 +1,12 @@
+"""FIFO Node class for FIREQ system node representation."""
+
 from __future__ import annotations
 
 import logging
 
-import numpy as np
 from _generic_node import _GenericNode
-from ._utils import _get_dict_hash
 
-from .acquisition_node import AcquisitionNode
+from ._utils import _get_dict_hash
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,21 @@ class FIFONode(_GenericNode):
         _output_interface: str,
         _input_interface: str,
     ) -> None:
+        """Initialize the FIFO node.
+
+        :param name: Name of the node
+        :type name: str
+        :param parent: Parent node
+        :type parent: _GenericNode
+        :param _size: Size of the FIFO in bytes
+        :type _size: int
+        :param _input_node: Input node to this FIFO
+        :type _input_node: _GenericNode
+        :param _output_interface: Name of the output interface of this node
+        :type _output_interface: str
+        :param _input_interface: Name of the input interface of this node
+        :type _input_interface: str
+        """
         super().__init__(name=name, parent=parent)
         self._size = _size
         self._input_node = _input_node
@@ -49,7 +64,7 @@ class FIFONode(_GenericNode):
         self.parent.register_update_function(identifier=f"{self.name}/max_hw_shots", func=self.update_max_hw_shots)
         self.parent.register_update_function(identifier=f"{self.name}/payload", func=self.update_payload)
 
-    def _build_dependencies(self):
+    def _build_dependencies(self) -> None:
         """Build the dependency for this node."""
         # the FIFO depends on the input node payload to compute the maximum number of shots
         # and on the trigger generator because the payload changes depending on the number of shots

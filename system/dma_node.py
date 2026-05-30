@@ -1,3 +1,5 @@
+"""DMA Node class for FIREQ system node representation."""
+
 from __future__ import annotations
 
 import logging
@@ -12,10 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class DMANode(_GenericNode):
-    # what does the dma need?
-    # the dma should be able to automatically extract all experiment data in one pass
-    # therefore, it should know: the maximum amount of data it can extract, depending on the fifos connected to it:
-    #     this max should be the
+    """Object representing the DMA IPs.
+
+    Dict definition:
+        _name: str, name of the trigger generator node/istance
+        _ll_handler: DMA, handler to the low level driver
+        _input_node: _GenericNode, input node
+        _max_buffer_size: int, max internal buffer size in bytes for all transfers
+        _input_interface: str, input interface name
+    """
+
+    nodetype = "dma"
+
     def __init__(
         self,
         name: str,
@@ -25,6 +35,21 @@ class DMANode(_GenericNode):
         _max_buffer_size: int,
         _input_interface: str,
     ) -> None:
+        """Initialize the DMA node.
+
+        :param name: Name of the node
+        :type name:str
+        :param parent: Parent node
+        :type parent: _GenericNode
+        :param _ll_handler: Low level handler
+        :type _ll_handler: DMA
+        :param _input_node: Input node
+        :type _input_node: _GenericNode
+        :param _max_buffer_size: Max buffer size in bytes
+        :type _max_buffer_size: int
+        :param _input_interface: Input interface name
+        :type _input_interface: str
+        """
         super().__init__(name=name, parent=parent)
         self._ll_handler = _ll_handler
         self._input_node = _input_node
@@ -40,7 +65,11 @@ class DMANode(_GenericNode):
         self._input_interface = _input_interface
 
     def init_dma(self) -> bool:
-        """Initialize the DMA."""
+        """Initialize the DMA.
+
+        :return: True if the DMA has been initialized correctly
+        :rtype: bool
+        """
         # if the input is a switch, set the master to the first payload
         if self._is_switch_input:
             self.current_payload = self._input_node.set_master_to_first_payload()
@@ -55,12 +84,17 @@ class DMANode(_GenericNode):
         self._ll_handler.recvchannel.transfer(self._buffer)
         return True
 
-    def transfer_all(self, queque):
+    def transfer_all(self, queque) -> bool:
         """Transfer all the data from the DMA.
 
-        Returns false if no data has been transferred.
+        Returns False on a transfer error, including no data transfer.
+
+        :param queque: Queue to put the data in
+        :type queque: queue.Queue
+        :return: True if the transfer has been completed correctly
+        :rtype: bool
         """
-        if not self._transfering:
+        if not self._transffering:
             return False
         # if the input is a switch, transfer all payloads and then return true
         if self._is_switch_input:
@@ -68,7 +102,7 @@ class DMANode(_GenericNode):
                 # check for errors
                 if self._ll_handler.recvchannel.error:
                     logger.error("DMA transfer error for node %s", self.name)
-                    raise RuntimeError("DMA transfer error")
+                    return False
                 self._ll_handler.recvchannel.wait()
                 queque.put((self.current_payload["from_node"], self._buffer[: self.current_payload["size"]].copy()))
                 self.current_payload = self._input_node.set_master_to_next_payload()
