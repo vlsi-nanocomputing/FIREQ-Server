@@ -61,19 +61,23 @@ class FIFONode(_GenericNode):
         self.payload = {}
         self.payload_hash = _get_dict_hash(self.payload)
         # register update functions
-        self.parent.register_update_function(identifier=f"{self.name}/max_hw_shots", func=self.update_max_hw_shots)
-        self.parent.register_update_function(identifier=f"{self.name}/payload", func=self.update_payload)
+        self.parent.register_update_function(self.root.make_func_label(self, "max_hw_shots"), self.update_max_hw_shots)
+        self.parent.register_update_function(self.root.make_func_label(self, "payload"), self.update_payload)
 
     def _build_dependencies(self) -> None:
         """Build the dependency for this node."""
         # the FIFO depends on the input node payload to compute the maximum number of shots
         # and on the trigger generator because the payload changes depending on the number of shots
         self.parent.add_dependency(
-            identifier=f"{self.name}/max_hw_shots", dependencies=f"{self._input_node.name}/payload"
+            self.root.make_func_label(self, "max_hw_shots"),
+            depends_on=self.root.make_func_label(self._input_node, "payload"),
         )
         self.parent.add_dependency(
-            identifier=f"{self.name}/payload",
-            dependencies=[f"{self.parent.name}/hw_shots", f"{self._input_node.name}/payload"],
+            self.root.make_func_label(self, "payload"),
+            depends_on=[
+                self.root.make_func_label(self.root, "hw_shots"),
+                self.root.make_func_label(self._input_node, "payload"),
+            ],
         )
 
     def update_max_hw_shots(self) -> bool:

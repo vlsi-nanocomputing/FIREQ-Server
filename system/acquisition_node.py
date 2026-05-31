@@ -22,7 +22,7 @@ class AcquisitionNode(_GenericNode):
         _clock_frequency: float, clock frequency in MHz
         _sampling_frequency: float, sampling frequency in MHz
         _ll_handler: AcquisitionDriver, handler to the low level driver
-        $duration: float, duration of the acquisition
+        $duration: float, duration of the acquisition in ns
         $output_type: str, "raw"/"decimated"/"accumulated"
         $rfrequency: float, demodulation frequency in MHz
         $rphase: float, demodulation initial phase in radians
@@ -62,7 +62,7 @@ class AcquisitionNode(_GenericNode):
         self.payload = self._ll_handler.payload
         self._payload_hash = _get_dict_hash(self.payload)
         # register update functions
-        self.root.register_update_function(self, self.update_payload)
+        self.root.register_update_function(self.root.make_func_label(self, "payload"), self.update_payload)
 
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=1)
     def set_acquisition_duration(self, duration: float) -> int:

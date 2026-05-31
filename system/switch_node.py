@@ -64,26 +64,27 @@ class SwitchNode(_GenericNode):
         self.payloads = {}
         self.payload_hash = _get_dict_hash(self.payloads)
         # register the update functions with the orchestrator
-        self.parent.register_update_function(
-            identifier=f"{self.name}/update_extraction_order", func=self.update_extraction_order
+        self.root.register_update_function(
+            self.root.make_func_label(self, "extraction_order"), self.update_extraction_order
         )
-        self.parent.register_update_function(identifier=f"{self.name}/payloads", func=self.update_payload)
+        self.parent.register_update_function(self.root.make_func_label(self, "payloads"), func=self.update_payloads)
 
     def _build_dependencies(self) -> None:
         """Build the dependency for this node."""
         # the extraction order and the output payloads depend on the input nodes payloads
+        # NOTE: in the future, if one wants to support input nodes like another switch, this would need to be changed
         self.parent.add_dependency(
-            identifier=f"{self.name}/update_extraction_order",
-            dependencies=[f"{node.name}/payload" for node in self._input_nodes],
+            self.root.make_func_label(self, "extraction_order"),
+            depends_on=[self.root.make_func_label(node, "payload") for node in self._input_nodes],
+        )
+        # the output payloads depend on the extraction order and the input payload
+        self.parent.add_dependency(
+            self.root.make_func_label(self, "payloads"),
+            depends_on=[self.root.make_func_label(node, "payload") for node in self._input_nodes],
         )
         self.parent.add_dependency(
-            identifier=f"{self.name}/payloads",
-            dependencies=[f"{node.name}/payload" for node in self._input_nodes],
-        )
-        # the output payloads depend on the extraction order
-        self.parent.add_dependency(
-            identifier=f"{self.name}/update_extraction_order",
-            dependencies=[f"{self.name}/payloads"],
+            self.root.make_func_label(self, "payloads"),
+            depends_on=self.root.make_func_label(self, "extraction_order"),
         )
 
     def set_master_to_first_payload(self) -> dict:
@@ -124,7 +125,7 @@ class SwitchNode(_GenericNode):
         self.extraction_order_hash = phash
         return True
 
-    def update_payload(self) -> bool:
+    def update_payloads(self) -> bool:
         """Update the payload.
 
         This update depends on the extraction order update and on the input payload.

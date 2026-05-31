@@ -7,7 +7,7 @@ import networkx as nx
 logger = logging.getLogger(__name__)
 
 
-class DependencyOrchestrator:
+class _DependencyOrchestrator:
     """Dependency rapresentation and resolution using DAG.
 
     Each node in the graph represents a variable, which can be updated with a function.
