@@ -6,6 +6,7 @@ frequency as ratio to sampling rate and phases as ratio to 2pi.
 
 from .acquisition_driver import AcquisitionDriver
 from .axi_stream_switch_driver import AXIStreamSwitchDriver
+from .fifo_wrapper import FIFOWrapper
 from .fireq_soc import FIREQSoC, load_fireq
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
@@ -17,4 +18,5 @@ __all__ = [
     "GeneratorDriver",
     "TriggerGeneratorDriver",
     "AXIStreamSwitchDriver",
+    "FIFOWrapper",
 ]
