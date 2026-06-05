@@ -2,7 +2,7 @@
 
 import logging
 
-from qick import DefaultIP
+from pynq import DefaultIP
 
 logger = logging.getLogger(__name__)
 
