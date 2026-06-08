@@ -6,6 +6,8 @@ import logging
 
 from _generic_node import _GenericNode
 
+from FIREQ_LL_API import FIFOWrapper
+
 from ._utils import _get_dict_hash
 
 logger = logging.getLogger(__name__)
@@ -16,19 +18,20 @@ class FIFONode(_GenericNode):
 
     Dict definition:
         _name: str, name of the trigger generator node/istance
-        _size: int, size of the FIFO in bytes
+        _ll_handler: FIFOWrapper, handler to the low level driver
         _input_node: _GenericNode, input node of the FIFO
         _input_interface: str, name of the input interface for this node
         _output_interface: str, name of the output interface of this node
     """
 
-    nodetype = "acquisition"
+    nodetype = "acquisition_fifo"
+    wraps = [FIFOWrapper.__name__]
 
     def __init__(
         self,
         name: str,
         parent: _GenericNode,
-        _size: int,
+        _ll_handler: FIFOWrapper,
         _input_node: _GenericNode,
         _output_interface: str,
         _input_interface: str,
@@ -49,7 +52,8 @@ class FIFONode(_GenericNode):
         :type _input_interface: str
         """
         super().__init__(name=name, parent=parent)
-        self._size = _size
+        self._ll_handler = _ll_handler
+        self._size = self._ll_handler.fifo_byte_size
         self._input_node = _input_node
         self._input_interface = _input_interface
         self._output_interface = _output_interface

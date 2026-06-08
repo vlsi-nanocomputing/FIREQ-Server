@@ -72,7 +72,8 @@ class _DependencyOrchestrator:
         """Update all the nodes in the graph, respecting the dependencies.
 
         Updates will be called only if at least one of the upstream dependencies has changed (short circuiting/pruning).
-        The function will return prematurely if all of the update function within a batch return False (e.g. the active frontier is unchanged).
+        The function will return prematurely if all of the update function within a batch return False
+        (e.g. the active frontier is unchanged).
         """
         if self._topological_order is None or self._start_nodes is None:
             self._topological_order = list(nx.topological_sort(self._dependency_graph))

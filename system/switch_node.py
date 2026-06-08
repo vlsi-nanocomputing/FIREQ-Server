@@ -24,7 +24,7 @@ class SwitchNode(_GenericNode):
         _output_interface: str, name of the output interface of this node
     """
 
-    nodetype = "acquisition"
+    nodetype = "data_switch"
 
     def __init__(
         self,

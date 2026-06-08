@@ -229,6 +229,8 @@ class SignalGeneratorNode(_GenericNode):
         $drive_order: list, ordered list of pulses to be generated
     """
 
+    nodetype = "signal generation"
+
     def __init__(
         self,
         name: str,

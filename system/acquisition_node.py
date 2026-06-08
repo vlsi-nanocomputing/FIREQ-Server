@@ -31,6 +31,7 @@ class AcquisitionNode(_GenericNode):
     """
 
     nodetype = "acquisition"
+    wraps = [AcquisitionDriver.__name__]
 
     def __init__(
         self,

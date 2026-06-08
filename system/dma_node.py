@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 
 import numpy as np
 from pynq import allocate
@@ -25,6 +26,7 @@ class DMANode(_GenericNode):
     """
 
     nodetype = "dma"
+    wraps = [DMA.__name__]
 
     def __init__(
         self,
@@ -84,7 +86,7 @@ class DMANode(_GenericNode):
         self._ll_handler.recvchannel.transfer(self._buffer)
         return True
 
-    def transfer_all(self, queque) -> bool:
+    def transfer_all(self, queque: queue.Queue) -> bool:
         """Transfer all the data from the DMA.
 
         Returns False on a transfer error, including no data transfer.

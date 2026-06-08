@@ -8,8 +8,20 @@ from anytree import Node
 
 logger = logging.getLogger(__name__)
 
+_driver_wrappers = dict()
 
-class _GenericNode(Node):
+
+class RegisterNode(type):
+    """Meta class that binds the node object (wrapper) to a specific target."""
+
+    def __init__(cls, name, bases, attrs):
+        if "wraps" in attrs:
+            for driver_name in cls.wraps:
+                _driver_wrappers[driver_name] = cls
+        super().__init__(name, bases, attrs)
+
+
+class _GenericNode(Node, metaclass=RegisterNode):
     """
     Class representing a generic sub-system as a node of a tree.
 
