@@ -93,9 +93,9 @@ class FIREQSoC(Overlay):
         self.fabric_frequency = None
         self._discover_clocks()
 
-        # 9) freeze calibration for all ADCs
-        # for acq_idx in range(len(self._acquisition_ips)):
-        #    self.set_adc_autocalibration_status(acq_idx, freeze=True)
+        # freeze calibration for all ADCs
+        for adc_index in self.active_adcs:
+            self.set_adc_autocalibration_status(adc_index, freeze=True)
 
     @staticmethod
     def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
@@ -130,6 +130,7 @@ class FIREQSoC(Overlay):
                 acq_count += 1
             elif ip[2] == TriggerGeneratorDriver.__name__:
                 ctrl_count += 1
+        logger.debug("Found %s generators, %s acquisitions and %s trigger generators", gen_count, acq_count, ctrl_count)
         if gen_count == 0 or acq_count == 0 or ctrl_count == 0:
             logger.error("The design does not contain the necessary FIREQ IPs to conduct experiments.")
             raise RuntimeError("The design does not contain the necessary FIREQ IPs to conduct experiments.")
@@ -200,6 +201,28 @@ class FIREQSoC(Overlay):
             logger.warning("RF-DC IP not found, assuming debug overlay")
             return
 
+        # if the rfdc is found, extract the active ADCs and DACs from the rfdc object
+        active_adcs = []
+        active_dacs = []
+        for tile_id, tile in enumerate(self.rfdc.adc_tiles):
+            for block_id, block in enumerate(tile.blocks):
+                try:
+                    _ = block.BlockStatus
+                    active_adcs.append((tile_id, block_id))
+                except Exception:
+                    continue
+        for tile_id, tile in enumerate(self.rfdc.dac_tiles):
+            for block_id, block in enumerate(tile.blocks):
+                try:
+                    _ = block.BlockStatus
+                    active_dacs.append((tile_id, block_id))
+                except Exception:
+                    continue
+        self.active_adcs = active_adcs
+        self.active_dacs = active_dacs
+        logger.debug("Active ADCs: %s", self.active_adcs)
+        logger.debug("Active DACs: %s", self.active_dacs)
+
     def _discover_clocks(self) -> None:
         """Discover the clocks and set the sample rates.
 
@@ -261,6 +284,27 @@ class FIREQSoC(Overlay):
                 return float(data["frequency"])
         # if not found, raise an error
         raise RuntimeError(f"Clock not found for IP {full_ip_name} on port {clock_port}")
+
+    # ------------------------------------------------------------------
+    # RF helpers
+    # ------------------------------------------------------------------
+
+    def set_adc_autocalibration_status(self, adc_index: tuple[int, int], freeze: bool = True) -> None:
+        """Freeze or unfreeze the calibration of all ADCs.
+
+        :param adc_index: Index of the ADC to set the calibration status for as (tile, block).
+        :type adc_index: tuple[int, int]
+        :param freeze: Whether to freeze the calibration, defaults to True
+        :type freeze: bool
+        """
+        tile, block = adc_index
+
+        # Freeze calibration for the ADC block if freeze, otherwise unfreeze
+        if freeze:
+            self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 1
+        else:
+            self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
+        logger.debug("ADC %s calibration frozen: %s", adc_index, freeze)
 
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:

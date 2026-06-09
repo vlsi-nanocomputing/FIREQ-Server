@@ -372,16 +372,26 @@ class FireqParser:
                     params[param_name] = param_value
         return params
 
-    # def get_module_interface_map(self, module_fullname: str, graph: nx.MultiDiGraph) -> dict[str, str]:
-    #    """Get the mapping between the interface names and the bus ids.
+    def get_interface_map(self, module_fullname: str, graph: nx.MultiDiGraph) -> dict[str, str]:
+        """Get the mapping between the interface names and the bus ids.
 
-
-#
-#    :param module_fullname: The full name of a module
-#    :type module_fullname: str
-#    :return: A dictionary mapping interface names to bus ids
-#    :rtype: dict[str, str]
-#    """
-#    # use the system graph to get the interface map, but use edges to get the map
-#    interface_map = {}
-#    node =
+        :param module_fullname: The full name of a module
+        :type module_fullname: str
+        :return: A dictionary mapping interface names to bus ids
+        :rtype: dict[str, str]
+        """
+        # find the node in the provided graph, then, map master and interface ports to bus ids
+        interface_map = {}
+        if module_fullname not in graph.nodes:
+            raise ValueError(f"Module {module_fullname} not found in the graph.")
+        for u, v, data in graph.out_edges(module_fullname, data=True):
+            master_port = data.get("master_port")
+            bus_id = data.get("bus_id")
+            if master_port is not None and bus_id is not None:
+                interface_map[master_port] = bus_id
+        for u, v, data in graph.in_edges(module_fullname, data=True):
+            slave_port = data.get("slave_port")
+            bus_id = data.get("bus_id")
+            if slave_port is not None and bus_id is not None:
+                interface_map[slave_port] = bus_id
+        return interface_map
