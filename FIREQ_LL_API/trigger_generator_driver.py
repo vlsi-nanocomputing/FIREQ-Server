@@ -28,6 +28,9 @@ class TriggerGeneratorDriver(_FIREQDriver):
     # Bit position definition
     _manual_trigger_pos = 31
 
+    # Port name of the fabric clock
+    fabric_clock_port = "HS_axi_clock"
+
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the TriggerGeneratorDriver.
 

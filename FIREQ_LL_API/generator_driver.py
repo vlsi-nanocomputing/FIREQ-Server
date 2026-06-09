@@ -39,6 +39,9 @@ class GeneratorDriver(_FIREQDriver):
     source_pos = 27
     manual_trigger_pos = 31
 
+    # Port name of the fabric clock
+    fabric_clock_port = "HS_axi_clock"
+
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the GeneratorDriver.
 

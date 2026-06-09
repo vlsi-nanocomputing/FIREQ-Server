@@ -36,6 +36,9 @@ class AcquisitionDriver(_FIREQDriver):
         "accumulated": "m01_axis",
     }
 
+    # Port name of the fabric clock
+    fabric_clock_port = "HS_axi_clock"
+
     def __init__(self, description: dict[str, Any]) -> None:
         """Initialize the AcquisitionDriver with the given description.
 
