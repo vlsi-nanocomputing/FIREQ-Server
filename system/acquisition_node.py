@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from _generic_node import _GenericNode
 
 from FIREQ_LL_API import AcquisitionDriver
 
+from ._generic_node import _GenericNode
 from ._utils import _get_dict_hash, _get_periods_from_clock
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,6 @@ class AcquisitionNode(_GenericNode):
 
     Dict definition:
         _name: str, name of the trigger generator node/istance
-        _clock_frequency: float, clock frequency in MHz
-        _sampling_frequency: float, sampling frequency in MHz
         _ll_handler: AcquisitionDriver, handler to the low level driver
         $duration: float, duration of the acquisition in ns
         $output_type: str, "raw"/"decimated"/"accumulated"
@@ -37,8 +35,6 @@ class AcquisitionNode(_GenericNode):
         self,
         name: str,
         parent: _GenericNode,
-        _clock_frequency: float,
-        _sampling_frequency: float,
         _ll_handler: AcquisitionDriver,
     ) -> None:
         """Initialize the acquisition node.
@@ -47,23 +43,27 @@ class AcquisitionNode(_GenericNode):
         :type name: str
         :param parent: Parent node
         :type parent: _GenericNode
-        :param _clock_frequency: Clock frequency in MHz
-        :type _clock_frequency: float
-        :param _sampling_frequency: Sampling frequency in MHz
-        :type _sampling_frequency: float
         :param _ll_handler: Low level handler
         :type _ll_handler: AcquisitionDriver
         """
         super().__init__(name=name, parent=parent)
-        self._clock_frequency = _clock_frequency
-        self._sampling_frequency = _sampling_frequency
         self._ll_handler = _ll_handler
-        # link payload to ll handler one
-        # payload is either empty ({}) or has "size" and "on_inteface" keys
-        self.payload = self._ll_handler.payload
-        self._payload_hash = _get_dict_hash(self.payload)
-        # register update functions
-        self.root.register_update_function(self.root.make_func_label(self, "payload"), self.update_payload)
+        # get clocking info from root node
+        self._clock_frequency = self.root.get_fabric_frequency()
+        self._sampling_frequency = self.root.get_acqisition_sampling_frequency()
+        # get interface mapping, to translate payload interface to interface id
+        self._interface_map = self.root.get_axi_stream_interface_map(self.name)
+        # create payloads
+        self.payload = {}
+        # hash of the base payload
+        self._base_payload_hash = _get_dict_hash(self._ll_handler.payload)
+        # register payload update functions, one for each interface
+        # TODO: fix ordering of payloads
+        for output_if in set(self._ll_handler._output_interfaces.values()):
+            if_id = self._interface_map[output_if]
+            self.payload[output_if] = {}
+            self.root.register_update_function(f"{if_id}/payload", self.update_payload)
+            self.root.add_reference(f"{if_id}/payload", self.payload[if_id])
 
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=1)
     def set_acquisition_duration(self, duration: float) -> int:
@@ -138,9 +138,15 @@ class AcquisitionNode(_GenericNode):
     def update_payload(self) -> bool:
         """Update the payload and returns a boolean to tell the caller if a change happened."""
         # get the hash of the payload and compare it to the last computed hash
-        phash = _get_dict_hash(self.payload)
+        phash = _get_dict_hash(self._ll_handler.payload)
         if phash == self._payload_hash:
             return False
         # a change has been detected
+        self._payload_hash = phash
+        for output_if in self.payload.keys():
+            if self._ll_handler.payload["on_interface"] == output_if:
+                self.payload[output_if]["size"] = self._ll_handler.payload["size"]
+            else:
+                self.payload[output_if] = {}
         logger.debug("Payload changed for acquisition node %s", self.name)
         return True
