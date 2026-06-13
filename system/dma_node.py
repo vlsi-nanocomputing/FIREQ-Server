@@ -10,109 +10,149 @@ from pynq import allocate
 from pynq.lib import DMA
 
 from ._generic_node import _GenericNode
+from ._utils import _MutableRef
 
 logger = logging.getLogger(__name__)
 
 
 class DMANode(_GenericNode):
-    """Object representing the DMA IPs.
+    """Object representing the DMA IP.
 
-    Dict definition:
-        _name: str, name of the trigger generator node/istance
-        _ll_handler: DMA, handler to the low level driver
-        _input_node: _GenericNode, input node
-        _max_buffer_size: int, max internal buffer size in bytes for all transfers
-        _input_interface: str, input interface name
+    Dictionary definition for configuration:
+
+    .. list-table::
+       :header-rows: 1
+
+       * - Key
+         - Type
+         - Description
+       * - ``_name``
+         - ``str``
+         - Name of the DMA node instance
+       * - ``_ll_handler``
+         - ``DMA``
+         - Low-level DMA driver handler
     """
 
     nodetype = "dma"
     wraps = [DMA.__name__]
 
-    def __init__(
-        self,
-        name: str,
-        parent: _GenericNode,
-        _ll_handler: DMA,
-        _input_node: _GenericNode,
-        _max_buffer_size: int,
-        _input_interface: str,
-    ) -> None:
+    def __init__(self, name: str, parent: _GenericNode, _ll_handler: DMA) -> None:
         """Initialize the DMA node.
 
         :param name: Name of the node
-        :type name:str
-        :param parent: Parent node
+        :type name: str
+        :param parent: Parent node in the system tree
         :type parent: _GenericNode
-        :param _ll_handler: Low level handler
+        :param _ll_handler: Low-level DMA driver handler
         :type _ll_handler: DMA
-        :param _input_node: Input node
-        :type _input_node: _GenericNode
-        :param _max_buffer_size: Max buffer size in bytes
-        :type _max_buffer_size: int
-        :param _input_interface: Input interface name
-        :type _input_interface: str
         """
         super().__init__(name=name, parent=parent)
         self._ll_handler = _ll_handler
-        self._input_node = _input_node
-        # if the input node is a switch, store in a flag
-        if self._input_node.nodetype == "switch":
+        # get the interface mapping for the node
+        self._if_map = self.root.get_axi_stream_interface_map(self.name)
+        self._input_interface = self._if_map["S_AXIS"]
+        self._output_interface = self._if_map["M_AXIS"]
+        self._transferring: bool = False
+        # these will be initialized later by _build_dependencies
+        self._input_payload: _MutableRef | list[_MutableRef] = None
+        self._max_payload_size: _MutableRef | None = None
+        # buffer and other 
+        self._buffer: np.ndarray | None = None
+        self._is_switch_input: bool = False
+        self._switch_func: callable | None = None
+        self._current_payload_index : int | None = None
+
+    def _build_dependencies(self) -> None:
+        """Build the dependencies for this node.
+
+        Resolves input payload references and allocates the receive buffer.
+        """
+        # fetch the input payload and the maximum size of the input buffers
+        self._input_payload = self.root.get_reference(f"{self._input_interface}/payload")
+        self._max_payload_size = self.root.get_reference(f"{self._input_interface}/max_payload_size")
+        # Do not allocate the buffer yet, since we do not know if the max payload size has a valid value
+        # try to get the input switch node 
+        if isinstance(self._input_payload, list):
+            self._switch_func = self.root.get_reference(f"{self._input_interface}/payload_switch_func")
             self._is_switch_input = True
-        else:
-            self._is_switch_input = False
-        # allocate buffer, knowing that the max size is in bytes
-        self._transffering = False
-        self._current_payload = {}
-        self._buffer = allocate(shape=(_max_buffer_size,), dtype=np.uint8)
-        self._input_interface = _input_interface
 
     def init_dma(self) -> bool:
-        """Initialize the DMA.
+        """Initialize the DMA transfer.
 
-        :return: True if the DMA has been initialized correctly
+        Sets the master to the first available payload and starts the receive
+        channel transfer.
+
+        :return: ``True`` if the DMA was initialized and a transfer was started,
+            ``False`` if no payload is available
         :rtype: bool
+        :raises RuntimeError: If the DMA is already transferring
         """
-        # if the input is a switch, set the master to the first payload
-        if self._is_switch_input:
-            self.current_payload = self._input_node.set_master_to_first_payload()
-        else:
-            self.current_payload = self._input_node.payload
-        # if the payload is empty, or the payload is on the wrong interface, do nothing
-        if not self.current_payload or self.current_payload["on_interface"] != self._input_interface:
-            self._transffering = False
+        if self._buffer is None:
+            if not self._max_payload_size:
+                raise RuntimeError()
+            self._buffer = allocate(shape=(self._max_payload_size["value"],), dtype=np.uint8)
+        if self._transferring:
+            logger.error("DMA already transferring, cannot initialize")
+            raise RuntimeError("DMA already transferring, cannot initialize")
+        if not self._input_payload:
+            logger.warning("No payload to transfer for DMA node %s", self.name)
             return False
-        self._transffering = True
-        # if the payload is not empty, start the transfer
+        # further checks and set the current payload
+        if self._is_switch_input:
+            for i, payload in enumerate(self._input_payload):
+                if payload:
+                    self._current_payload_index = i
+                    self._switch_func(i)
+                    break
+            else:
+                # loop exhausted without break -> no valid payload found
+                logger.warning("No payload to transfer for DMA node %s", self.name)
+                return False
+        self._transferring = True
+        # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
         return True
 
-    def transfer_all(self, queque: queue.Queue) -> bool:
-        """Transfer all the data from the DMA.
+    def transfer_all(self, data_queue: queue.Queue) -> bool:
+        """Transfer all available data from the DMA into the provided queue.
 
-        Returns False on a transfer error, including no data transfer.
-
-        :param queque: Queue to put the data in
-        :type queque: queue.Queue
-        :return: True if the transfer has been completed correctly
+        :param data_queue: Queue in which to put ``(source_name, data_array)`` tuples
+        :type data_queue: queue.Queue
+        :return: ``True`` if all transfers completed successfully, ``False`` on error
+            or if no transfer was started
         :rtype: bool
         """
-        if not self._transffering:
+        if not self._transferring:
             return False
-        # if the input is a switch, transfer all payloads and then return true
-        if self._is_switch_input:
-            while True:
-                # check for errors
-                if self._ll_handler.recvchannel.error:
-                    logger.error("DMA transfer error for node %s", self.name)
-                    return False
-                self._ll_handler.recvchannel.wait()
-                queque.put((self.current_payload["from_node"], self._buffer[: self.current_payload["size"]].copy()))
-                self.current_payload = self._input_node.set_master_to_next_payload()
-                if not self.current_payload or self.current_payload["on_interface"] != self._input_interface:
+        # get the current payload
+        current_payload = (
+            self._input_payload
+            if self._current_payload_index is None
+            else self._input_payload[self._current_payload_index]
+        )
+        while True:
+            # check for errors
+            if self._ll_handler.recvchannel.error:
+                logger.error("DMA transfer error for node %s", self.name)
+                return False
+            self._ll_handler.recvchannel.wait()
+            data_queue.put(
+                (current_payload["source"],
+                 self._buffer[: current_payload["size"]].copy())
+            )
+            # break the loop if the input is not a switch or if the current payload is the last
+            if not self._is_switch_input or self._current_payload_index >= len(self._input_payload) - 1:
+                break
+            # find the next valid input payload to transfer
+            for i in range(self._current_payload_index + 1, len(self._input_payload)):
+                if self._input_payload[i]:
+                    self._current_payload_index = i
+                    self._switch_func(i)
+                    current_payload = self._input_payload[i]
                     break
-                self._ll_handler.recvchannel.transfer(self._buffer)
-            return True
-        # if the input is not a switch, transfer the single payload and return true
-        self._ll_handler.recvchannel.wait()
-        queque.put((self._input_node.name, self._buffer[: self.current_payload["size"]].copy()))
+            else:
+                # no more valid payloads
+                break
+            self._ll_handler.recvchannel.transfer(self._buffer)
         return True

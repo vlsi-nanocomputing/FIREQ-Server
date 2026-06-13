@@ -9,23 +9,46 @@ import numpy as np
 from FIREQ_LL_API import AcquisitionDriver
 
 from ._generic_node import _GenericNode
-from ._utils import _get_dict_hash, _get_periods_from_clock
+from ._utils import _get_dict_hash, _get_periods_from_clock, _MutableRef
 
 logger = logging.getLogger(__name__)
 
 
 class AcquisitionNode(_GenericNode):
-    """Object representing the acquisition IPs.
+    """Object representing the acquisition IP.
 
-    Dict definition:
-        _name: str, name of the trigger generator node/istance
-        _ll_handler: AcquisitionDriver, handler to the low level driver
-        $duration: float, duration of the acquisition in ns
-        $output_type: str, "raw"/"decimated"/"accumulated"
-        $rfrequency: float, demodulation frequency in MHz
-        $rphase: float, demodulation initial phase in radians
-        $rchannel: int, trigger channel, set to 0 for no trigger
-        $tof: float, time of flight in ns
+    Dictionary definition for configuration:
+
+    .. list-table::
+       :header-rows: 1
+
+       * - Key
+         - Type
+         - Description
+       * - ``_name``
+         - ``str``
+         - Name of the acquisition node instance
+       * - ``_ll_handler``
+         - ``AcquisitionDriver``
+         - Low-level driver handler
+       * - ``$duration``
+         - ``float``
+         - Duration of the acquisition in ns
+       * - ``$output_type``
+         - ``str``
+         - Output type: ``"raw"``, ``"decimated"`` or ``"accumulated"``
+       * - ``$rfrequency``
+         - ``float``
+         - Demodulation frequency in MHz
+       * - ``$rphase``
+         - ``float``
+         - Demodulation initial phase in radians
+       * - ``$rchannel``
+         - ``int``
+         - Trigger channel, set to 0 for no external trigger
+       * - ``$tof``
+         - ``float``
+         - Time of flight in ns
     """
 
     nodetype = "acquisition"
@@ -41,9 +64,9 @@ class AcquisitionNode(_GenericNode):
 
         :param name: Name of the node
         :type name: str
-        :param parent: Parent node
+        :param parent: Parent node in the system tree
         :type parent: _GenericNode
-        :param _ll_handler: Low level handler
+        :param _ll_handler: Low-level acquisition driver
         :type _ll_handler: AcquisitionDriver
         """
         super().__init__(name=name, parent=parent)
@@ -53,17 +76,16 @@ class AcquisitionNode(_GenericNode):
         self._sampling_frequency = self.root.get_acqisition_sampling_frequency()
         # get interface mapping, to translate payload interface to interface id
         self._interface_map = self.root.get_axi_stream_interface_map(self.name)
-        # create payloads
-        self.payload = {}
-        # hash of the base payload
-        self._base_payload_hash = _get_dict_hash(self._ll_handler.payload)
-        # register payload update functions, one for each interface
-        # TODO: fix ordering of payloads
+        # create payloads dictionary
+        self.payload: dict[str, _MutableRef] = {}
+        # base payload hash
+        self._base_payload_hash: int | None = None
+        # register payload update functions, one for each output interface
         for output_if in set(self._ll_handler._output_interfaces.values()):
             if_id = self._interface_map[output_if]
-            self.payload[output_if] = {}
-            self.root.register_update_function(f"{if_id}/payload", self.update_payload)
-            self.root.add_reference(f"{if_id}/payload", self.payload[if_id])
+            self.payload[output_if] = _MutableRef()
+            self.root.register_update_function(f"{if_id}/payload", self._make_payload_updater(output_if))
+            self.root.add_reference(f"{if_id}/payload", self.payload[output_if])
 
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=1)
     def set_acquisition_duration(self, duration: float) -> int:
@@ -78,10 +100,10 @@ class AcquisitionNode(_GenericNode):
         return self._ll_handler.set_acquisition_duration(int(clock_cycles))
 
     @_GenericNode.parameter_callback("$output_type", sweepable=False, cost=1)
-    def set_decimated_output_type(self, output_type: str) -> int:
-        """Set the decimated output type.
+    def set_output_mode(self, output_type: str) -> int:
+        """Set the output type of the acquisition.
 
-        :param output_type: Output type, can be "raw", "decimated" or "accumulated"
+        :param output_type: Output type, can be ``"raw"``, ``"decimated"`` or ``"accumulated"``
         :type output_type: str
         :return: Error code (0 on success)
         :rtype: int
@@ -116,7 +138,7 @@ class AcquisitionNode(_GenericNode):
     def set_trigger_channel(self, channel: int) -> int:
         """Set the trigger channel.
 
-        :param channel: Trigger channel number, set to 0 for no trigger
+        :param channel: Trigger channel number, set to 0 for no external trigger
         :type channel: int
         :return: Error code (0 on success)
         :rtype: int
@@ -135,18 +157,38 @@ class AcquisitionNode(_GenericNode):
         clock_cycles = _get_periods_from_clock(time_of_flight, self._clock_frequency)
         return self._ll_handler.set_time_of_flight(int(clock_cycles))
 
-    def update_payload(self) -> bool:
-        """Update the payload and returns a boolean to tell the caller if a change happened."""
+    def _make_payload_updater(self, output_if: str) -> callable:
+        """Create a closure that updates the payload for a specific interface.
+
+        :param output_if: The output interface to bind the updater to
+        :type output_if: str
+        :return: A callable that updates only the bound interface's payload
+        :rtype: callable
+        """
+
+        def updater() -> bool:
+            return self._update_payload_for_interface(output_if)
+
+        return updater
+
+    def _update_payload_for_interface(self, output_if: str) -> bool:
+        """Update the payload for a single interface and notify whether a change happened.
+
+        :param output_if: The output interface to update
+        :type output_if: str
+        :return: ``True`` if the payload has changed since the last call, ``False`` otherwise
+        :rtype: bool
+        """
         # get the hash of the payload and compare it to the last computed hash
         phash = _get_dict_hash(self._ll_handler.payload)
-        if phash == self._payload_hash:
+        if phash == self._base_payload_hash:
             return False
         # a change has been detected
-        self._payload_hash = phash
-        for output_if in self.payload.keys():
-            if self._ll_handler.payload["on_interface"] == output_if:
-                self.payload[output_if]["size"] = self._ll_handler.payload["size"]
-            else:
-                self.payload[output_if] = {}
-        logger.debug("Payload changed for acquisition node %s", self.name)
+        self._base_payload_hash = phash
+        if self._ll_handler.payload["on_interface"] == output_if:
+            self.payload[output_if]["size"] = self._ll_handler.payload["size"]
+            self.payload[output_if]["source"] = self.name
+        else:
+            self.payload[output_if].clear()
+        logger.debug("Payload changed for acquisition node %s on interface %s", self.name, output_if)
         return True
