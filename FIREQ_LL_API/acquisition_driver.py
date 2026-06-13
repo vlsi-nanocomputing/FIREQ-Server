@@ -176,7 +176,7 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
         self._axi_lite_interface_mmio.write(0, control_register)
 
-        logger.debug("acquistion triggered manually")
+        logger.debug("acquisition triggered manually")
 
         return 0
 
@@ -190,7 +190,7 @@ class AcquisitionDriver(_FIREQDriver):
         """
         if duration < 1 or duration > self.maximum_duration:
             print("acquisition duration is out of range")
-            logger.error(f"acquistion duration: {duration} out of range")
+            logger.error(f"acquisition duration: {duration} out of range")
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)

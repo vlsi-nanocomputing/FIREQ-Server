@@ -51,6 +51,7 @@ class GeneratorDriver(_FIREQDriver):
         super().__init__(description=description)
 
         # set the axi full interface
+        self.axi_full_initialized = False
         self._envelope_memory_interface = None
         self._common_envelope_memory_interface = None
         self._memory_mapped_fifo_interface = None
@@ -109,6 +110,8 @@ class GeneratorDriver(_FIREQDriver):
         self._memory_mapped_fifo_interface = MMIO(
             _next_segment(self._wdw_memory_interface), self.memory_mapped_fifo_segment_depth
         )
+        self.axi_full_initialized = True
+        logger.debug("AXI Full interface initialized")
         # reset envelope dictionary and memory
         self.clear_envelope_memory()
 
@@ -136,7 +139,7 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        if self._axi_full_interface_mmio is None:
+        if self.axi_full_initialized is None:
             logger.error("AXI Full interface not initialized")
             return -3
 
@@ -565,52 +568,39 @@ class GeneratorDriver(_FIREQDriver):
         wdw |= increment
         return wdw
 
-    def print_description(self) -> None:
-        """Print a detailed description of the generator IP configuration parameters."""
-        print(
-            "sample_memory_address_width: "
-            + str(self.sample_memory_address_width)
-            + ", address width of the envelope memory (word/IQSample aligned)"
+    def print_description(self, printer_func: callable) -> None:
+        """Print a detailed description of the generator IP configuration parameters.
+
+        :param printer_func: Function to use to print the description
+        :type printer_func: callable
+        """
+        string = (
+            f"sample_memory_address_width: {self.sample_memory_address_width}, address width of the envelope "
+            "memory (word/IQSample aligned)"
         )
-        print(
-            "channel_sample_memory_depth: "
-            + str(self.channel_sample_memory_depth)
-            + ", depth of the envelope memory (words/IQSamples aligned)"
+        string += (
+            f"\nchannel_sample_memory_depth: {self.channel_sample_memory_depth}, depth of the envelope "
+            "memory (words/IQSamples aligned)"
         )
-        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of a wave (samples)")
-        print(
-            "fractional_precision: "
-            + str(self.fractional_precision)
-            + ", fractional precision of the interpolator (bits)"
+        string += f"\nmaximum_duration: {self.maximum_duration}, maximum duration of a wave (samples)"
+        string += (
+            f"\nfractional_precision: {self.fractional_precision}, fractional precision of the interpolator (bits)"
         )
-        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
-        print(
-            "number_of_channels: "
-            + str(self.number_of_channels)
-            + ", parallelism of the generator (samples/clock cycle)"
+        string += f"\nsample_size: {self.sample_size}, width of samples (bits)"
+        string += f"\nnumber_of_channels: {self.number_of_channels}, parallelism of the generator (samples/clock cycle)"
+        string += f"\nphase_depth: {self.phase_depth}, width of phases (bits)"
+        string += (
+            f"\ntrigger_channels: {self.trigger_channels}, number of trigger channels for readout and drive (bits)"
         )
-        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
-        print(
-            "trigger_channels: "
-            + str(self.trigger_channels)
-            + ", number of trigger channels for readout and drive (bits)"
+        string += f"\naxi_full_interface_depth: {self.axi_full_interface_depth}, axi full interface depth (bytes)"
+        string += (
+            f"\ntotal_sample_memory_segment_depth: {self.total_sample_memory_segment_depth}, envelope memory "
+            "segment depth (bytes)"
         )
-        print("axi_full_interface_depth: " + str(self.axi_full_interface_depth) + ", axi full interface depth (bytes)")
-        print(
-            "total_sample_memory_segment_depth: "
-            + str(self.total_sample_memory_segment_depth)
-            + ", envelope memory segment depth (bytes)"
+        string += f"\nwave_memory_segment_depth: {self.wave_memory_segment_depth}, wave memory segment depth (bytes)"
+        string += (
+            f"\nmemory_mapped_fifo_segment_depth: {self.memory_mapped_fifo_segment_depth}, memory mapped FIFO "
+            "segment depth (bytes)"
         )
-        print(
-            "wave_memory_segment_depth: " + str(self.wave_memory_segment_depth) + ", wave memory segment depth (bytes)"
-        )
-        print(
-            "memory_mapped_fifo_segment_depth: "
-            + str(self.memory_mapped_fifo_segment_depth)
-            + ", memory mapped FIFO segment depth (bytes)"
-        )
-        print(
-            "seed_lfsr_width: "
-            + str(self.seed_lfsr_width)
-            + ", width of lsfr seed and memory mapped FIFO entries (bits)"
-        )
+        string += f"\nseed_lfsr_width: {self.seed_lfsr_width}, width of lsfr seed and memory mapped FIFO entries (bits)"
+        printer_func(string)
