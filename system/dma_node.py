@@ -51,17 +51,16 @@ class DMANode(_GenericNode):
         self._ll_handler = _ll_handler
         # get the interface mapping for the node
         self._if_map = self.root.get_axi_stream_interface_map(self.name)
-        self._input_interface = self._if_map["S_AXIS"]
-        self._output_interface = self._if_map["M_AXIS"]
+        self._input_interface = self._if_map["S_AXIS_S2MM"]
         self._transferring: bool = False
         # these will be initialized later by _build_dependencies
         self._input_payload: _MutableRef | list[_MutableRef] = None
         self._max_payload_size: _MutableRef | None = None
-        # buffer and other 
+        # buffer and other
         self._buffer: np.ndarray | None = None
         self._is_switch_input: bool = False
         self._switch_func: callable | None = None
-        self._current_payload_index : int | None = None
+        self._current_payload_index: int | None = None
 
     def _build_dependencies(self) -> None:
         """Build the dependencies for this node.
@@ -72,7 +71,7 @@ class DMANode(_GenericNode):
         self._input_payload = self.root.get_reference(f"{self._input_interface}/payload")
         self._max_payload_size = self.root.get_reference(f"{self._input_interface}/max_payload_size")
         # Do not allocate the buffer yet, since we do not know if the max payload size has a valid value
-        # try to get the input switch node 
+        # try to get the input switch node
         if isinstance(self._input_payload, list):
             self._switch_func = self.root.get_reference(f"{self._input_interface}/payload_switch_func")
             self._is_switch_input = True
@@ -137,10 +136,7 @@ class DMANode(_GenericNode):
                 logger.error("DMA transfer error for node %s", self.name)
                 return False
             self._ll_handler.recvchannel.wait()
-            data_queue.put(
-                (current_payload["source"],
-                 self._buffer[: current_payload["size"]].copy())
-            )
+            data_queue.put((current_payload["source"], self._buffer[: current_payload["size"]].copy()))
             # break the loop if the input is not a switch or if the current payload is the last
             if not self._is_switch_input or self._current_payload_index >= len(self._input_payload) - 1:
                 break

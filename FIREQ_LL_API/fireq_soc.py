@@ -71,15 +71,15 @@ class FIREQSoC(Overlay):
         if init_clocks:
             self._init_rf_clks()
 
+        # init the axi interfaces of FIREQ drivers
+        self._init_fireq_ips()
+
         # Organize ALL IPs in the design
         self.ips = {}
         self._discover_ips()
 
         # Check the existance of FIREQ ips in the design
         self._check_fireq_ips()
-
-        # init the axi interfaces of FIREQ drivers
-        self._init_fireq_ips()
 
         # Find the rfdc IP
         self.rfdc = None

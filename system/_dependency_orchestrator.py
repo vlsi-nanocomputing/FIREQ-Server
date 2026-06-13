@@ -105,8 +105,9 @@ class _DependencyOrchestrator:
 
             if did_change:
                 for successor in self._dependency_graph.successors(node):
-                    to_run.add(successor)
-                    to_run_length += 1
+                    if successor not in to_run:
+                        to_run.add(successor)
+                        to_run_length += 1
 
             if evaluated_nodes == to_run_length:
                 # If all queued nodes have been evaluated and no successors were

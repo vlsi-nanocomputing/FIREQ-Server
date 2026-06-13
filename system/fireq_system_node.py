@@ -78,7 +78,7 @@ class FIREQSystemNode(_GenericNode):
                 continue
             logger.debug("Creating node for %s", subsystem_name)
             # create the child node
-            _driver_wrappers[driver_type](name=instance, parent=self, _ll_handler=ll_handler)
+            _driver_wrappers[driver_type](name=subsystem_name, parent=self, _ll_handler=ll_handler)
 
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericNode:
         """Create a child node of the specified type.

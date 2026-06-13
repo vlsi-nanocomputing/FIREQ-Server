@@ -56,7 +56,7 @@ class SwitchNode(_GenericNode):
         self._input_interfaces: list[str] = []
         self._output_interface: str | None = None
         for interface, if_id in self._if_map.items():
-            if interface == "M_AXIS":
+            if interface == "M00_AXIS":
                 self._output_interface = if_id
             else:
                 # fix the order of input interfaces here
