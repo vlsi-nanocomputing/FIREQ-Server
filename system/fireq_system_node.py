@@ -1,6 +1,7 @@
 """Low-level FIREQ SoC overlay support and discovery helpers."""
 
 import logging
+from queue import Queue
 from typing import Any
 
 from FIREQ_LL_API import FIREQSoC
@@ -8,6 +9,8 @@ from FIREQ_LL_API import FIREQSoC
 from ._dependency_orchestrator import _DependencyOrchestrator
 from ._generic_node import _driver_wrappers, _GenericNode
 from ._utils import _MutableRef
+from .dma_node import DMANode
+from .trigger_generator_node import TriggerGeneratorNode
 
 logger = logging.getLogger(__name__)
 
@@ -54,18 +57,35 @@ class FIREQSystemNode(_GenericNode):
 
         # build nodes from the FIREQSoC object
         self._init_nodes()
-        self.shots: int | None = None
-        self.sw_shots: int | None = None
-        self.max_hw_shots: int | None = None
+
         # build refs and other
+        self.shots: int | None = None
+        self.requested_hw_shots = _MutableRef()
         self.hw_shots = _MutableRef()
+        self.max_hw_shots = _MutableRef()
+        self.register_update_function(self.make_func_label(self, "max_hw_shots"), self.update_max_hw_shots)
+        self.register_update_function(self.make_func_label(self, "requested_hw_shots"), self.update_requested_hw_shots)
         self.register_update_function(self.make_func_label(self, "hw_shots"), self.update_hw_shots)
         self.add_reference(self.make_func_label(self, "hw_shots"), self.hw_shots)
+
         # input references
         self._max_hw_shot_list: list[_MutableRef] | None = None
         self._hw_supported_hw_shots: _MutableRef | None = None
+
         # build dependencies, from the FIREQSoC object
         self._build_dependencies()
+
+        # find the dma nodes and trigger generator nodes, save them to lists
+        self._dma_nodes: list[DMANode] = [node for node in self.children if node.nodetype == "dma"]
+        self._trigger_generator_nodes: list[TriggerGeneratorNode] = [
+            node for node in self.children if node.nodetype == "trigger_generator"
+        ]
+
+        # check that we only have one trigger generator node, raise not implemented error if not
+        if len(self._trigger_generator_nodes) != 1:
+            raise NotImplementedError(
+                f"Only one trigger generator node is supported, got {len(self._trigger_generator_nodes)}"
+            )
 
     def _init_nodes(self) -> None:
         """Initialize the nodes in the FIREQ system.
@@ -111,14 +131,15 @@ class FIREQSystemNode(_GenericNode):
         :rtype: int
         """
         if shots <= 0:
+            self.shots = None
             logger.error("Number of shots must be positive, got %s", shots)
             return -3
         self.shots = shots
         logger.debug("Shots set to %s", shots)
         return 0
 
-    def update_hw_shots(self) -> bool:
-        """Update the number of hardware shots.
+    def update_max_hw_shots(self) -> bool:
+        """Update the maximum number of hardware shots.
 
         Computes the maximum number of hardware shots that can be executed without
         overflowing any acquisition FIFO, then sets ``hw_shots`` and ``sw_shots``
@@ -127,22 +148,30 @@ class FIREQSystemNode(_GenericNode):
         :return: ``True`` if the number of shots changed, ``False`` otherwise
         :rtype: bool
         """
-        if self.shots is None:
-            self.hw_shots.clear()
-            return self.hw_shots.hash_and_compare
-
+        # given the alloable hw shots by the fifos and the maximum hw shots supported by the system
+        # compute the maximum number of hw shots
         # set the number of max shots to a value that is invalid
         max_hw_shots = None
-        for ref in self.max_hw_shots:
+        for ref in self._max_hw_shot_list:
             if ref:
                 if max_hw_shots is None:
                     max_hw_shots = ref["value"]
                 else:
                     max_hw_shots = min(max_hw_shots, ref["value"])
         if max_hw_shots is None or max_hw_shots == 0:
-            self.hw_shots.clear()
-        hw_shots = min(max_hw_shots, self._hw_supported_hw_shots["value"])
-        self.hw_shots["value"] = hw_shots
+            self.max_hw_shots.clear()
+        max_hw_shots = min(max_hw_shots, self._hw_supported_hw_shots["value"])
+        self.max_hw_shots["value"] = max_hw_shots
+        logger.debug("Hardware shots set to %s", self.max_hw_shots["value"])
+        return self.max_hw_shots.hash_and_compare()
+
+    def update_requested_hw_shots(self) -> bool:
+        """Update the requested number of hardware shots."""
+        return self.requested_hw_shots.hash_and_compare()
+
+    def update_hw_shots(self) -> bool:
+        """Update the actual number of hardware shots."""
+        self.hw_shots["value"] = min(self.max_hw_shots["value"], self.requested_hw_shots["value"])
         logger.debug("Hardware shots set to %s", self.hw_shots["value"])
         return self.hw_shots.hash_and_compare()
 
@@ -155,20 +184,23 @@ class FIREQSystemNode(_GenericNode):
         for node in self.descendants:
             if hasattr(node, "_build_dependencies"):
                 node._build_dependencies()
-        # create a list of references for all fifo max hw shots
+        # get references
         fifo_children = [node for node in self.children if node.nodetype == "acquisition_fifo"]
         self._max_hw_shot_list: list[_MutableRef] = []
         for node in fifo_children:
             self._max_hw_shot_list.append(self.get_reference(self.make_func_label(node, "max_hw_shots")))
         self._hw_supported_hw_shots = self.get_reference("hw_supported_hw_shots")
-        # register the dependency between the hw shot update and the max hw shots
-        # FIXME: this should depend on the shot variable too
+        # register dependency for the hw shot attribute
         self.add_dependency(
-            self.make_func_label(self, "hw_shots"),
+            self.make_func_label(self, "max_hw_shots"),
             depends_on=[self.make_func_label(node, "max_hw_shots") for node in fifo_children],
         )
+        self.add_dependency(
+            self.make_func_label(self, "hw_shots"),
+            depends_on=[self.make_func_label(self, "requested_hw_shots"), self.make_func_label(self, "max_hw_shots")],
+        )
 
-    def add_reference(self, ref_name: str, ref: Any) -> None:
+    def add_reference(self, ref_name: str, ref: object) -> None:
         """Add a reference to a variable.
 
         :param ref_name: Name of the reference
@@ -239,15 +271,53 @@ class FIREQSystemNode(_GenericNode):
         for dep in depends_on:
             self._dependency_orchestrator.add_dependency(func_label, dep)
 
-    def run_experiment(self) -> None:
+    def run_experiment(self, queue: Queue) -> None:
         """Run the experiment.
 
         Resolves intra-system dependencies and updates all registered variables
         before the experiment starts.
         """
+        # given the max number of hw shots, the number of shots plan the experiment
+        # then, set the number of hw shots for each sw shot in the trigger generator
+        # run the experiment and extract data from the dma by sending it to the queque
+        # TODO: add a series of checks
+        executed_shots = 0
+        self.requested_hw_shots["value"] = self.shots
+        sw_shots = 0
         # update the dependencies
         self._dependency_orchestrator.update()
-        # iterate over all sw shots
+        # get the actual number of hw shots
+        hw_shots = self.hw_shots["value"]
+        # set the number of shots
+        self._trigger_generator_nodes[0].set_hw_shots(hw_shots)
+        while executed_shots < self.shots["value"]:
+            extra_shots = (executed_shots + hw_shots) - self.shots
+            if extra_shots > 0:
+                # reduce the number of hw shots and rerun dependency
+                logger.debug("Reducing the number of hw shots to properly run the expeirment")
+                hw_shots = hw_shots - extra_shots
+                self.requested_hw_shots["value"] = hw_shots
+                self._dependency_orchestrator.update()
+                if self.hw_shots["value"] != hw_shots:
+                    logger.error("Failed to set the number of hw shots to the correct amount")
+                    raise RuntimeError("Failed to set the number of hw shots to the correct amount")
+                # set the number of shots since it changed
+                self._trigger_generator_nodes[0].set_hw_shots(hw_shots)
+            # init the dma
+            for dma_nodes in self._dma_nodes:
+                dma_nodes.init_dma()
+            # start the experiment
+            self._trigger_generator_nodes[0].start_experiment()
+            # wait for the experiment to finish
+            while not self._trigger_generator_nodes[0].is_done():
+                pass
+            # extract data from the dma
+            for dma_node in self._dma_nodes:
+                dma_node.transfer_all(queue)
+            # increment the number of executed shots
+            executed_shots += hw_shots
+            sw_shots += 1
+        logger.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 
     # ------------------------------------------------------------------
     # System properties

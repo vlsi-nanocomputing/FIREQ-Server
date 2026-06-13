@@ -146,25 +146,8 @@ class TriggerGeneratorNode(_GenericNode):
         # get the clock frequency from the root node
         self._clock_frequency = self.root.get_fabric_frequency()
         self._ll_handler = _ll_handler
-        self.root.register_update_function(self.root.make_func_label(self, "update_hw_shots"), self.update_hw_shots)
-        # this will be initialized in _build_dependencies
-        self._hw_shots: _MutableRef | None = None
-        # reference to the most hw shots
         self._hw_supported_shots = _MutableRef(value=self._ll_handler.max_hw_repetitions)
         self.root.add_reference("hw_supported_hw_shots", self._hw_supported_shots)
-
-    def _build_dependencies(self) -> None:
-        """Build the dependencies for this node.
-
-        Resolves the hw_shot dependencies.
-        """
-        # get the hw shots referece
-        self._hw_shots = self.root.get_reference(self.root.make_func_label(self.root, "hw_shots"))
-        # set the dependency between this node and the number of hw shots
-        self.root.add_dependency(
-            self.root.make_func_label(self, "update_hw_shots"),
-            depends_on=self.root.make_func_label(self.root, "hw_shots"),
-        )
 
     @_GenericNode.parameter_callback("$experiment_duration", sweepable=True, cost=1)
     def set_experiment_duration(self, duration: float) -> int:
@@ -201,29 +184,24 @@ class TriggerGeneratorNode(_GenericNode):
             logger.error("unsupported child type %s", of_type)
             raise ValueError(f"unsupported child type {of_type}")
 
-    def update_hw_shots(self) -> bool:
-        """Update the number of hardware shots executed in the experiment.
+    def set_hw_shots(self, shots: int) -> int:
+        """Set the number of hardware shots.
 
-        This update function depends on the maximum number of shots that the data
-        FIFOs can support.  It picks the minimum across all FIFOs to prevent
-        overflow and coerces the value to the hardware's maximum supported
-        repetitions.
-
-        :return: ``True`` if the number of shots has changed, ``False`` otherwise
-        :rtype: bool
-        :raises ValueError: If the number of shots is ``None`` or zero, indicating
-            a broken experiment setup or that a single-shot packet would overflow
-            a FIFO
-        :raises ValueError: If the driver call fails
+        :param shots: Number of hardware shots
+        :type shots: int
+        :return: Error code (0 on success)
+        :rtype: int
         """
-        # check that the number of hw shots is valid
-        if not self._hw_shots or self._hw_shots["value"] == 0:
-            logger.error("hw shots is None or zero")
-            raise ValueError("hw shots is None or zero")
-        # write the amount to the driver
-        hw_shots = self._hw_shots["value"]
-        ret = self._ll_handler.set_number_of_shots(hw_shots)
-        if ret != 0:
-            logger.error("failed to set number of shots %s", hw_shots)
-            raise ValueError(f"failed to set number of shots {hw_shots}")
-        return True
+        return self._ll_handler.set_number_of_shots(shots)
+
+    def start_experiment(self) -> None:
+        """Start the experiment by calling the low-level handler."""
+        self._ll_handler.start_experiment()
+
+    def is_done(self) -> bool:
+        """Check if the experiment is finished.
+
+        :return: True if the experiment is finished, False if still running
+        :rtype: bool
+        """
+        return self._ll_handler.is_done()
