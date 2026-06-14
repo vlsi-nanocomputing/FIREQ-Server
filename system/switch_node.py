@@ -55,12 +55,16 @@ class SwitchNode(_GenericNode):
         self._if_map = self.root.get_axi_stream_interface_map(self.name)
         self._input_interfaces: list[str] = []
         self._output_interface: str | None = None
+        slave_ifs = {}
         for interface, if_id in self._if_map.items():
             if interface == "M00_AXIS":
                 self._output_interface = if_id
             else:
-                # fix the order of input interfaces here
-                self._input_interfaces.append(if_id)
+                # slave interfaces are like S00_AXIS, S01_AXIS, S02_AXIS, etc.
+                slave_index = int(interface[1:3])
+                slave_ifs[slave_index] = if_id
+        # turn the slave interfaces into a list, ordered by the slave index
+        self._input_interfaces = [slave_ifs[i] for i in sorted(slave_ifs.keys())]
         # sanity check
         if not self._input_interfaces or self._output_interface is None:
             raise RuntimeError(f"Could not resolve input or output interface for SWITCH {self.name}")
@@ -79,7 +83,6 @@ class SwitchNode(_GenericNode):
         _max_size: int = 0
         for s_if in self._input_interfaces:
             # get the input payload and append it to the list
-            # TODO: this list should be ordered, so that the switch user can correctly select the slave payload
             input_payload = self.root.get_reference(f"{s_if}/payload")
             if isinstance(input_payload, list):
                 raise NotImplementedError(

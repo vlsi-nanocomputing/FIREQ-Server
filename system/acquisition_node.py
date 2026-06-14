@@ -78,8 +78,6 @@ class AcquisitionNode(_GenericNode):
         self._interface_map = self.root.get_axi_stream_interface_map(self.name)
         # create payloads dictionary
         self.payload: dict[str, _MutableRef] = {}
-        # base payload hash
-        self._base_payload_hash: int | None = None
         # register payload update functions, one for each output interface
         for output_if in set(self._ll_handler._output_interfaces.values()):
             if_id = self._interface_map[output_if]
@@ -179,16 +177,9 @@ class AcquisitionNode(_GenericNode):
         :return: ``True`` if the payload has changed since the last call, ``False`` otherwise
         :rtype: bool
         """
-        # get the hash of the payload and compare it to the last computed hash
-        phash = _get_dict_hash(self._ll_handler.payload)
-        if phash == self._base_payload_hash:
-            return False
-        # a change has been detected
-        self._base_payload_hash = phash
-        if self._ll_handler.payload["on_interface"] == output_if:
+        if self._ll_handler.payload and self._ll_handler.payload["on_interface"] == output_if:
             self.payload[output_if]["size"] = self._ll_handler.payload["size"]
             self.payload[output_if]["source"] = self.name
         else:
             self.payload[output_if].clear()
-        logger.debug("Payload changed for acquisition node %s on interface %s", self.name, output_if)
-        return True
+        return self.payload[output_if].hash_and_compare()

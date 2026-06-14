@@ -288,7 +288,7 @@ class FIREQSystemNode(_GenericNode):
         self._dependency_orchestrator.update()
         # get the actual number of hw shots
         hw_shots = self.hw_shots["value"]
-        while executed_shots < self.shots["value"]:
+        while executed_shots < self.shots:
             extra_shots = (executed_shots + hw_shots) - self.shots
             if extra_shots > 0:
                 # reduce the number of hw shots and rerun dependency

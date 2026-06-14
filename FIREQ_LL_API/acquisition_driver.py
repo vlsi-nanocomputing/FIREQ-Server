@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from ._utils import _compute_pinc_poff, _FIREQDriver, _set_bit, _set_bits
+from ._utils import _FIREQDriver, _set_bit, _set_bits
 
 __all__ = ["AcquisitionDriver"]
 
@@ -83,7 +83,7 @@ class AcquisitionDriver(_FIREQDriver):
                 self.payload["size"] = ((self._cache["duration"] + 1) % 2) * 2 * self.decimated_output_width // 8
             elif self._cache["output_mode"] == "accumulated":
                 self.payload["size"] = self.decimated_output_width // 8
-            self.payload["on_output"] = self._output_interfaces[self._cache["output_mode"]]
+            self.payload["on_interface"] = self._output_interfaces[self._cache["output_mode"]]
         else:
             self.payload = {}
 
@@ -146,27 +146,32 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def set_demodulation_initial_phase(self, phase: float) -> int:
+    def set_demodulation_initial_phase(self, normalized_phase: float) -> int:
         """Set acquisition demodulation frequency.
 
-        :param phase: Phase offset of the demodulation signal, normalized to pi
-        :type frequency: float
+        :param normalized_phase: Phase offset of the demodulation signal, normalized to 2pi
+        :type normalized_phase: float
         :return: Error code (0 on success)
         :rtype: int
         """
-        # get poff and pinc
-        phase_parameters = _compute_pinc_poff(0, phase, self._adc_samplerate, self.phase_depth)
+        # compute the phase increment
+        poff = int(2**self.phase_depth * normalized_phase)
 
+        # masking off the LSB of the phases. This is done in an effort to keep the generation and acquisition in phase.
+        # Generation is done (at the DAC) at a frequency that is double the one used for the ADC. As a result, the phase
+        # increment for the acquisition (at equal modulation and demodulation frequencies) is equal to double the one
+        # of the generation. Masking the LSB accounts for the truncation done in the generation portion, and keeps the
+        # two systems in sync.
         # TODO: check that this is ok even when moving away from the first nyquist zone.
         #       I am unsure if I have to invert the phase or not when in the second nyquist zone.
-        poff = phase_parameters[1] & (2**self.phase_depth - 2)
+        poff = poff & (2**self.phase_depth - 2)
 
         # write inc LOW
         self._axi_lite_interface_mmio.write(self._readout_off_l * 4, poff & 0xFFFFFFFF)
         # write inc HIGH
         self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
 
-        logger.debug("set initial phase to %s and phase offset to %s", phase, poff)
+        logger.debug("set initial phase to %s and phase offset to %s", normalized_phase, poff)
 
         return 0
 

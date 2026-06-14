@@ -257,10 +257,10 @@ class FIREQSoC(Overlay):
         if len(set(acq_sr)) > 1:
             logger.error("Acquisitions have different sampling frequencies")
             raise RuntimeError("Acquisitions have different sampling frequencies")
-        # set the sampling frequencies
-        self.fabric_frequency = fabric_frequency[0]
-        self.dac_samplerate = gen_sr[0]
-        self.adc_samplerate = acq_sr[0]
+        # set the fabric and sampling frequencies in MHz
+        self.fabric_frequency = fabric_frequency[0] / 1e6
+        self.dac_samplerate = gen_sr[0] / 1e6
+        self.adc_samplerate = acq_sr[0] / 1e6
 
     # ------------------------------------------------------------------
     # IP helpers

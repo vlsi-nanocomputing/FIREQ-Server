@@ -214,16 +214,16 @@ class _GenericNode(Node, metaclass=RegisterNode):
                         child = self.create_child(
                             name=dictitem["_name"],
                             of_type=key,
-                            **{k: v for k, v in dictitem.items() if k.startswith("_")},
+                            **{k: v for k, v in dictitem.items() if k.startswith("_") and k != "_name"},
                         )
                         item_copy = {k: v for k, v in dictitem.items() if not k.startswith("_")}
                         callback_list.extend(child.apply_configuration(item_copy))
                 else:
                     logger.error("unsupported value type for key %s", key)
-                    raise TypeError("unsupported value type in configuration dictionary")
+                    raise TypeError("unsupported value type for key %s", key)
         # throw error if any callback has failed
         if callback_error != 0:
-            logger.error("error applying configuration to system node")
-            raise RuntimeError("error applying configuration to system node")
+            logger.error("error applying configuration to %s", self.name)
+            raise RuntimeError("error applying configuration to %s", self.name)
 
         return callback_list
