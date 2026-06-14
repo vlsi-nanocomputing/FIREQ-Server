@@ -148,6 +148,30 @@ class TriggerGeneratorNode(_GenericNode):
         self._ll_handler = _ll_handler
         self._hw_supported_shots = _MutableRef(value=self._ll_handler.max_hw_repetitions)
         self.root.add_reference("hw_supported_hw_shots", self._hw_supported_shots)
+        # update functions and outside reference
+        self._hw_shots: _MutableRef | None = None
+        self.root.register_update_function(self.root.make_func_label(self, "hw_shots"), self.update_hw_shots)
+
+    def _build_dependencies(self) -> None:
+        """Build the dependencies for the trigger generator node."""
+        # get the number of hw shots
+        self._hw_shots = self.root.get_reference(self.root.make_func_label(self.root, "hw_shots"))
+        # add dependency between the update function and the hw shots of root
+        self.root.add_dependency(
+            self.root.make_func_label(self, "hw_shots"), self.root.make_func_label(self.root, "hw_shots")
+        )
+
+    def update_hw_shots(self) -> bool:
+        """Update the number of hardware shots."""
+        if self._hw_shots:
+            ret = self._ll_handler.set_number_of_shots(self._hw_shots["value"])
+            if ret != 0:
+                logger.error("Failed to set the number of shots")
+                raise RuntimeError("Failed to set the number of shots")
+        else:
+            logger.error("Reference to hw shots is invalid")
+            raise RuntimeError("Reference to hw shots is invalid")
+        return True
 
     @_GenericNode.parameter_callback("$experiment_duration", sweepable=True, cost=1)
     def set_experiment_duration(self, duration: float) -> int:
@@ -183,16 +207,6 @@ class TriggerGeneratorNode(_GenericNode):
         else:
             logger.error("unsupported child type %s", of_type)
             raise ValueError(f"unsupported child type {of_type}")
-
-    def set_hw_shots(self, shots: int) -> int:
-        """Set the number of hardware shots.
-
-        :param shots: Number of hardware shots
-        :type shots: int
-        :return: Error code (0 on success)
-        :rtype: int
-        """
-        return self._ll_handler.set_number_of_shots(shots)
 
     def start_experiment(self) -> None:
         """Start the experiment by calling the low-level handler."""

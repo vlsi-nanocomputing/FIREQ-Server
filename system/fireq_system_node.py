@@ -288,8 +288,6 @@ class FIREQSystemNode(_GenericNode):
         self._dependency_orchestrator.update()
         # get the actual number of hw shots
         hw_shots = self.hw_shots["value"]
-        # set the number of shots
-        self._trigger_generator_nodes[0].set_hw_shots(hw_shots)
         while executed_shots < self.shots["value"]:
             extra_shots = (executed_shots + hw_shots) - self.shots
             if extra_shots > 0:
@@ -301,8 +299,6 @@ class FIREQSystemNode(_GenericNode):
                 if self.hw_shots["value"] != hw_shots:
                     logger.error("Failed to set the number of hw shots to the correct amount")
                     raise RuntimeError("Failed to set the number of hw shots to the correct amount")
-                # set the number of shots since it changed
-                self._trigger_generator_nodes[0].set_hw_shots(hw_shots)
             # init the dma
             for dma_nodes in self._dma_nodes:
                 dma_nodes.init_dma()
