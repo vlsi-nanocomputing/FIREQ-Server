@@ -125,5 +125,6 @@ class FIFONode(_GenericNode):
         if self._input_payload and self._hw_shots["value"]:
             self.payload["size"] = self._hw_shots["value"] * self._input_payload["size"]
             self.payload["source"] = self._input_payload["source"]
+            self.payload["format"] = self._input_payload["format"]
         logger.debug("Recomputed payload for FIFO node %s", self.name)
         return self.payload.hash_and_compare()

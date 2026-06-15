@@ -137,7 +137,12 @@ class DMANode(_GenericNode):
                 logger.error("DMA transfer error for node %s", self.name)
                 return False
             self._ll_handler.recvchannel.wait()
-            data_queue.put((current_payload["source"], self._buffer[: current_payload["size"]].copy()))
+            # extract data and format it, then convert to complex
+            # data = self._buffer[: current_payload["size"]].view(current_payload["format"])
+            # data = data["real"].astype(np.float32) + 1j * data["imag"].astype(np.float32)
+            data_queue.put(
+                (current_payload["source"], current_payload["format"], self._buffer[: current_payload["size"]].copy())
+            )
             # break the loop if the input is not a switch or if the current payload is the last
             if not self._is_switch_input or self._current_payload_index >= len(self._input_payload) - 1:
                 break

@@ -180,6 +180,7 @@ class AcquisitionNode(_GenericNode):
         if self._ll_handler.payload and self._ll_handler.payload["on_interface"] == output_if:
             self.payload[output_if]["size"] = self._ll_handler.payload["size"]
             self.payload[output_if]["source"] = self.name
+            self.payload[output_if]["format"] = self._ll_handler.payload["format"]
         else:
             self.payload[output_if].clear()
         return self.payload[output_if].hash_and_compare()

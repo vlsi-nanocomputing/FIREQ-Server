@@ -36,6 +36,13 @@ class AcquisitionDriver(_FIREQDriver):
         "accumulated": "m01_axis",
     }
 
+    # Formats of the raw bytes coming from the buffers
+    _formats = {
+        "raw": (("real", "<i2"), ("imag", "<i2")),
+        "decimated": (("real", "<i2"), ("imag", "<i2")),
+        "accumulated": (("real", "<i2"), ("imag", "<i2")),
+    }
+
     # Port name of the fabric clock
     fabric_clock_port = "HS_axi_clock"
 
@@ -80,10 +87,11 @@ class AcquisitionDriver(_FIREQDriver):
             if self._cache["output_mode"] == "raw":
                 self.payload["size"] = self._cache["duration"] * self.non_decimated_output_width // 8
             elif self._cache["output_mode"] == "decimated":
-                self.payload["size"] = ((self._cache["duration"] + 1) % 2) * 2 * self.decimated_output_width // 8
+                self.payload["size"] = ((self._cache["duration"] + 1) // 2) * self.decimated_output_width // 8
             elif self._cache["output_mode"] == "accumulated":
                 self.payload["size"] = self.decimated_output_width // 8
             self.payload["on_interface"] = self._output_interfaces[self._cache["output_mode"]]
+            self.payload["format"] = self._formats[self._cache["output_mode"]]
         else:
             self.payload = {}
 
