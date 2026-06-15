@@ -119,7 +119,7 @@ class _GenericNode(Node, metaclass=RegisterNode):
         if key in self._callback_registry:
             return self._callback_registry[key]
         logger.error("key %s not found in callback registry", key)
-        raise KeyError(f"key {key} not found in callback registry")
+        raise KeyError("key %s not found in callback registry", key)
 
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericNode:
         """Create a child node of the specified type.
@@ -151,7 +151,7 @@ class _GenericNode(Node, metaclass=RegisterNode):
             if child.name == name:
                 return child
         logger.error("child %s not found", name)
-        raise KeyError(f"child {name} not found")
+        raise KeyError("child %s not found", name)
 
     def apply_configuration(self, configuration: dict[str, object]) -> list[tuple]:
         """Apply a configuration dictionary to the tree, starting from this node.
@@ -180,8 +180,12 @@ class _GenericNode(Node, metaclass=RegisterNode):
         callback_list: list[tuple] = []
         callback_error: int = 0
         for key, value in configuration.items():
+            # check if the key is a string, only strings are allowed
+            if not isinstance(key, str):
+                logger.error("key %s is not a string", key)
+                raise TypeError("key %s is not a string", key)
             # if the key starts with $, treat it as a parameter to apply
-            if key.startswith("$"):
+            elif key.startswith("$"):
                 callback = self._get_callback(key)
                 # bind the callback to self
                 bound_method = callback[0].__get__(self, self.__class__)
@@ -189,41 +193,39 @@ class _GenericNode(Node, metaclass=RegisterNode):
                     # this is a sweepable parameter
                     if not callback[1]:
                         logger.error("parameter %s cannot be swept", key)
-                        raise ValueError(f"parameter {key} cannot be swept")
+                        raise ValueError("parameter %s cannot be swept", key)
                     callback_list.append((bound_method, value, callback[2]))
                 else:
                     # this is a single parameter, apply the configuration
-                    callback_error += bound_method(value)
+                    callback_error = bound_method(value)
+                    # throw error if acallback has failed
+                    if callback_error != 0:
+                        logger.error("callback %s failed with error code %s", key, callback_error)
+                        raise RuntimeError("callback %s failed with error code %s", key, callback_error)
+            # if the value is a dict, then take the child and apply the dict
+            elif isinstance(value, dict):
+                child = self.get_child(key)
+                callback_list.extend(child.apply_configuration(value))
+            # if it is a list of dicts, then create the children and apply the configuration
+            elif isinstance(value, list):
+                for dictitem in value:
+                    if not isinstance(dictitem, dict):
+                        logger.error("item in list is not a dictionary")
+                        raise ValueError("item in list must be a dictionary")
+                    if "_name" not in dictitem:
+                        logger.error("item in list does not have a name key")
+                        raise KeyError("item in list must have a _name key")
+                    if dictitem["_name"].startswith("_"):
+                        logger.error("item name cannot start with an underscore")
+                        raise ValueError("item name cannot start with an underscore")
+                    child = self.create_child(
+                        name=dictitem["_name"],
+                        of_type=key,
+                        **{k: v for k, v in dictitem.items() if k.startswith("_") and k != "_name"},
+                    )
+                    item_copy = {k: v for k, v in dictitem.items() if not k.startswith("_")}
+                    callback_list.extend(child.apply_configuration(item_copy))
             else:
-                # if the value is a dict, then take the child and apply the dict
-                if isinstance(value, dict):
-                    child = self.get_child(key)
-                    callback_list.extend(child.apply_configuration(value))
-                # if it is a list of dicts, then create the children and apply the configuration
-                elif isinstance(value, list):
-                    for dictitem in value:
-                        if not isinstance(dictitem, dict):
-                            logger.error("item in list is not a dictionary")
-                            raise ValueError("item in list must be a dictionary")
-                        if "_name" not in dictitem:
-                            logger.error("item in list does not have a name key")
-                            raise KeyError("item in list must have a _name key")
-                        if dictitem["_name"].startswith("_"):
-                            logger.error("item name cannot start with an underscore")
-                            raise ValueError("item name cannot start with an underscore")
-                        child = self.create_child(
-                            name=dictitem["_name"],
-                            of_type=key,
-                            **{k: v for k, v in dictitem.items() if k.startswith("_") and k != "_name"},
-                        )
-                        item_copy = {k: v for k, v in dictitem.items() if not k.startswith("_")}
-                        callback_list.extend(child.apply_configuration(item_copy))
-                else:
-                    logger.error("unsupported value type for key %s", key)
-                    raise TypeError("unsupported value type for key %s", key)
-        # throw error if any callback has failed
-        if callback_error != 0:
-            logger.error("error applying configuration to %s", self.name)
-            raise RuntimeError("error applying configuration to %s", self.name)
-
+                logger.error("unsupported value type for key %s", key)
+                raise TypeError("unsupported value type for key %s", key)
         return callback_list
