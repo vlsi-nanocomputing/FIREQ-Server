@@ -1,13 +1,10 @@
 """Low-level driver for the FIREQ acquisition IP."""
 
-import logging
 from typing import Any
 
 from ._utils import _FIREQDriver, _set_bit, _set_bits
 
 __all__ = ["AcquisitionDriver"]
-
-logger = logging.getLogger(__name__)
 
 
 class AcquisitionDriver(_FIREQDriver):
@@ -150,7 +147,7 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
-        logger.debug("set frequency to %s and phase increment to %s", frequency, pinc)
+        self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
@@ -179,7 +176,7 @@ class AcquisitionDriver(_FIREQDriver):
         # write inc HIGH
         self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
 
-        logger.debug("set initial phase to %s and phase offset to %s", normalized_phase, poff)
+        self.log.debug("set initial phase to %s and phase offset to %s", normalized_phase, poff)
 
         return 0
 
@@ -189,7 +186,7 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
         self._axi_lite_interface_mmio.write(0, control_register)
 
-        logger.debug("acquisition triggered manually")
+        self.log.debug("acquisition triggered manually")
 
         return 0
 
@@ -203,14 +200,14 @@ class AcquisitionDriver(_FIREQDriver):
         """
         if duration < 1 or duration > self.maximum_duration:
             print("acquisition duration is out of range")
-            logger.error(f"acquisition duration: {duration} out of range")
+            self.log.error("acquisition duration: %s out of range", duration)
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set the acquisition duration to %s fabric clock cycles", duration)
+        self.log.debug("set the acquisition duration to %s fabric clock cycles", duration)
         self._cache["duration"] = duration
         self._calculate_payload()
 
@@ -225,7 +222,7 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 0 or channel > self.trigger_channels:
-            logger.error(f"channel choice: {channel} out of range")
+            self.log.error("channel choice: %s out of range", channel)
             return -3
 
         channel_mask = (1 << channel) >> 1
@@ -233,7 +230,7 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set the trigger channel to %s", channel)
+        self.log.debug("set the trigger channel to %s", channel)
         self._cache["active"] = channel > 0
         self._calculate_payload()
 
@@ -248,7 +245,7 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
         if time_of_flight < 1 or time_of_flight > self.time_of_flight_max:
-            logger.error(f"time of flight: {time_of_flight} out of range")
+            self.log.error("time of flight: %s out of range", time_of_flight)
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
@@ -260,7 +257,7 @@ class AcquisitionDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set the time of flight to %s fabric clock cycles", time_of_flight)
+        self.log.debug("set the time of flight to %s fabric clock cycles", time_of_flight)
 
         return 0
 
@@ -284,7 +281,7 @@ class AcquisitionDriver(_FIREQDriver):
             self._cache["output_mode"] = "accumulated"
             output_mode_bit = 1
         else:
-            logger.error(f"output_type: {output_mode} not recognized")
+            self.log.error("output_type: %s not recognized", output_mode)
             return -3
 
         updated_control = _set_bit(
@@ -294,7 +291,7 @@ class AcquisitionDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
 
-        logger.debug("set the decimated output type to %s", output_mode)
+        self.log.debug("set the decimated output type to %s", output_mode)
         self._calculate_payload()
 
         return 0

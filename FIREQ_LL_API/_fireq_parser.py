@@ -66,7 +66,8 @@ class FireqParser:
         :param hwh_file: Path to the .hwh (Xilinx Hardware Handoff) file
         :type hwh_file: str
         """
-        # set .hwh file path
+        # set .hwh file path and logger
+        self.log = logging.getLogger(__name__)
         self._file_path = hwh_file
         # generate a tree from file (xml)
         self._tree = ET.parse(hwh_file)
@@ -83,6 +84,14 @@ class FireqParser:
         self.dataflow_graph = self._create_bus_connectivity_graph(STREAM_AXI_VLNV)
         self.clock_graph = self._create_bus_connectivity_graph("CLK")
 
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
+
     def _find_board(self) -> str:
         """Find the board name from the .hwh file."""
         # the board vlnv is found in the xml child named SYSTEMINFO, as attribute BOARD
@@ -95,7 +104,7 @@ class FireqParser:
         for board_name, meta in BOARD_META.items():
             if board_vlnv.startswith(meta["board_vlnv"]):
                 return board_name
-        raise ValueError(f"Unknown board VLNV: {board_vlnv}. Supported boards: {list(BOARD_META.keys())}")
+        raise ValueError(f"Unknown board VLNV: {board_vlnv}. Supported boards: {list(BOARD_META.keys())}.")
 
     def _find_ps_name(self) -> str:
         """Find the ps name from the .hwh file."""
@@ -165,7 +174,7 @@ class FireqParser:
                     if bus_type in MASTER_TYPE_LIST:
                         # add the edge to edge dict, knowing that bus id is unique
                         if bus_id in axi_out_edges.keys():
-                            logger.error(f"Bus id {bus_id} is not unique.")
+                            self.log.error("Bus id %s is not unique.", bus_id)
                             raise ValueError(f"Bus id {bus_id} is not unique.")
                         axi_out_edges[bus_id] = {
                             "master": mod_fullname,
@@ -175,7 +184,7 @@ class FireqParser:
                     elif bus_type in SLAVE_TYPE_LIST:
                         # add the edge to edge dict, knowing that bus id is unique
                         if bus_id in axi_in_edges.keys():
-                            logger.error(f"Bus id {bus_id} is not unique.")
+                            self.log.error("Bus id %s is not unique.", bus_id)
                             raise ValueError(f"Bus id {bus_id} is not unique.")
                         axi_in_edges[bus_id] = {
                             "slave": mod_fullname,
@@ -197,7 +206,7 @@ class FireqParser:
                 if port_vlnv and port_vlnv.upper() == "CLK":
                     if port_type and port_type.upper() == "O":
                         if port_id in clock_out_edges:
-                            logger.error(f"Clock port id {port_id} is not unique.")
+                            self.log.error("Clock port id %s is not unique.", port_id)
                             raise ValueError(f"Clock port id {port_id} is not unique.")
                         clock_out_edges[port_id] = {
                             "master": mod_fullname,
@@ -232,7 +241,7 @@ class FireqParser:
                     slave_port=slave_if,
                 )
             else:
-                logger.error(f"Could not find a slave for {bus_id}.")
+                self.log.error("Could not find a slave for %s.", bus_id)
                 raise ValueError(f"Could not find a slave for {bus_id}.")
 
         # build the clock connectivity using the two dictionaries
@@ -254,7 +263,7 @@ class FireqParser:
         # remove unconnected nodes
         isolated_nodes = [node for node in self.system_graph.nodes if self.system_graph.degree(node) == 0]
         if len(isolated_nodes) > 0:
-            logger.warning(f"Removing {len(isolated_nodes)} isolated nodes from the graph.")
+            self.log.warning("Removing %s isolated nodes from the graph.", len(isolated_nodes))
         self.system_graph.remove_nodes_from(isolated_nodes)
 
     def _create_bus_connectivity_graph(self, bus_vlnv: str) -> nx.MultiDiGraph:

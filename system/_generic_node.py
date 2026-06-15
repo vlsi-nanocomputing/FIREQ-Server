@@ -66,6 +66,15 @@ class _GenericNode(Node, metaclass=RegisterNode):
         :type kwargs: dict[str, Any]
         """
         super().__init__(name=name, parent=parent, **kwargs)
+        self.log = logging.getLogger(__name__)
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
     def __init_subclass__(cls) -> None:
         """Build the callback registry from decorated methods on the subclass."""
@@ -118,8 +127,8 @@ class _GenericNode(Node, metaclass=RegisterNode):
         """
         if key in self._callback_registry:
             return self._callback_registry[key]
-        logger.error("key %s not found in callback registry", key)
-        raise KeyError("key %s not found in callback registry", key)
+        self.log.error("key %s not found in callback registry", key)
+        raise KeyError(f"key {key} not found in callback registry")
 
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericNode:
         """Create a child node of the specified type.
@@ -150,8 +159,8 @@ class _GenericNode(Node, metaclass=RegisterNode):
         for child in self.children:
             if child.name == name:
                 return child
-        logger.error("child %s not found", name)
-        raise KeyError("child %s not found", name)
+        self.log.error("child %s not found", name)
+        raise KeyError(f"child {name} not found")
 
     def apply_configuration(self, configuration: dict[str, object]) -> list[tuple]:
         """Apply a configuration dictionary to the tree, starting from this node.
@@ -182,8 +191,8 @@ class _GenericNode(Node, metaclass=RegisterNode):
         for key, value in configuration.items():
             # check if the key is a string, only strings are allowed
             if not isinstance(key, str):
-                logger.error("key %s is not a string", key)
-                raise TypeError("key %s is not a string", key)
+                self.log.error("key %s is not a string", key)
+                raise TypeError(f"key {key} is not a string")
             # if the key starts with $, treat it as a parameter to apply
             elif key.startswith("$"):
                 callback = self._get_callback(key)
@@ -192,16 +201,16 @@ class _GenericNode(Node, metaclass=RegisterNode):
                 if isinstance(value, str) and value.startswith("#"):
                     # this is a sweepable parameter
                     if not callback[1]:
-                        logger.error("parameter %s cannot be swept", key)
-                        raise ValueError("parameter %s cannot be swept", key)
+                        self.log.error("parameter %s cannot be swept", key)
+                        raise ValueError(f"parameter {key} cannot be swept")
                     callback_list.append((bound_method, value, callback[2]))
                 else:
                     # this is a single parameter, apply the configuration
                     callback_error = bound_method(value)
                     # throw error if acallback has failed
                     if callback_error != 0:
-                        logger.error("callback %s failed with error code %s", key, callback_error)
-                        raise RuntimeError("callback %s failed with error code %s", key, callback_error)
+                        self.log.error("callback %s failed with error code %s", key, callback_error)
+                        raise RuntimeError(f"callback {key} failed with error code {callback_error}")
             # if the value is a dict, then take the child and apply the dict
             elif isinstance(value, dict):
                 child = self.get_child(key)
@@ -210,13 +219,13 @@ class _GenericNode(Node, metaclass=RegisterNode):
             elif isinstance(value, list):
                 for dictitem in value:
                     if not isinstance(dictitem, dict):
-                        logger.error("item in list is not a dictionary")
+                        self.log.error("item in list is not a dictionary")
                         raise ValueError("item in list must be a dictionary")
                     if "_name" not in dictitem:
-                        logger.error("item in list does not have a name key")
+                        self.log.error("item in list does not have a name key")
                         raise KeyError("item in list must have a _name key")
                     if dictitem["_name"].startswith("_"):
-                        logger.error("item name cannot start with an underscore")
+                        self.log.error("item name cannot start with an underscore")
                         raise ValueError("item name cannot start with an underscore")
                     child = self.create_child(
                         name=dictitem["_name"],
@@ -226,6 +235,6 @@ class _GenericNode(Node, metaclass=RegisterNode):
                     item_copy = {k: v for k, v in dictitem.items() if not k.startswith("_")}
                     callback_list.extend(child.apply_configuration(item_copy))
             else:
-                logger.error("unsupported value type for key %s", key)
-                raise TypeError("unsupported value type for key %s", key)
+                self.log.error("unsupported value type for key %s", key)
+                raise TypeError(f"unsupported value type for key {key}")
         return callback_list

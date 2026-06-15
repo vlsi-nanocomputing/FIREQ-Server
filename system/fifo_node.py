@@ -94,7 +94,7 @@ class FIFONode(_GenericNode):
         # resolve references from other nodes
         self._input_payload = self.root.get_reference(f"{self._input_interface}/payload")
         self._hw_shots = self.root.get_reference(self.root.make_func_label(self.root, "hw_shots"))
-        logger.debug("Got input payload reference for FIFO node %s", self.name)
+        self.log.debug("Got input payload reference for FIFO node %s", self.name)
 
     def update_max_hw_shots(self) -> bool:
         """Calculate the maximum number of shots that can be stored in the FIFO.
@@ -110,7 +110,7 @@ class FIFONode(_GenericNode):
             self.max_hw_shots["value"] = self._size // self._input_payload["size"]
         else:
             self.max_hw_shots.clear()
-        logger.debug("Recomputed max hw shots for FIFO node %s", self.name)
+        self.log.debug("Recomputed max hw shots for FIFO node %s", self.name)
         return self.max_hw_shots.hash_and_compare()
 
     def update_payload(self) -> bool:
@@ -126,5 +126,5 @@ class FIFONode(_GenericNode):
             self.payload["size"] = self._hw_shots["value"] * self._input_payload["size"]
             self.payload["source"] = self._input_payload["source"]
             self.payload["format"] = self._input_payload["format"]
-        logger.debug("Recomputed payload for FIFO node %s", self.name)
+        self.log.debug("Recomputed payload for FIFO node %s", self.name)
         return self.payload.hash_and_compare()

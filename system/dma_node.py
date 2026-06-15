@@ -92,10 +92,10 @@ class DMANode(_GenericNode):
                 raise RuntimeError()
             self._buffer = allocate(shape=(self._max_payload_size["value"],), dtype=np.uint8)
         if self._transferring:
-            logger.error("DMA already transferring, cannot initialize")
+            self.log.error("DMA already transferring, cannot initialize")
             raise RuntimeError("DMA already transferring, cannot initialize")
         if not self._input_payload:
-            logger.warning("No payload to transfer for DMA node %s", self.name)
+            self.log.warning("No payload to transfer for DMA node %s", self.name)
             return False
         # further checks and set the current payload
         if self._is_switch_input:
@@ -107,7 +107,7 @@ class DMANode(_GenericNode):
                     break
             else:
                 # loop exhausted without break -> no valid payload found
-                logger.warning("No payload to transfer for DMA node %s", self.name)
+                self.log.warning("No payload to transfer for DMA node %s", self.name)
                 return False
         self._transferring = True
         # start the transfer
@@ -134,7 +134,7 @@ class DMANode(_GenericNode):
         while True:
             # check for errors
             if self._ll_handler.recvchannel.error:
-                logger.error("DMA transfer error for node %s", self.name)
+                self.log.error("DMA transfer error for node %s", self.name)
                 return False
             self._ll_handler.recvchannel.wait()
             # extract data and format it, then convert to complex

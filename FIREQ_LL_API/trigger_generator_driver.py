@@ -4,8 +4,6 @@ import logging
 
 from ._utils import _FIREQDriver
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["TriggerGeneratorDriver"]
 
 
@@ -93,7 +91,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # write duration HIGH
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
-        logger.debug(f"trigger, set_experiment_duration, got the following for duration: {duration}")
+        self.log.debug("trigger, set_experiment_duration, got the following for duration: %s", duration)
 
         return 0
 
@@ -106,12 +104,12 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if value < 1 or value > self.max_hw_repetitions:
-            print(f"number of shots {value} is outside of range 1 to {self.max_hw_repetitions}")
+            self.log.error("number of shots %s is outside of range 1 to %s", value, self.max_hw_repetitions)
             return -3
 
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
-        logger.debug(f"trigger, set_number_of_shots, got the following for shots: {value}")
+        self.log.debug("Set the number of hw shots to: %s", value)
 
         return 0
 
@@ -119,7 +117,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         """Start the generation of triggers."""
         self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
 
-        logger.debug("trigger, started experiment")
+        self.log.debug("Trigger generator started")
 
         return 0
 
@@ -150,24 +148,23 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 1 or channel > self.trigger_channels:
-            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
+            self.log.error("channel %s is outside of range 1 to %s", channel, self.trigger_channels)
             return -3
 
         if index < 1 or index > self.channel_fifo_depth:
-            print(f"index {index} is outside of range 1 to {self.channel_fifo_depth}")
+            self.log.error("index %s is outside of range 1 to %s", index, self.channel_fifo_depth)
             return -3
 
         if delay < 1 or delay > self.drive_delay_max:
-            print(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
+            self.log.error("delay %s is outside of range 1 to %s", delay, self.drive_delay_max)
             return -3
 
         real_delay = (delay - 1) | (generate_trigger << 31)
         real_address = (channel - 1) * self.channel_fifo_depth + index - 1
         self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
 
-        logger.debug(
-            "trigger, insert_drive_delay, got the following for channel: %s, index: %s, delay: %s, "
-            "generate_trigger: %s",
+        self.log.debug(
+            "set channel: %s, index: %s and delay: %s, " "generate_trigger: %s",
             channel,
             index,
             delay,
@@ -187,13 +184,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 1 or channel > self.trigger_channels:
-            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
+            self.log.error("channel %s is outside of range 1 to %s", channel, self.trigger_channels)
             return -3
         # write delay LOW
         self._axi_lite_interface_mmio.write((self._readout_delay_l + (channel - 1) * 2) * 4, delay & 0xFFFFFFFF)
         # write delay HIGH
         self._axi_lite_interface_mmio.write((self._readout_delay_h + (channel - 1) * 2) * 4, delay >> 32)
 
-        logger.debug(f"trigger, set_readout_delay, got the following for channel: {channel}, delay: {delay}")
+        self.log.debug("trigger, set_readout_delay, got the following for channel: %s, delay: %s", channel, delay)
 
         return 0

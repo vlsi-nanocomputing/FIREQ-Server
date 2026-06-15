@@ -11,8 +11,6 @@ from ._utils import (
     _set_bits,
 )
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["GeneratorDriver"]
 
 
@@ -111,7 +109,7 @@ class GeneratorDriver(_FIREQDriver):
             _next_segment(self._wdw_memory_interface), self.memory_mapped_fifo_segment_depth
         )
         self.axi_full_initialized = True
-        logger.debug("AXI Full interface initialized")
+        self.log.debug("AXI Full interface initialized")
         # reset envelope dictionary and memory
         self.clear_envelope_memory()
 
@@ -140,7 +138,7 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if self.axi_full_initialized is None:
-            logger.error("AXI Full interface not initialized")
+            self.log.error("AXI Full interface not initialized")
             return -3
 
         if common:
@@ -149,11 +147,11 @@ class GeneratorDriver(_FIREQDriver):
             size = int(np.ceil(len(envelope) / self.number_of_channels))
 
         if start_address < 0:
-            logger.error("start_address %s cannot be negative", start_address)
+            self.log.error("start_address %s cannot be negative", start_address)
             return -3
 
         if start_address + size > self.channel_sample_memory_depth:
-            logger.error("data exceeds memory bounds")
+            self.log.error("data exceeds memory bounds")
             return -3
 
         to_write_array = (envelope.real.astype(np.int32) << 16) + envelope.imag.astype(np.int16)
@@ -166,7 +164,7 @@ class GeneratorDriver(_FIREQDriver):
                 to_write_to_channel = to_write_array[channel :: self.number_of_channels]
                 self._envelope_memory_interface.write(write_address_start * 4, to_write_to_channel.tobytes())
 
-        logger.debug(
+        self.log.debug(
             "wrote %s samples to envelope memory at address %s (common: %s)", len(envelope), start_address, common
         )
 
@@ -176,10 +174,10 @@ class GeneratorDriver(_FIREQDriver):
         """Clear the envelope memory by writing all zeros to it."""
         rval = self.write_envelope_memory(0, np.zeros(self.channel_sample_memory_depth, dtype=complex), common=True)
         if rval != 0:
-            logger.error("failed to clear envelope memory")
+            self.log.error("failed to clear envelope memory")
             return rval
 
-        logger.debug("cleared envelope memory")
+        self.log.debug("cleared envelope memory")
 
     def trigger_manually(self) -> int:
         """Trigger the generator manually.
@@ -190,7 +188,7 @@ class GeneratorDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
 
-        logger.debug("generation triggered manually")
+        self.log.debug("generation triggered manually")
 
         return 0
 
@@ -207,7 +205,7 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 0 or channel > self.trigger_channels:
-            logger.error("channel choice %s is out of range", channel)
+            self.log.error("channel choice %s is out of range", channel)
             return -3
 
         if ttype == "drive":
@@ -215,7 +213,7 @@ class GeneratorDriver(_FIREQDriver):
         elif ttype == "readout":
             selector = 1
         else:
-            logger.error("trigger type %s is out of range", ttype)
+            self.log.error("trigger type %s is out of range", ttype)
             return -3
 
         # write to the control register
@@ -228,7 +226,7 @@ class GeneratorDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set the trigger channel to %s for %s(%s)", channel, ttype, selector)
+        self.log.debug("set the trigger channel to %s for %s(%s)", channel, ttype, selector)
 
         return 0
 
@@ -245,7 +243,7 @@ class GeneratorDriver(_FIREQDriver):
         elif source == "lfsr":
             selector = 1
         else:
-            logger.error("source type %s is out of range", source)
+            self.log.error("source type %s is out of range", source)
             return -3
 
         control_register = _set_bit(
@@ -255,7 +253,7 @@ class GeneratorDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set generation order source to %s(%s)", source, selector)
+        self.log.debug("set generation order source to %s(%s)", source, selector)
 
         return 0
 
@@ -268,14 +266,14 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if seed < 0 or seed > (2**self.seed_lfsr_width - 1):
-            logger.error("seed choice %s is out of range", seed)
+            self.log.error("seed choice %s is out of range", seed)
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, 2 * self.trigger_channels, self.seed_lfsr_width, seed)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set the lfsr seed to %s", seed)
+        self.log.debug("set the lfsr seed to %s", seed)
 
         return 0
 
@@ -298,7 +296,7 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
-        logger.debug("set frequency to %s and phase increment to %s", frequency, pinc)
+        self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
@@ -319,7 +317,7 @@ class GeneratorDriver(_FIREQDriver):
         # write inc HIGH
         self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
 
-        logger.debug("set initial phase to %s and phase offset to %s", phase, poff)
+        self.log.debug("set initial phase to %s and phase offset to %s", phase, poff)
 
         return 0
 
@@ -342,7 +340,7 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
-        logger.debug("set frequency to %s and phase increment to %s", frequency, pinc)
+        self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
@@ -362,7 +360,7 @@ class GeneratorDriver(_FIREQDriver):
         elif destination == "readout":
             selector = 1
         else:
-            logger.error("destination %s is out of range", destination)
+            self.log.error("destination %s is out of range", destination)
             return -3
 
         control_register = _set_bit(
@@ -372,7 +370,7 @@ class GeneratorDriver(_FIREQDriver):
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug("set manual wave destination to %s(%s)", destination, selector)
+        self.log.debug("set manual wave destination to %s(%s)", destination, selector)
 
         return 0
 
@@ -390,13 +388,13 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: Literal[-3, 0]
         """
         if wdw_index < 0 or wdw_index >= self.wave_memory_segment_depth // (128 // 8):
-            logger.error("index %s is out of range", wdw_index)
+            self.log.error("index %s is out of range", wdw_index)
             return -3
 
         # write to wave memory
         self._wdw_memory_interface.write(wdw_index * (128 // 8), wdw.to_bytes(128 // 8, "little"))
 
-        logger.debug("added wave definition %s to wave memory at index %s", wdw, wdw_index)
+        self.log.debug("added wave definition %s to wave memory at index %s", wdw, wdw_index)
 
         return 0
 
@@ -411,10 +409,10 @@ class GeneratorDriver(_FIREQDriver):
         :type wdw_index: int
         """
         if order_index < 0 or order_index >= self.memory_mapped_fifo_segment_depth // 4:
-            logger.error("order index %s is out of range", order_index)
+            self.log.error("order index %s is out of range", order_index)
             return -3
         if wdw_index < 0 or wdw_index >= self.wave_memory_segment_depth // (128 // 8):
-            logger.error("wdw index %s is out of range", wdw_index)
+            self.log.error("wdw index %s is out of range", wdw_index)
             return -3
 
         self._memory_mapped_fifo_interface.write(order_index * 4, wdw_index)
@@ -433,14 +431,14 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: Literal[-3] | None
         """
         if wave_definition < 0:
-            logger.error("wave definition %s is out of range", wave_definition)
+            self.log.error("wave definition %s is out of range", wave_definition)
             return -3
         for i in range(4):
             self._axi_lite_interface_mmio.write(
                 (self._readout_wave_l + i) * 4, (wave_definition >> i * 32) & 0xFFFFFFFF
             )
 
-        logger.debug("wrote the readout wave definition to the IP %s", wave_definition)
+        self.log.debug("wrote the readout wave definition to the IP %s", wave_definition)
 
         return 0
 
@@ -534,7 +532,7 @@ class GeneratorDriver(_FIREQDriver):
         wdw |= (gain & (2**self.sample_size - 1)) << 90
         # get the duration
         if duration > self.maximum_duration:
-            logger.warning("duration %s is out of range", duration)
+            self.log.warning("duration %s is out of range", duration)
             real_duration = self.maximum_duration
         else:
             real_duration = duration

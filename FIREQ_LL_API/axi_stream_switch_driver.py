@@ -4,8 +4,6 @@ import logging
 
 from pynq import DefaultIP
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["AXIStreamSwitchDriver"]
 
 
@@ -31,10 +29,19 @@ class AXIStreamSwitchDriver(DefaultIP):
         :type description: dict
         """
         super().__init__(description=description)
+        self.log = logging.getLogger(__name__)
         self.number_of_slaves = int(description["parameters"]["NUM_SI"])
         self.number_of_masters = int(description["parameters"]["NUM_MI"])
         if self.number_of_masters > 1:
             raise NotImplementedError("only one master is supported for data switches")
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
     @property
     def slave_number_to_interface_map(self) -> dict:
@@ -56,11 +63,11 @@ class AXIStreamSwitchDriver(DefaultIP):
         :rtype: int
         """
         if input_number < 1 or input_number > self.number_of_slaves:
-            logger.error(f"input number: {input_number} out of range")
+            self.log.error("input number: %s out of range", input_number)
             return -3
 
         self.mmio.write(self._mi_mux, input_number - 1)
         self.mmio.write(self._ctrl, self._commit_mask)
-        logger.debug(f"switched to input {input_number}")
+        self.log.debug("switched to input %s", input_number)
 
         return 0

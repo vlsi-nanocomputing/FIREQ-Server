@@ -16,8 +16,6 @@ from .fifo_wrapper import FIFOWrapper
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
-logger = logging.getLogger(__name__)
-
 __all__ = ["FIREQSoC", "load_fireq"]
 
 
@@ -51,16 +49,19 @@ class FIREQSoC(Overlay):
         :type init_clocks: bool
         :raises RuntimeError: If overlay creation fails
         """
+        # set up logger
+        self.log = logging.getLogger(__name__)
+
         # reset the PL server, clears bugged pynq caches that could lead to issues
         PL.reset()
 
         # Load overlay
         try:
-            logger.debug("Creating overlay from %s", bitfile_name)
+            self.log.debug("Creating overlay from %s", bitfile_name)
             super().__init__(bitfile_name, ignore_version=ignore_version)
         except Exception as e:
             # better to raise an exception: server aware of the problem
-            logger.error("Error during overlay creation: %s", e)
+            self.log.error("Error during overlay creation: %s", e)
             raise RuntimeError(f"FIREQ: error during overlay creation: {e}") from e
 
         # HWH + parser
@@ -97,8 +98,15 @@ class FIREQSoC(Overlay):
         for adc_index in self.active_adcs:
             self.set_adc_autocalibration_status(adc_index, freeze=True)
 
-    @staticmethod
-    def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
+
+    def _init_rf_clks(self, lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
         """Initialise the LMK and LMX clocks for the RF-DC hierarchy.
 
         The radio clocks are required to talk to the RF-DCs and only need to be
@@ -109,7 +117,7 @@ class FIREQSoC(Overlay):
         :param lmx_freq: Frequency of the LMX clock in MHz, defaults to 491.52
         :type lmx_freq: float
         """
-        logger.debug(f"Initialising RF clocks: LMK={lmk_freq} MHz, LMX={lmx_freq} MHz")
+        self.log.debug("Initialising RF clocks: LMK=%s MHz, LMX=%s MHz", lmk_freq, lmx_freq)
         xrfclk.set_ref_clks(lmk_freq=lmk_freq, lmx_freq=lmx_freq)
 
     # ------------------------------------------------------------------
@@ -118,7 +126,7 @@ class FIREQSoC(Overlay):
     def _check_fireq_ips(self) -> None:
         """Check that the design contains the necessary FIREQ IPs to conduct experiments."""
         if len(self.ips) == 0:
-            logger.error("No FIREQ IPs found in the design.")
+            self.log.error("No FIREQ IPs found in the design.")
             raise RuntimeError("No FIREQ IPs found in the design.")
         gen_count = 0
         acq_count = 0
@@ -130,9 +138,11 @@ class FIREQSoC(Overlay):
                 acq_count += 1
             elif ip[2] == TriggerGeneratorDriver.__name__:
                 ctrl_count += 1
-        logger.debug("Found %s generators, %s acquisitions and %s trigger generators", gen_count, acq_count, ctrl_count)
+        self.log.debug(
+            "Found %s generators, %s acquisitions and %s trigger generators", gen_count, acq_count, ctrl_count
+        )
         if gen_count == 0 or acq_count == 0 or ctrl_count == 0:
-            logger.error("The design does not contain the necessary FIREQ IPs to conduct experiments.")
+            self.log.error("The design does not contain the necessary FIREQ IPs to conduct experiments.")
             raise RuntimeError("The design does not contain the necessary FIREQ IPs to conduct experiments.")
 
     def _init_fireq_ips(self) -> None:
@@ -141,12 +151,12 @@ class FIREQSoC(Overlay):
         Some FIREQ IPs have two axi4 interfaces, one full and one lite.
         PYNQ does not support this, so we need to manually set the axi4 interfaces.
         """
-        logger.debug("Initialising FIREQ IPs")
+        self.log.debug("Initialising FIREQ IPs")
         mmap = self._fireq_parser.get_address_mapping()
 
         # check that the ps name is the mapping, otherwise raise an error
         if self._fireq_parser.ps_name not in mmap.keys():
-            logger.error(f"PS name {self._fireq_parser.ps_name} not found in memory map.")
+            self.log.error("PS name %s not found in memory map.", self._fireq_parser.ps_name)
             raise RuntimeError(f"PS name {self._fireq_parser.ps_name} not found in memory map.")
 
         for axi_map in mmap[self._fireq_parser.ps_name]:
@@ -159,7 +169,7 @@ class FIREQSoC(Overlay):
                 continue
 
             # Init AXI based on mapping
-            logger.debug("Initialising AXI interfaces for %s", axi_map["INSTANCE"])
+            self.log.debug("Initialising AXI interfaces for %s", axi_map["INSTANCE"])
             axi_base = int(axi_map["BASEVALUE"], 16)
             axi_range = int(axi_map["HIGHVALUE"], 16) - axi_base + 1
             if axi_map["SLAVEBUSINTERFACE"] == "s00_axi":
@@ -170,7 +180,7 @@ class FIREQSoC(Overlay):
         # find and initialize the FIFOs
         for node, data in self._fireq_parser.system_graph.nodes(data=True):
             if data["vlnv"] in FIFOWrapper.bindto:
-                logger.debug("Initialising FIFO %s", data["instance"])
+                self.log.debug("Initialising FIFO %s", data["instance"])
                 fifo = FIFOWrapper(self._fireq_parser.get_module_parameters(node))
                 setattr(self, data["instance"], fifo)
 
@@ -182,7 +192,7 @@ class FIREQSoC(Overlay):
             # continue if not an attribute or if the name is the ps name, because pynq crashes
             if instance is self._fireq_parser.ps_name or not hasattr(self, instance):
                 continue
-            logger.debug("Found IP %s", instance)
+            self.log.debug("Found IP %s", instance)
             ip_object = getattr(self, instance)
             # add the ip to the dictionary, by storing the instance name as the key and the type as the value
             self.ips[node] = (instance, ip_object, type(ip_object).__name__)
@@ -192,13 +202,13 @@ class FIREQSoC(Overlay):
         # find the rfdc ip in the system graph
         for ip in self.ips.values():
             if ip[2] == "RFdc":
-                logger.debug("Found RF-DC IP %s", ip[0])
+                self.log.debug("Found RF-DC IP %s", ip[0])
                 self.rfdc = ip[1]
                 break
 
         # if the rfdc is not found, assume debug overlay and set the sample rates to 1 and 2 GSps
         if self.rfdc is None:
-            logger.warning("RF-DC IP not found, assuming debug overlay")
+            self.log.warning("RF-DC IP not found, assuming debug overlay")
             return
 
         # if the rfdc is found, extract the active ADCs and DACs from the rfdc object
@@ -220,8 +230,8 @@ class FIREQSoC(Overlay):
                     continue
         self.active_adcs = active_adcs
         self.active_dacs = active_dacs
-        logger.debug("Active ADCs: %s", self.active_adcs)
-        logger.debug("Active DACs: %s", self.active_dacs)
+        self.log.debug("Active ADCs: %s", self.active_adcs)
+        self.log.debug("Active DACs: %s", self.active_dacs)
 
     def _discover_clocks(self) -> None:
         """Discover the clocks and set the sample rates.
@@ -247,15 +257,15 @@ class FIREQSoC(Overlay):
                 acq_sr.append(fabric_frequency[-1] * ip[1].number_of_channels)
         # check that all fabric frequencies are the same
         if len(set(fabric_frequency)) > 1:
-            logger.error("IPs have different fabric frequencies")
+            self.log.error("IPs have different fabric frequencies")
             raise NotImplementedError("IPs have different fabric frequencies")
         # check that all the generators have the same sampling frequency
         if len(set(gen_sr)) > 1:
-            logger.error("Generators have different sampling frequencies")
+            self.log.error("Generators have different sampling frequencies")
             raise RuntimeError("Generators have different sampling frequencies")
         # check that all the acquisitions have the same sampling frequency
         if len(set(acq_sr)) > 1:
-            logger.error("Acquisitions have different sampling frequencies")
+            self.log.error("Acquisitions have different sampling frequencies")
             raise RuntimeError("Acquisitions have different sampling frequencies")
         # set the fabric and sampling frequencies in MHz
         self.fabric_frequency = fabric_frequency[0] / 1e6
@@ -304,7 +314,7 @@ class FIREQSoC(Overlay):
             self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 1
         else:
             self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
-        logger.debug("ADC %s calibration frozen: %s", adc_index, freeze)
+        self.log.debug("ADC %s calibration frozen: %s", adc_index, freeze)
 
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:

@@ -96,7 +96,7 @@ class FIREQSystemNode(_GenericNode):
         for subsystem_name, (instance, ll_handler, driver_type) in self._fireq_soc.ips.items():
             if driver_type not in _driver_wrappers:
                 continue
-            logger.debug("Creating node for %s", subsystem_name)
+            self.log.debug("Creating node for %s", subsystem_name)
             # create the child node
             _driver_wrappers[driver_type](name=subsystem_name, parent=self, _ll_handler=ll_handler)
 
@@ -132,10 +132,10 @@ class FIREQSystemNode(_GenericNode):
         """
         if shots <= 0:
             self.shots = None
-            logger.error("Number of shots must be positive, got %s", shots)
+            self.log.error("Number of shots must be positive, got %s", shots)
             return -3
         self.shots = shots
-        logger.debug("Shots set to %s", shots)
+        self.log.debug("Shots set to %s", shots)
         return 0
 
     def update_max_hw_shots(self) -> bool:
@@ -162,7 +162,7 @@ class FIREQSystemNode(_GenericNode):
             self.max_hw_shots.clear()
         max_hw_shots = min(max_hw_shots, self._hw_supported_hw_shots["value"])
         self.max_hw_shots["value"] = max_hw_shots
-        logger.debug("Hardware shots set to %s", self.max_hw_shots["value"])
+        self.log.debug("Hardware shots set to %s", self.max_hw_shots["value"])
         return self.max_hw_shots.hash_and_compare()
 
     def update_requested_hw_shots(self) -> bool:
@@ -172,7 +172,7 @@ class FIREQSystemNode(_GenericNode):
     def update_hw_shots(self) -> bool:
         """Update the actual number of hardware shots."""
         self.hw_shots["value"] = min(self.max_hw_shots["value"], self.requested_hw_shots["value"])
-        logger.debug("Hardware shots set to %s", self.hw_shots["value"])
+        self.log.debug("Hardware shots set to %s", self.hw_shots["value"])
         return self.hw_shots.hash_and_compare()
 
     def _build_dependencies(self) -> None:
@@ -212,7 +212,7 @@ class FIREQSystemNode(_GenericNode):
         # add the reference to the dictionary but check if it already exists,
         # if it does log a warning and raise
         if ref_name in self._references:
-            logger.error("Reference %s already exists, overwriting", ref_name)
+            self.log.error("Reference %s already exists, overwriting", ref_name)
             raise KeyError(f"Reference {ref_name} already exists")
         self._references[ref_name] = ref
 
@@ -226,7 +226,7 @@ class FIREQSystemNode(_GenericNode):
         :raises KeyError: If the reference is not found
         """
         if ref_name not in self._references:
-            logger.error("Reference %s not found", ref_name)
+            self.log.error("Reference %s not found", ref_name)
             raise KeyError(f"Reference {ref_name} not found")
         return self._references[ref_name]
 
@@ -292,12 +292,12 @@ class FIREQSystemNode(_GenericNode):
             extra_shots = (executed_shots + hw_shots) - self.shots
             if extra_shots > 0:
                 # reduce the number of hw shots and rerun dependency
-                logger.debug("Reducing the number of hw shots to properly run the expeirment")
+                self.log.debug("Reducing the number of hw shots to properly run the expeirment")
                 hw_shots = hw_shots - extra_shots
                 self.requested_hw_shots["value"] = hw_shots
                 self._dependency_orchestrator.update()
                 if self.hw_shots["value"] != hw_shots:
-                    logger.error("Failed to set the number of hw shots to the correct amount")
+                    self.log.error("Failed to set the number of hw shots to the correct amount")
                     raise RuntimeError("Failed to set the number of hw shots to the correct amount")
             # init the dma
             for dma_nodes in self._dma_nodes:
@@ -313,7 +313,7 @@ class FIREQSystemNode(_GenericNode):
             # increment the number of executed shots
             executed_shots += hw_shots
             sw_shots += 1
-        logger.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
+        self.log.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 
     # ------------------------------------------------------------------
     # System properties

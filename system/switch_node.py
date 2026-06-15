@@ -86,7 +86,8 @@ class SwitchNode(_GenericNode):
             input_payload = self.root.get_reference(f"{s_if}/payload")
             if isinstance(input_payload, list):
                 raise NotImplementedError(
-                    f"Got a list as an input payload in SWITCH: {self.name} on input interface: {s_if}. Cascaded switch nodes are not implemented yet."
+                    f"Got a list as an input payload in SWITCH: {self.name} on input interface: {s_if}. "
+                    "Cascaded switch nodes are not implemented yet."
                 )
             # TODO: add other checks on the input payload here
             self.payload.append(self.root.get_reference(f"{s_if}/payload"))
@@ -102,6 +103,6 @@ class SwitchNode(_GenericNode):
         """
         ret = self._ll_handler.switch_to_input(slave_index)
         if ret != 0:
-            logger.error("Failed to set master to input %s", slave_index)
+            self.log.error("Failed to set master to input %s", slave_index)
             raise ValueError(f"Failed to set master to input {slave_index}")
-        logger.debug("Set master to input %s", slave_index)
+        self.log.debug("Set master to input %s", slave_index)

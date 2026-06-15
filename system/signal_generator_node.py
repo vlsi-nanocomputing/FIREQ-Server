@@ -84,7 +84,7 @@ class _GenericEnvelope(_GenericNode):
         # check inputs in case of interpolation
         if self._for_interpolation and self._is_symmetric:
             if self._i_even is None or self._q_even is None:
-                logger.error("i_even and/or q_even not specified")
+                self.log.error("i_even and/or q_even not specified")
                 raise ValueError("i_even and/or q_even not specified")
         self.natural_length: int | None = None
         self._address: int = 0
@@ -268,12 +268,12 @@ class _Pulse(_GenericNode):
         self._switch_iq = _switch_iq
         self._keep_last = _keep_last
         if _envelope is None:
-            logger.error("envelope not specified")
+            self.log.error("envelope not specified")
             raise ValueError("envelope not specified")
         # check if envelope exists and get the reference to use it later
         envelope_children = [child for child in self.parent.children if child.nodetype == "envelope"]
         if self._envelope not in [child.name for child in envelope_children]:
-            logger.error("envelope %s not found", self._envelope)
+            self.log.error("envelope %s not found", self._envelope)
             raise ValueError(f"envelope {self._envelope} not found")
         self._envelope_ref = next(
             child for child in envelope_children if child.name == self._envelope
@@ -523,10 +523,10 @@ class SignalGeneratorNode(_GenericNode):
                 None,
             )
             if pulse is None:
-                logger.error("pulse %s not found in children", pulse_name)
+                self.log.error("pulse %s not found in children", pulse_name)
                 return -3
             if pulse._readout:
-                logger.error(
+                self.log.error(
                     "pulse %s is a readout pulse and cannot be placed in the drive order",
                     pulse_name,
                 )
@@ -536,9 +536,9 @@ class SignalGeneratorNode(_GenericNode):
         for order_index, wdw_index in enumerate(addresses):
             ret = self._ll_handler.add_wave_to_drive_wave_sequence(order_index, wdw_index)
             if ret != 0:
-                logger.error("failed to write drive order at index %s", order_index)
+                self.log.error("failed to write drive order at index %s", order_index)
                 return ret
-        logger.debug("drive order set to %s", order)
+        self.log.debug("drive order set to %s", order)
         return 0
 
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericEnvelope | _Pulse | _VZGate:
@@ -556,7 +556,7 @@ class SignalGeneratorNode(_GenericNode):
         """
         # check that the name is not already taken by an existing child
         if any(child.name == name for child in self.children):
-            logger.error("child with name %s already exists", name)
+            self.log.error("child with name %s already exists", name)
             raise ValueError(f"child with name {name} already exists")
         if of_type == "envelope":
             return _GenericEnvelope(name=name, parent=self, **kwargs)
@@ -565,5 +565,5 @@ class SignalGeneratorNode(_GenericNode):
         elif of_type == "vzgate":
             return _VZGate(name=name, parent=self, **kwargs)
         else:
-            logger.error("unsupported child type %s", of_type)
+            self.log.error("unsupported child type %s", of_type)
             raise ValueError(f"unsupported child type {of_type}")

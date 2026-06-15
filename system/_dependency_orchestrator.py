@@ -22,9 +22,18 @@ class _DependencyOrchestrator:
 
     def __init__(self) -> None:
         """Initialize the dependency DAG."""
+        self.log = logging.getLogger(__name__)
         self._dependency_graph = nx.DiGraph()
         self._topological_order: list[str] | None = None
         self._start_nodes: set[str] | None = None
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
     def _invalidate_cached_order(self) -> None:
         """Invalidate the cached topological order and start nodes."""
@@ -98,9 +107,9 @@ class _DependencyOrchestrator:
             if node not in to_run:
                 continue
 
-            logger.debug("Updating node: %s", node)
+            self.log.debug("Updating node: %s", node)
             did_change: bool = self._dependency_graph.nodes[node]["update_function"]()
-            logger.debug("Node %s has changed: %s", node, did_change)
+            self.log.debug("Node %s has changed: %s", node, did_change)
             evaluated_nodes += 1
 
             if did_change:
@@ -112,5 +121,5 @@ class _DependencyOrchestrator:
             if evaluated_nodes == to_run_length:
                 # If all queued nodes have been evaluated and no successors were
                 # added, the active frontier is exhausted and we can stop early.
-                logger.debug("No more nodes to update.")
+                self.log.debug("No more nodes to update.")
                 return

@@ -81,7 +81,7 @@ class _DelayItem(_GenericNode):
         self._index = _index
         self._generate_trigger = _generate_trigger
         if self._ttype not in ["readout", "drive"]:
-            logger.error("unsupported delay type %s", self._ttype)
+            self.log.error("unsupported delay type %s", self._ttype)
             raise ValueError(f"unsupported delay type {self._ttype}")
 
     @_GenericNode.parameter_callback("$delay", sweepable=True, cost=3)
@@ -166,10 +166,10 @@ class TriggerGeneratorNode(_GenericNode):
         if self._hw_shots:
             ret = self._ll_handler.set_number_of_shots(self._hw_shots["value"])
             if ret != 0:
-                logger.error("Failed to set the number of shots")
+                self.log.error("Failed to set the number of shots")
                 raise RuntimeError("Failed to set the number of shots")
         else:
-            logger.error("Reference to hw shots is invalid")
+            self.log.error("Reference to hw shots is invalid")
             raise RuntimeError("Reference to hw shots is invalid")
         return True
 
@@ -200,12 +200,12 @@ class TriggerGeneratorNode(_GenericNode):
             type is not supported
         """
         if any(child.name == name for child in self.children):
-            logger.error("child with name %s already exists", name)
+            self.log.error("child with name %s already exists", name)
             raise ValueError(f"child with name {name} already exists")
         if of_type == "delay":
             return _DelayItem(name=name, parent=self, **kwargs)
         else:
-            logger.error("unsupported child type %s", of_type)
+            self.log.error("unsupported child type %s", of_type)
             raise ValueError(f"unsupported child type {of_type}")
 
     def start_experiment(self) -> None:

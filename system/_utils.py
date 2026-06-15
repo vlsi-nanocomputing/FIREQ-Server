@@ -28,8 +28,17 @@ class _MutableRef:
 
         :param kwargs: Keys and values to populate the internal dictionary
         """
+        self.log = logging.getLogger(__name__)
         self._data: dict[str, Any] = dict(kwargs)
         self.cached_hash = None
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
     # ------------------------------------------------------------------
     # Dict-like access
