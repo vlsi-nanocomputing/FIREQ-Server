@@ -102,7 +102,8 @@ class DMANode(_GenericNode):
             for i, payload in enumerate(self._input_payload):
                 if payload:
                     self._current_payload_index = i
-                    self._switch_func(i)
+                    # NOTE: adding one because the switch expects the first slave to be 1 not 0
+                    self._switch_func(i + 1)
                     break
             else:
                 # loop exhausted without break -> no valid payload found
@@ -144,11 +145,13 @@ class DMANode(_GenericNode):
             for i in range(self._current_payload_index + 1, len(self._input_payload)):
                 if self._input_payload[i]:
                     self._current_payload_index = i
-                    self._switch_func(i)
+                    # NOTE: adding one because the switch expects the first slave to be 1 not 0
+                    self._switch_func(i + 1)
                     current_payload = self._input_payload[i]
                     break
             else:
                 # no more valid payloads
                 break
             self._ll_handler.recvchannel.transfer(self._buffer)
+        self._transferring = False
         return True

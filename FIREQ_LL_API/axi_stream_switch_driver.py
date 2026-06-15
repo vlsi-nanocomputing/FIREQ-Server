@@ -48,6 +48,8 @@ class AXIStreamSwitchDriver(DefaultIP):
     def switch_to_input(self, input_number: int = 0) -> int:
         """Switch the switch to the selected input.
 
+        NOTE: The input number is 1-based, i.e. the first input is 1.
+
         :param input_number: Input number to switch to
         :type input_number: int
         :return: Error code (0 on success)

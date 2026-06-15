@@ -305,8 +305,8 @@ class FIREQSystemNode(_GenericNode):
             # start the experiment
             self._trigger_generator_nodes[0].start_experiment()
             # wait for the experiment to finish
-            while not self._trigger_generator_nodes[0].is_done():
-                pass
+            # while not self._trigger_generator_nodes[0].is_done():
+            #    pass
             # extract data from the dma
             for dma_node in self._dma_nodes:
                 dma_node.transfer_all(queue)
