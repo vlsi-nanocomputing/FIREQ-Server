@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import queue
 
@@ -110,6 +111,7 @@ class DMANode(_GenericNode):
                 self.log.warning("No payload to transfer for DMA node %s", self.name)
                 return False
         self._transferring = True
+        self._saved_payload = copy.deepcopy(self._input_payload)
         # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
         return True
@@ -127,9 +129,9 @@ class DMANode(_GenericNode):
             return False
         # get the current payload
         current_payload = (
-            self._input_payload
+            self._saved_payload
             if self._current_payload_index is None
-            else self._input_payload[self._current_payload_index]
+            else self._saved_payload[self._current_payload_index]
         )
         while True:
             # check for errors
@@ -144,15 +146,15 @@ class DMANode(_GenericNode):
                 (current_payload["source"], current_payload["format"], self._buffer[: current_payload["size"]].copy())
             )
             # break the loop if the input is not a switch or if the current payload is the last
-            if not self._is_switch_input or self._current_payload_index >= len(self._input_payload) - 1:
+            if not self._is_switch_input or self._current_payload_index >= len(self._saved_payload) - 1:
                 break
             # find the next valid input payload to transfer
-            for i in range(self._current_payload_index + 1, len(self._input_payload)):
-                if self._input_payload[i]:
+            for i in range(self._current_payload_index + 1, len(self._saved_payload)):
+                if self._saved_payload[i]:
                     self._current_payload_index = i
                     # NOTE: adding one because the switch expects the first slave to be 1 not 0
                     self._switch_func(i + 1)
-                    current_payload = self._input_payload[i]
+                    current_payload = self._saved_payload[i]
                     break
             else:
                 # no more valid payloads

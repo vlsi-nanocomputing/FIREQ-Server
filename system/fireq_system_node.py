@@ -142,8 +142,7 @@ class FIREQSystemNode(_GenericNode):
         """Update the maximum number of hardware shots.
 
         Computes the maximum number of hardware shots that can be executed without
-        overflowing any acquisition FIFO, then sets ``hw_shots`` and ``sw_shots``
-        accordingly.
+        overflowing any acquisition FIFO.
 
         :return: ``True`` if the number of shots changed, ``False`` otherwise
         :rtype: bool
@@ -170,7 +169,10 @@ class FIREQSystemNode(_GenericNode):
         return self.requested_hw_shots.hash_and_compare()
 
     def update_hw_shots(self) -> bool:
-        """Update the actual number of hardware shots."""
+        """Update the actual number of hardware shots.
+
+        Depends on the maximum number of hw shots and the requested number of shots.
+        """
         self.hw_shots["value"] = min(self.max_hw_shots["value"], self.requested_hw_shots["value"])
         self.log.debug("Hardware shots set to %s", self.hw_shots["value"])
         return self.hw_shots.hash_and_compare()
@@ -289,29 +291,31 @@ class FIREQSystemNode(_GenericNode):
         # get the actual number of hw shots
         hw_shots = self.hw_shots["value"]
         while executed_shots < self.shots:
-            extra_shots = (executed_shots + hw_shots) - self.shots
-            if extra_shots > 0:
+            # run the experiment, at this point we are certain that the number of hw shots is set correctly
+            self._trigger_generator_nodes[0].start_experiment()
+            # init the dma
+            for dma_nodes in self._dma_nodes:
+                dma_nodes.init_dma()
+            # while the experiment runs, compute the remaining shots
+            executed_shots += hw_shots
+            remaining_shots = self.shots - executed_shots
+            # if we have less remaining shots than the currently set hw shots, request a different number of hw shots
+            if hw_shots > remaining_shots > 0:
                 # reduce the number of hw shots and rerun dependency
+                hw_shots = remaining_shots
                 self.log.debug("Reducing the number of hw shots to properly run the expeirment")
-                hw_shots = hw_shots - extra_shots
                 self.requested_hw_shots["value"] = hw_shots
+                # NOTE: we can update now because the dma caches the payloads and the trigger generator
+                #       is not affected by a change in hw shots while running
+                # TODO: maybe check that this is true
                 self._dependency_orchestrator.update()
                 if self.hw_shots["value"] != hw_shots:
                     self.log.error("Failed to set the number of hw shots to the correct amount")
                     raise RuntimeError("Failed to set the number of hw shots to the correct amount")
-            # init the dma
-            for dma_nodes in self._dma_nodes:
-                dma_nodes.init_dma()
-            # start the experiment
-            self._trigger_generator_nodes[0].start_experiment()
-            # wait for the experiment to finish
-            # while not self._trigger_generator_nodes[0].is_done():
-            #    pass
             # extract data from the dma
             for dma_node in self._dma_nodes:
                 dma_node.transfer_all(queue)
-            # increment the number of executed shots
-            executed_shots += hw_shots
+            # increment number of sw shots
             sw_shots += 1
         self.log.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 

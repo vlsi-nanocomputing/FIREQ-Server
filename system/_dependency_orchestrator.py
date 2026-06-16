@@ -24,8 +24,9 @@ class _DependencyOrchestrator:
         """Initialize the dependency DAG."""
         self.log = logging.getLogger(__name__)
         self._dependency_graph = nx.DiGraph()
-        self._topological_order: list[str] | None = None
-        self._start_nodes: set[str] | None = None
+        self._update_funcs: list[Callable] | None = None
+        self._successors_ids: list[list[int]] | None = None
+        self._start_node_ids: set[int] | None = None
 
     def set_logger(self, new_logger: logging.Logger) -> None:
         """Set the logger for this object.
@@ -37,8 +38,27 @@ class _DependencyOrchestrator:
 
     def _invalidate_cached_order(self) -> None:
         """Invalidate the cached topological order and start nodes."""
-        self._topological_order = None
-        self._start_nodes = None
+        self._valid_cached_order = False
+
+    def _compute_cached_order(self) -> None:
+        # 1. Topological order of node objects (strings, whatever type)
+        topological_order = list(nx.topological_sort(self._dependency_graph))
+
+        # 2. Map each node to its integer ID
+        node_to_id = {node: idx for idx, node in enumerate(topological_order)}
+
+        # 3. Pre‑computed lists indexed by integer ID
+        self._update_funcs = [self._dependency_graph.nodes[node]["update_function"] for node in topological_order]
+
+        self._successors_ids = [
+            [node_to_id[succ] for succ in self._dependency_graph.successors(node)] for node in topological_order
+        ]
+
+        # 4. Start‑node set containing integer IDs
+        self._start_node_ids = {
+            node_to_id[node] for node in topological_order if self._dependency_graph.in_degree(node) == 0
+        }
+        self._valid_cached_order = True
 
     def add_node(self, name: str, update_function: Callable[[], bool]) -> None:
         """Add a node with a unique name to the graph.
@@ -91,35 +111,31 @@ class _DependencyOrchestrator:
         in the active frontier (i.e. at least one upstream dependency changed).
         Evaluation stops early as soon as the active frontier is exhausted.
         """
-        if self._topological_order is None or self._start_nodes is None:
-            self._topological_order = list(nx.topological_sort(self._dependency_graph))
-            self._start_nodes = {
-                node for node in self._topological_order if self._dependency_graph.in_degree(node) == 0
-            }
+        if not self._valid_cached_order:
+            self._compute_cached_order()
 
-        # set indicating the nodes that need to update
-        to_run: set[str] = set(self._start_nodes)
+        # local variable caching
+        is_debug = self.log.isEnabledFor(logging.DEBUG)
+        to_run = set(self._start_node_ids)
+        evaluated_nodes = 0
+        to_run_length = len(to_run)
 
-        # the number of evaluated nodes
-        evaluated_nodes: int = 0
-        to_run_length: int = len(to_run)
-        for node in self._topological_order:
-            if node not in to_run:
+        for node_id, update_func in enumerate(self._update_funcs):
+            if node_id not in to_run:
                 continue
 
-            self.log.debug("Updating node: %s", node)
-            did_change: bool = self._dependency_graph.nodes[node]["update_function"]()
-            self.log.debug("Node %s has changed: %s", node, did_change)
+            did_change = update_func()
+            if is_debug:
+                self.log.debug("Updated node: %s, has changed: %s", node_id, did_change)
+
             evaluated_nodes += 1
 
             if did_change:
-                for successor in self._dependency_graph.successors(node):
-                    if successor not in to_run:
-                        to_run.add(successor)
+                for succ_id in self._successors_ids[node_id]:
+                    if succ_id not in to_run:
+                        to_run.add(succ_id)
                         to_run_length += 1
 
             if evaluated_nodes == to_run_length:
-                # If all queued nodes have been evaluated and no successors were
-                # added, the active frontier is exhausted and we can stop early.
                 self.log.debug("No more nodes to update.")
                 return
