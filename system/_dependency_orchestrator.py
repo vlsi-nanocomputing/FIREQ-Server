@@ -27,6 +27,7 @@ class _DependencyOrchestrator:
         self._update_funcs: list[Callable] | None = None
         self._successors_ids: list[list[int]] | None = None
         self._start_node_ids: set[int] | None = None
+        self._valid_cached_order: bool = False
 
     def set_logger(self, new_logger: logging.Logger) -> None:
         """Set the logger for this object.
@@ -41,6 +42,7 @@ class _DependencyOrchestrator:
         self._valid_cached_order = False
 
     def _compute_cached_order(self) -> None:
+        """Create the data structures necessary to determine the order of updates to run the system update."""
         # 1. Topological order of node objects (strings, whatever type)
         topological_order = list(nx.topological_sort(self._dependency_graph))
 

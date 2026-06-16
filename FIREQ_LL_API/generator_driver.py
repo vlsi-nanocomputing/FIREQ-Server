@@ -137,7 +137,7 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        if self.axi_full_initialized is None:
+        if not self.axi_full_initialized:
             self.log.error("AXI Full interface not initialized")
             return -3
 
@@ -178,6 +178,7 @@ class GeneratorDriver(_FIREQDriver):
             return rval
 
         self.log.debug("cleared envelope memory")
+        return 0
 
     def trigger_manually(self) -> int:
         """Trigger the generator manually.
@@ -291,9 +292,9 @@ class GeneratorDriver(_FIREQDriver):
         pinc = int(2**self.phase_depth * normalized_frequency)
 
         # write inc LOW
-        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
+        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc & 0xFFFFFFFF)
         # write inc HIGH
-        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
+        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
         self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)

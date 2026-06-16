@@ -92,22 +92,30 @@ class AcquisitionDriver(_FIREQDriver):
         else:
             self.payload = {}
 
-    def print_description(self) -> None:
-        """Print the driver configuration parameters to stdout."""
-        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of acquisition in clock cycles")
-        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
-        print(
+    def print_description(self, printer_func: callable) -> None:
+        """Print a detailed description of the acquisition IP configuration parameters.
+
+        :param printer_func: Function to use to print the description
+        :type printer_func: callable
+        """
+        printer_func(
+            "maximum_duration: " + str(self.maximum_duration) + ", maximum duration of acquisition in clock cycles"
+        )
+        printer_func("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
+        printer_func(
             "number_of_channels: "
             + str(self.number_of_channels)
             + ", parallelism of the acquisition (samples/clock cycle)"
         )
-        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
-        print(
+        printer_func("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
+        printer_func(
             "trigger_channels: "
             + str(self.trigger_channels)
             + ", number of trigger channels for readout and drive (bits)"
         )
-        print("time_of_flight_width: " + str(self.time_of_flight_width) + ", width of the time of flight timer (bits)")
+        printer_func(
+            "time_of_flight_width: " + str(self.time_of_flight_width) + ", width of the time of flight timer (bits)"
+        )
 
     def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface for register access.
@@ -180,7 +188,7 @@ class AcquisitionDriver(_FIREQDriver):
 
         return 0
 
-    def trigger_manually(self) -> None:
+    def trigger_manually(self) -> int:
         """Trigger the acquisition manually."""
         manual_trigger_mask = 1 << self._manual_trigger_pos
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask

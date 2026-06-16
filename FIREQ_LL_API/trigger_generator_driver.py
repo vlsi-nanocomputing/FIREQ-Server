@@ -51,12 +51,16 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # parse the size of the repetition counter
         self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
 
-    def print_description(self) -> None:
-        """Print the description of the trigger generator IP."""
-        print(f"trigger_channels: {self.trigger_channels}")
-        print(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
-        print(f"fifo_channel_depth: {self.channel_fifo_depth}")
-        print(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
+    def print_description(self, printer_func: callable) -> None:
+        """Print the description of the trigger generator IP.
+
+        :param: printer_func: Function to use to print the description
+        :type printer_func: callable
+        """
+        printer_func(f"trigger_channels: {self.trigger_channels}")
+        printer_func(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
+        printer_func(f"fifo_channel_depth: {self.channel_fifo_depth}")
+        printer_func(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
 
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface for this IP.

@@ -111,9 +111,9 @@ class DMANode(_GenericNode):
                 self.log.warning("No payload to transfer for DMA node %s", self.name)
                 return False
         self._transferring = True
-        self._saved_payload = copy.deepcopy(self._input_payload)
         # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
+        self._saved_payload = copy.deepcopy(self._input_payload)
         return True
 
     def transfer_all(self, data_queue: queue.Queue) -> bool:

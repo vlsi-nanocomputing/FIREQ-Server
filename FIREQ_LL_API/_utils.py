@@ -45,10 +45,13 @@ class _FIREQDriver(DefaultIP):
         """
         self.log = new_logger
 
-    def print_description(self) -> None:
+    def print_description(self, printer_func: callable) -> None:
         """Print the description of the IP.
 
         This method should be overridden by subclasses.
+
+        :param printer_func: Function to use to print the description
+        :type printer_func: callable
         """
         pass
 
