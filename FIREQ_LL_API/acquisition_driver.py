@@ -21,10 +21,13 @@ class AcquisitionDriver(_FIREQDriver):
     _readout_inc_h = 4
     _readout_off_l = 1
     _readout_off_h = 2
+    _trigger_mask = 5
 
     # Bit position definitions
     _manual_trigger_pos = 31
     _accumulate_select_pos = 27
+    _duration_pos = 0
+    _trigger_mask_pos = 0
 
     # Output interfaces mapping the acquisition mode to the interface responsable for the output
     _output_interfaces = {
@@ -207,12 +210,11 @@ class AcquisitionDriver(_FIREQDriver):
         :rtype: int
         """
         if duration < 1 or duration > self.maximum_duration:
-            print("acquisition duration is out of range")
             self.log.error("acquisition duration: %s out of range", duration)
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, self.trigger_channels, self.duration_width, duration - 1)
+        control_register = _set_bits(control_register, self._duration_pos, self.duration_width, duration - 1)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
         self.log.debug("set the acquisition duration to %s fabric clock cycles", duration)
@@ -234,9 +236,9 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         channel_mask = (1 << channel) >> 1
-        control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, 0, self.trigger_channels, channel_mask)
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
+        trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask * 5)
+        trigger_mask_reg = _set_bits(trigger_mask_reg, self._trigger_mask_pos, self.trigger_channels, channel_mask)
+        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
 
         self.log.debug("set the trigger channel to %s", channel)
         self._cache["active"] = channel > 0
@@ -259,7 +261,7 @@ class AcquisitionDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(
             control_register,
-            self.trigger_channels + self.duration_width,
+            self._duration_pos + self.duration_width,
             self.time_of_flight_width,
             time_of_flight - 1,
         )
