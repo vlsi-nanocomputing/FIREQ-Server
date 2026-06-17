@@ -31,11 +31,16 @@ class GeneratorDriver(_FIREQDriver):
     _readout_off_h = 10
     _drive_inc_l = 7
     _drive_inc_h = 8
+    _trigger_mask = 11
 
-    # Bit position definition
+    # Bit position definition - control register
     man_trig_sel = 28
     source_pos = 27
     manual_trigger_pos = 31
+    seed_lfsr_pos = 0
+
+    # Bit position definition - dac_mask in wdw
+    dac_mask_msb = 118
 
     # Port name of the fabric clock
     fabric_clock_port = "HS_axi_clock"
@@ -81,6 +86,8 @@ class GeneratorDriver(_FIREQDriver):
         self.memory_mapped_fifo_segment_depth = int(description["parameters"]["MemoryMappedFifoDepth"])
         # width of the lfsr seed
         self.seed_lfsr_width = int(description["parameters"]["MmFifoAndLfsrOutputWidth"])
+        # number of dac
+        self.num_dacs = int(description["parameters"]["NumDacs"])
         # set debug level
         self.debug_level = 0
 
@@ -210,24 +217,28 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         if ttype == "drive":
-            selector = 0
+            start_bit = 0
         elif ttype == "readout":
-            selector = 1
+            start_bit = self.trigger_channels
         else:
             self.log.error("trigger type %s is out of range", ttype)
             return -3
 
         # write to the control register
         trigger_mask = (1 << channel) >> 1
+
+        reg_value = self._axi_lite_interface_mmio.read(self._trigger_mask * 4)
+
         control_register = _set_bits(
-            self._axi_lite_interface_mmio.read(self._ctrl * 4),
-            selector * self.trigger_channels,
+            reg_value,
+            start_bit,
             self.trigger_channels,
             trigger_mask,
         )
+
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        self.log.debug("set the trigger channel to %s for %s(%s)", channel, ttype, selector)
+        self.log.debug("set the trigger channel to %s for %s", channel, ttype)
 
         return 0
 
@@ -271,7 +282,7 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, 2 * self.trigger_channels, self.seed_lfsr_width, seed)
+        control_register = _set_bits(control_register, self.seed_lfsr_pos, self.seed_lfsr_width, seed)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
         self.log.debug("set the lfsr seed to %s", seed)
@@ -423,7 +434,7 @@ class GeneratorDriver(_FIREQDriver):
         """Write the readout wave definition to the IP.
 
         This is the wave definition that will be used for manual and readout waves.
-        HINT: for manual waves, you can set the output DAC (readout or drive channel)
+        HINT: for manual waves, you can set the output channel (readout or drive channel)
         with the "trigger_manuallyDestination" function.
 
         :param wave_definition: 128-bit wave defintion
@@ -565,6 +576,35 @@ class GeneratorDriver(_FIREQDriver):
         # set the start offset and increment bits
         wdw |= start_offset << (self.sample_memory_address_width + self.fractional_precision)
         wdw |= increment
+        return wdw
+
+    def set_dac_mask(self, envelope_wdw: int, mask: int) -> int:
+        """Set the DAC mask for drive or readout outputs.
+        For example, if you have 4 DACs and want to activate the first and third, you should set the mask to 0b0101 (5 in decimal)
+        :param envelope_wdw: Wave definition word
+        :type envelope_wdw: int
+        :param mask: Bitmask of the DACs to activate, from the least significant bit.
+        :type mask: int
+        :return: Error code
+        :rtype: int
+        """
+
+        wdw = envelope_wdw
+
+        if mask < 0 or mask >= pow(2, self.num_dacs) - 1:
+            self.log.error("DAC mask %s is out of range", mask)
+            return -3
+
+        # this should never happen, but just in case
+        if self.num_dacs < 0 or self.num_dacs > 15:
+            self.log.error("Invalid number of DACs: %s", self.num_dacs)
+            return -3
+
+        lsb = self.dac_mask_msb - self.num_dacs + 1
+        wdw = _set_bits(wdw, lsb, self.num_dacs, mask)
+
+        self.log.debug("set the DAC mask to %s", mask)
+
         return wdw
 
     def print_description(self, printer_func: callable) -> None:
