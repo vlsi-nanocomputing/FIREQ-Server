@@ -49,7 +49,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # parse the size of the repetition counter
         self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
 
-<<<<<<< HEAD
     def print_description(self, printer_func: callable) -> None:
         """Print the description of the trigger generator IP.
 
@@ -60,17 +59,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         printer_func(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
         printer_func(f"fifo_channel_depth: {self.channel_fifo_depth}")
         printer_func(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
-=======
-        # set up logger
-        self.log = logging.getLogger(__name__)
-
-    def print_description(self) -> None:
-        """Print the description of the trigger generator IP."""
-        print(f"trigger_channels: {self.trigger_channels}")
-        print(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
-        print(f"fifo_channel_depth: {self.channel_fifo_depth}")
-        print(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
->>>>>>> 02ec9ed (Modified trigger generator driver: support for multi-trigger drive/readout)
 
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface for this IP.
@@ -144,7 +132,6 @@ class TriggerGeneratorDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0)
         return (control_register & 0x40000000) == 0x40000000
 
-
     def insert_delay(self, source: int, type: bool, index: int, delay: int) -> int:
         """Insert a delay and source value in the FIFO at the index for readout or drive.
 
@@ -163,7 +150,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: int
         """
 
-        if source < 0 or source > pow(2,self.trigger_channels) - 1:
+        if source < 0 or source > pow(2, self.trigger_channels) - 1:
             self.log.error(f"source {source} is outside of range 0 to {pow(2,self.trigger_channels) - 1}")
             return -3
 
@@ -175,22 +162,19 @@ class TriggerGeneratorDriver(_FIREQDriver):
             self.log.error(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
 
             return -3
-        
-        
+
         source_index = (index * 2) + 0
         delay_index = (index * 2) + 1
 
         mask = (int(type) << 15) | (source & 0x7FFF)
-        
-        self._axi_full_interface_mmio.write(delay_index * 4, int(delay)-1)
-        self._axi_full_interface_mmio.write(source_index * 4, int(mask))
 
+        self._axi_full_interface_mmio.write(delay_index * 4, int(delay) - 1)
+        self._axi_full_interface_mmio.write(source_index * 4, int(mask))
 
         self.log.debug(
             "trigger, insert__delay, got the following for source: %s, type: %s, index: %s, delay: %s, ",
             source,
             type,
-
             index,
             delay,
         )
