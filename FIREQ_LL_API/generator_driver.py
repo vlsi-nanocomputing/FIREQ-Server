@@ -91,6 +91,10 @@ class GeneratorDriver(_FIREQDriver):
         # set debug level
         self.debug_level = 0
 
+        # this should never happen, but just in case
+        if self.num_dacs < 0 or self.num_dacs > 15:
+            raise ValueError(f"Invalid number of DACs: {self.num_dacs}")
+
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface segments and clear memory.
 
@@ -217,9 +221,9 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         if ttype == "drive":
-            start_bit = 0
+            offset_bit = 0
         elif ttype == "readout":
-            start_bit = self.trigger_channels
+            offset_bit = self.trigger_channels
         else:
             self.log.error("trigger type %s is out of range", ttype)
             return -3
@@ -231,7 +235,7 @@ class GeneratorDriver(_FIREQDriver):
 
         control_register = _set_bits(
             reg_value,
-            start_bit,
+            offset_bit,
             self.trigger_channels,
             trigger_mask,
         )
@@ -593,11 +597,6 @@ class GeneratorDriver(_FIREQDriver):
 
         if mask < 0 or mask >= pow(2, self.num_dacs) - 1:
             self.log.error("DAC mask %s is out of range", mask)
-            return -3
-
-        # this should never happen, but just in case
-        if self.num_dacs < 0 or self.num_dacs > 15:
-            self.log.error("Invalid number of DACs: %s", self.num_dacs)
             return -3
 
         lsb = self.dac_mask_msb - self.num_dacs + 1

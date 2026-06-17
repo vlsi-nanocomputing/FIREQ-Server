@@ -236,7 +236,7 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         channel_mask = (1 << channel) >> 1
-        trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask * 5)
+        trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask * 4)
         trigger_mask_reg = _set_bits(trigger_mask_reg, self._trigger_mask_pos, self.trigger_channels, channel_mask)
         self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
 
