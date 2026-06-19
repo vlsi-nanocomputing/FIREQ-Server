@@ -20,7 +20,7 @@ class GeneratorDriver(_FIREQDriver):
     Provides low-level methods to control the generator IP.
     """
 
-    bindto = ["user.org:user:axisGeneratorIP:2.0"]
+    bindto = ["user.org:user:axisGeneratorIP:1.0"]
 
     # Offset definition
     _ctrl = 0
@@ -38,9 +38,6 @@ class GeneratorDriver(_FIREQDriver):
     source_pos = 27
     manual_trigger_pos = 31
     seed_lfsr_pos = 0
-
-    # Bit position definition - dac_mask in wdw
-    dac_mask_msb = 118
 
     # Port name of the fabric clock
     fabric_clock_port = "HS_axi_clock"
@@ -87,10 +84,13 @@ class GeneratorDriver(_FIREQDriver):
         # width of the lfsr seed
         self.seed_lfsr_width = int(description["parameters"]["MmFifoAndLfsrOutputWidth"])
         # number of dac
-        self.num_dacs = int(description["parameters"]["NumDacs"])
+        self.num_dacs = int(description["parameters"]["NumDac"])
         # set debug level
         self.debug_level = 0
 
+        self.sample_gen_increment_width = self.sample_memory_address_width + self.fractional_precision
+        # Bit position definition - dac_mask in wdw
+        self.dac_mask_lsb = 2 * self.sample_gen_increment_width + self.duration_width + self.sample_size
         # this should never happen, but just in case
         if self.num_dacs < 0 or self.num_dacs > 15:
             raise ValueError(f"Invalid number of DACs: {self.num_dacs}")
@@ -598,9 +598,7 @@ class GeneratorDriver(_FIREQDriver):
         if mask < 0 or mask >= pow(2, self.num_dacs) - 1:
             self.log.error("DAC mask %s is out of range", mask)
             return -3
-
-        lsb = self.dac_mask_msb - self.num_dacs + 1
-        wdw = _set_bits(wdw, lsb, self.num_dacs, mask)
+        wdw = _set_bits(wdw, self.dac_mask_lsb, self.num_dacs, mask)
 
         self.log.debug("set the DAC mask to %s", mask)
 
