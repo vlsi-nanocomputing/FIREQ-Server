@@ -1,7 +1,5 @@
 """Low-level driver for the FIREQ trigger generator IP."""
 
-import logging
-
 from ._utils import _FIREQDriver
 
 __all__ = ["TriggerGeneratorDriver"]
@@ -93,7 +91,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # write duration HIGH
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
-        self.log.debug("trigger, set_experiment_duration, got the following for duration: %s", duration)
+        self.log.debug("Set the expreriment duration to %s", duration)
 
         return 0
 
@@ -111,13 +109,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
-        self.log.debug("Set the number of hw shots to: %s", value)
+        self.log.debug("Set the number of hw shots to %s", value)
 
         return 0
 
     def start_experiment(self) -> None:
         """Start the generation of triggers."""
-        self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, 1 << self._manual_trigger_pos)
 
         self.log.debug("Trigger generator started")
 
@@ -129,18 +127,18 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :return: True if the experiment is finished, False if still running
         :rtype: bool
         """
-        control_register = self._axi_lite_interface_mmio.read(0)
+        control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         return (control_register & 0x40000000) == 0x40000000
 
-    def insert_delay(self, trigger_mask: int, type: bool, index: int, delay: int) -> int:
+    def insert_delay(self, trigger_mask: int, ttype: bool, index: int, delay: int) -> int:
         """Insert a delay in the trigger generator at `index`.
 
         The ``trigger_mask`` input defines the triggers that will be set once the delay expires.
 
         :param trigger_mask: Trigger channels to activate (Fifthen bit mask, e.g. 0b0010 means channel 2)
         :type trigger_mask: int
-        :param type: Trigger type (True for readout, False for drive)
-        :type type: bool
+        :param ttype: Trigger type (True for readout, False for drive)
+        :type ttype: bool
         :param index: FIFO index (1 is the first delay)
         :type index: int
         :param delay: Delay in clock cycles (1 to drive_delay_max)
@@ -163,15 +161,15 @@ class TriggerGeneratorDriver(_FIREQDriver):
         source_index = ((index - 1) * 2) + 0
         delay_index = ((index - 1) * 2) + 1
 
-        mask = (int(type) << 15) | (trigger_mask & 0x7FFF)
+        mask = (int(ttype) << 15) | (trigger_mask & 0x7FFF)
 
         self._axi_full_interface_mmio.write(delay_index * 4, int(delay) - 1)
         self._axi_full_interface_mmio.write(source_index * 4, int(mask))
 
         self.log.debug(
-            "inserted a delay, got trigger_mask: %s, type: %s, index: %s, delay: %s, ",
+            "Inserted a delay with trigger_mask: %s, type: %s, index: %s and delay: %s, ",
             trigger_mask,
-            type,
+            ttype,
             index,
             delay,
         )
