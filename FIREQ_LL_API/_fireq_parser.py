@@ -35,7 +35,12 @@ BOARD_META = {
         "device": "xczu48dr",
         "board_vlnv": "realdigital.org:rfsoc4x2:part0:",
         "ps_vlnv": "xilinx.com:ip:zynq_ultra_ps_e:",
-    }
+    },
+    "zcu216": {
+        "device": "xczu49dr",
+        "board_vlnv": "xilinx.com:zcu216:part0:",
+        "ps_vlnv": "xilinx.com:ip:zynq_ultra_ps_e:",
+    },
 }
 
 

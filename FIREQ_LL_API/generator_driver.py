@@ -533,22 +533,27 @@ class GeneratorDriver(_FIREQDriver):
         :return: Wave definition word
         :rtype: int
         """
+        # start with the envelope wdw
         wdw = envelope_wdw
+        # set the invert bit if gain is negative
         if normalized_gain < 0:
             wdw |= 1 << 124
             gain = -normalized_gain
         else:
             gain = normalized_gain
+        # set the switch iq and keep last bits
         wdw |= int(switch_iq) << 123
         wdw |= int(keep_last) << 122
+        # set the gain, cap to 1 if gain was bigger than 1
         if gain >= 1:
             gain = 2**self.sample_size - 1
+            self.log.warning("Gain amplitude is out of bounds. Gain amplitude was saturated to 1")
         else:
             gain = int(2**self.sample_size * gain)
         wdw |= (gain & (2**self.sample_size - 1)) << 90
         # get the duration
         if duration > self.maximum_duration:
-            self.log.warning("duration %s is out of range", duration)
+            self.log.warning("Duration %s is out of range. Saturating to maximum allowed duration", duration)
             real_duration = self.maximum_duration
         else:
             real_duration = duration
@@ -566,7 +571,7 @@ class GeneratorDriver(_FIREQDriver):
             # error at the end without changing the hardware behavior.
             start_offset = start_address << self.fractional_precision
             num = (natural_duration - 1) << self.fractional_precision
-            den = real_duration - 1
+            den = (real_duration - 1) << self.fractional_precision
 
             increment = num // den
             reminder = num % den
@@ -582,25 +587,21 @@ class GeneratorDriver(_FIREQDriver):
         wdw |= increment
         return wdw
 
-    def set_dac_mask(self, envelope_wdw: int, mask: int) -> int:
+    def set_wdw_dac_mask(self, wdw: int, mask: int) -> int:
         """Set the DAC mask for drive or readout outputs.
+
         For example, if you have 4 DACs and want to activate the first and third, you should set the mask to 0b0101 (5 in decimal)
-        :param envelope_wdw: Wave definition word
-        :type envelope_wdw: int
+        :param wdw: Wave definition word
+        :type wdw: int
         :param mask: Bitmask of the DACs to activate, from the least significant bit.
         :type mask: int
         :return: Error code
         :rtype: int
         """
-
-        wdw = envelope_wdw
-
-        if mask < 0 or mask >= pow(2, self.num_dacs) - 1:
+        if mask < 0 or mask > pow(2, self.num_dacs) - 1:
             self.log.error("DAC mask %s is out of range", mask)
             return -3
         wdw = _set_bits(wdw, self.dac_mask_lsb, self.num_dacs, mask)
-
-        self.log.debug("set the DAC mask to %s", mask)
 
         return wdw
 
