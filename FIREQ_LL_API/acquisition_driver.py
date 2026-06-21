@@ -25,7 +25,9 @@ class AcquisitionDriver(_FIREQDriver):
 
     # Bit position definitions
     _manual_trigger_pos = 31
-    _accumulate_select_pos = 27
+    _raw_enable_pos = 27
+    _accumulated_decimated_enable_pos = 26
+    _accumulate_select_pos = 25
     _duration_pos = 0
     _trigger_mask_pos = 0
 
@@ -283,23 +285,39 @@ class AcquisitionDriver(_FIREQDriver):
         """
         if output_mode == "raw":
             self._cache["output_mode"] = "raw"
-            return 0
+            raw_enable = 1
+            acc_dec_enable = 0
+            acc_dec_mode = 0
         elif output_mode == "decimated":
             self._cache["output_mode"] = "decimated"
-            output_mode_bit = 0
+            raw_enable = 0
+            acc_dec_enable = 1
+            acc_dec_mode = 0
         elif output_mode == "accumulated":
             self._cache["output_mode"] = "accumulated"
-            output_mode_bit = 1
+            raw_enable = 0
+            acc_dec_enable = 1
+            acc_dec_mode = 1
         else:
             self.log.error("output_type: %s not recognized", output_mode)
             return -3
 
-        updated_control = _set_bit(
+        ctl = _set_bit(
             self._axi_lite_interface_mmio.read(self._ctrl * 4),
             self._accumulate_select_pos,
-            output_mode_bit,
+            acc_dec_mode,
         )
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, updated_control)
+        ctl = _set_bit(
+            ctl,
+            self._accumulated_decimated_enable_pos,
+            acc_dec_enable,
+        )
+        ctl = _set_bit(
+            ctl,
+            self._raw_enable_pos,
+            raw_enable,
+        )
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, ctl)
 
         self.log.debug("set the decimated output type to %s", output_mode)
         self._calculate_payload()

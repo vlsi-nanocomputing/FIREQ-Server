@@ -132,26 +132,24 @@ class TriggerGeneratorDriver(_FIREQDriver):
         control_register = self._axi_lite_interface_mmio.read(0)
         return (control_register & 0x40000000) == 0x40000000
 
-    def insert_delay(self, source: int, type: bool, index: int, delay: int) -> int:
-        """Insert a delay and source value in the FIFO at the index for readout or drive.
+    def insert_delay(self, trigger_mask: int, type: bool, index: int, delay: int) -> int:
+        """Insert a delay in the trigger generator at `index`.
 
-        The source input is used to tell the trigger generator which channel should
-        be triggered.
+        The ``trigger_mask`` input defines the triggers that will be set once the delay expires.
 
-        :param source: Source channel (Fifthen bit mask, e.g. 0b0010 means channel 2)
-        :type source: int
-        :param type: Delay and trigger type (True for readout, False for drive)
+        :param trigger_mask: Trigger channels to activate (Fifthen bit mask, e.g. 0b0010 means channel 2)
+        :type trigger_mask: int
+        :param type: Trigger type (True for readout, False for drive)
         :type type: bool
-        :param index: FIFO index (1 is the start)
+        :param index: FIFO index (1 is the first delay)
         :type index: int
         :param delay: Delay in clock cycles (1 to drive_delay_max)
         :type delay: int
         :return: Error code (0 on success)
         :rtype: int
         """
-
-        if source < 0 or source > pow(2, self.trigger_channels) - 1:
-            self.log.error(f"source {source} is outside of range 0 to {pow(2,self.trigger_channels) - 1}")
+        if trigger_mask < 0 or trigger_mask > pow(2, self.trigger_channels) - 1:
+            self.log.error(f"source {trigger_mask} is outside of range 0 to {pow(2,self.trigger_channels) - 1}")
             return -3
 
         if index < 1 or index > self.channel_fifo_depth // 2:
@@ -160,20 +158,19 @@ class TriggerGeneratorDriver(_FIREQDriver):
 
         if delay < 1 or delay > self.drive_delay_max:
             self.log.error(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
-
             return -3
 
-        source_index = (index * 2) + 0
-        delay_index = (index * 2) + 1
+        source_index = ((index - 1) * 2) + 0
+        delay_index = ((index - 1) * 2) + 1
 
-        mask = (int(type) << 15) | (source & 0x7FFF)
+        mask = (int(type) << 15) | (trigger_mask & 0x7FFF)
 
         self._axi_full_interface_mmio.write(delay_index * 4, int(delay) - 1)
         self._axi_full_interface_mmio.write(source_index * 4, int(mask))
 
         self.log.debug(
-            "trigger, insert__delay, got the following for source: %s, type: %s, index: %s, delay: %s, ",
-            source,
+            "inserted a delay, got trigger_mask: %s, type: %s, index: %s, delay: %s, ",
+            trigger_mask,
             type,
             index,
             delay,
