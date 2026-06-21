@@ -1,7 +1,5 @@
 """Low-level driver for the FIREQ generator IP."""
 
-import logging
-
 import numpy as np
 from pynq import MMIO
 
