@@ -305,9 +305,9 @@ class GeneratorDriver(_FIREQDriver):
         pinc = int(2**self.phase_depth * normalized_frequency)
 
         # write inc LOW
-        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc & 0xFFFFFFFF)
+        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
         # write inc HIGH
-        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc >> 32)
+        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
         self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
@@ -349,9 +349,9 @@ class GeneratorDriver(_FIREQDriver):
         pinc = int(2**self.phase_depth * normalized_frequency)
 
         # write inc LOW
-        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
+        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc & 0xFFFFFFFF)
         # write inc HIGH
-        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
+        self._axi_lite_interface_mmio.write(self._drive_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
         self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
