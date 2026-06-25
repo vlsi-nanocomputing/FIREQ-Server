@@ -229,16 +229,14 @@ class GeneratorDriver(_FIREQDriver):
         # write to the control register
         trigger_mask = (1 << channel) >> 1
 
-        reg_value = self._axi_lite_interface_mmio.read(self._trigger_mask * 4)
-
         control_register = _set_bits(
-            reg_value,
+            0x0000,
             offset_bit,
             self.trigger_channels,
             trigger_mask,
         )
 
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
+        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, control_register)
 
         self.log.debug("set the trigger channel to %s for %s", channel, ttype)
 
