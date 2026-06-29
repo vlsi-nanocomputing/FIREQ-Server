@@ -29,7 +29,7 @@ class GeneratorDriver(_FIREQDriver):
     _readout_off_h = 10
     _drive_inc_l = 7
     _drive_inc_h = 8
-    _trigger_mask = 11
+    _trigger_mask_l = 11
 
     # Bit position definition - control register
     man_trig_sel = 28
@@ -85,7 +85,7 @@ class GeneratorDriver(_FIREQDriver):
         self.num_dacs = int(description["parameters"]["NumDac"])
         # set debug level
         self.debug_level = 0
-
+        # this constant is the bit length of the addresses used in the generator dds with taylor compensation
         self.sample_gen_increment_width = self.sample_memory_address_width + self.fractional_precision
         # Bit position definition - dac_mask in wdw
         self.dac_mask_lsb = 2 * self.sample_gen_increment_width + self.duration_width + self.sample_size
@@ -229,15 +229,14 @@ class GeneratorDriver(_FIREQDriver):
         # write to the control register
         trigger_mask = (1 << channel) >> 1
 
-        control_register = _set_bits(
-            0x0000,
+        trigger_reg = _set_bits(
+            self._axi_lite_interface_mmio.read(self._trigger_mask_l * 4),
             offset_bit,
             self.trigger_channels,
             trigger_mask,
         )
 
-        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, control_register)
-
+        self._axi_lite_interface_mmio.write(self._trigger_mask_l * 4, trigger_reg)
         self.log.debug("set the trigger channel to %s for %s", channel, ttype)
 
         return 0
@@ -456,11 +455,11 @@ class GeneratorDriver(_FIREQDriver):
 
     def build_envelope_specific_wdw(
         self,
+        forceone: bool,
+        for_interpolation: bool,
         is_symmetric: bool,
         i_even: bool,
         q_even: bool,
-        forceone: bool,
-        interpolate: bool,
     ) -> int:
         """Build the envelope specific part of the wdw.
 
@@ -474,8 +473,8 @@ class GeneratorDriver(_FIREQDriver):
         :type switch_iq: bool
         :param forceone: If True, the envelope is forced to be one
         :type forceone: bool
-        :param interpolate: If True, the envelope is interpolated
-        :type interpolate: bool
+        :param for_interpolation: If True, the envelope is supposed to be used with the envelope interpolation feature
+        :type for_interpolation: bool
         :return: Envelope specific part of the wdw
         :rtype: int
         """
@@ -483,7 +482,7 @@ class GeneratorDriver(_FIREQDriver):
         wdw |= int(i_even) << 126
         wdw |= int(q_even) << 125
         wdw |= int(forceone) << 121
-        wdw |= int(interpolate) << 120
+        wdw |= int(for_interpolation) << 120
         return wdw
 
     def build_vz_wdw(self, normalized_phase: float) -> int:
@@ -502,13 +501,13 @@ class GeneratorDriver(_FIREQDriver):
     def build_pulse_wdw(
         self,
         envelope_wdw: int,
-        for_interpolation: bool,
         start_address: int,
         duration: int,
         natural_duration: int,
         normalized_gain: float,
         switch_iq: bool,
         keep_last: bool,
+        dac_target_mask: int,
     ) -> int:
         """Build the wave definition word for pulses.
 
@@ -526,38 +525,48 @@ class GeneratorDriver(_FIREQDriver):
         :type switch_iq: bool
         :param keep_last: If True, the last sample is kept
         :type keep_last: bool
+        :param dac_target_mask: Integer mask that drives the axis crossbar ip
+        :type dac_target_mask: int
         :return: Wave definition word
         :rtype: int
         """
         # start with the envelope wdw
         wdw = envelope_wdw
-        # set the invert bit if gain is negative
-        if normalized_gain < 0:
-            wdw |= 1 << 124
-            gain = -normalized_gain
-        else:
-            gain = normalized_gain
+
         # set the switch iq and keep last bits
         wdw |= int(switch_iq) << 123
         wdw |= int(keep_last) << 122
+
+        # set the invert bit if gain is negative
+        if normalized_gain < 0:
+            wdw |= 1 << 124
+        gain = abs(normalized_gain)
         # set the gain, cap to 1 if gain was bigger than 1
+        gain = int(2**self.sample_size * gain)
         if gain >= 1:
-            gain = 2**self.sample_size - 1
             self.log.warning("Gain amplitude is out of bounds. Gain amplitude was saturated to 1")
-        else:
-            gain = int(2**self.sample_size * gain)
-        wdw |= (gain & (2**self.sample_size - 1)) << 90
-        # get the duration
+            gain = 2**self.sample_size - 1
+        wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width + self.duration_width, self.sample_size, gain)
+
+        # compute a safe duration and set it
+        dur = duration
         if duration > self.maximum_duration:
             self.log.warning("Duration %s is out of range. Saturating to maximum allowed duration", duration)
-            real_duration = self.maximum_duration
-        else:
-            real_duration = duration
-        wdw |= (real_duration - 1) << 2 * (self.sample_memory_address_width + self.fractional_precision)
-        # set sample generator offsets
+            dur = self.maximum_duration
+        wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width, self.duration_width, dur - 1)
+
+        # compute a safe dac mask and set it
+        dac_mask = dac_target_mask
+        if dac_target_mask < 0 or dac_target_mask > pow(2, self.num_dacs) - 1:
+            self.log.warning("DAC target mask %s is out of range, setting the mask to zero", dac_target_mask)
+            dac_mask = 0
+        wdw = _set_bits(wdw, self.dac_mask_lsb, self.num_dacs, dac_mask)
+
+        # compute a set of sample generator offsets
         start_offset = 0
         increment = 0
-        if for_interpolation:
+        # this condition checks if the input wdw has the "for_interpolation" bit set
+        if ((wdw >> 120) & 1) != 0:
             # NOTE (fixed-point interpolation fix):
             # We compute the fractional address increment as num/den in Q(FractionalPrecision).
             # Using integer division (//) truncates the ideal increment, introducing a small
@@ -567,7 +576,7 @@ class GeneratorDriver(_FIREQDriver):
             # error at the end without changing the hardware behavior.
             start_offset = start_address << self.fractional_precision
             num = (natural_duration - 1) << self.fractional_precision
-            den = (real_duration - 1) << self.fractional_precision
+            den = (dur - 1) << self.fractional_precision
 
             increment = num // den
             reminder = num % den
@@ -579,25 +588,8 @@ class GeneratorDriver(_FIREQDriver):
             # set the increment to 1/(number_of_channels), usually 1/16
             increment = 1 << (self.fractional_precision - self.log_number_of_channels)
         # set the start offset and increment bits
-        wdw |= start_offset << (self.sample_memory_address_width + self.fractional_precision)
-        wdw |= increment
-        return wdw
-
-    def set_wdw_dac_mask(self, wdw: int, mask: int) -> int:
-        """Set the DAC mask for drive or readout outputs.
-
-        For example, if you have 4 DACs and want to activate the first and third, you should set the mask to 0b0101 (5 in decimal)
-        :param wdw: Wave definition word
-        :type wdw: int
-        :param mask: Bitmask of the DACs to activate, from the least significant bit.
-        :type mask: int
-        :return: Error code
-        :rtype: int
-        """
-        if mask < 0 or mask > pow(2, self.num_dacs) - 1:
-            self.log.error("DAC mask %s is out of range", mask)
-            return -3
-        wdw = _set_bits(wdw, self.dac_mask_lsb, self.num_dacs, mask)
+        wdw = _set_bits(wdw, self.sample_gen_increment_width, self.sample_gen_increment_width, start_offset)
+        wdw = _set_bits(wdw, 0, self.sample_gen_increment_width, increment)
 
         return wdw
 

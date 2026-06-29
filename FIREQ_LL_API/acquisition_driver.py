@@ -188,7 +188,6 @@ class AcquisitionDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._readout_off_l * 4, poff & 0xFFFFFFFF)
         # write inc HIGH
         self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
-
         self.log.debug("set initial phase to %s and phase offset to %s", normalized_phase, poff)
 
         return 0
@@ -197,8 +196,8 @@ class AcquisitionDriver(_FIREQDriver):
         """Trigger the acquisition manually."""
         manual_trigger_mask = 1 << self._manual_trigger_pos
         control_register = self._axi_lite_interface_mmio.read(0) | manual_trigger_mask
-        self._axi_lite_interface_mmio.write(0, control_register)
 
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         self.log.debug("acquisition triggered manually")
 
         return 0
@@ -217,8 +216,8 @@ class AcquisitionDriver(_FIREQDriver):
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         control_register = _set_bits(control_register, self._duration_pos, self.duration_width, duration - 1)
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         self.log.debug("set the acquisition duration to %s fabric clock cycles", duration)
         self._cache["duration"] = duration
         self._calculate_payload()
@@ -240,8 +239,8 @@ class AcquisitionDriver(_FIREQDriver):
         channel_mask = (1 << channel) >> 1
         trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask * 4)
         trigger_mask_reg = _set_bits(trigger_mask_reg, self._trigger_mask_pos, self.trigger_channels, channel_mask)
-        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
 
+        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
         self.log.debug("set the trigger channel to %s", channel)
         self._cache["active"] = channel > 0
         self._calculate_payload()
@@ -267,8 +266,8 @@ class AcquisitionDriver(_FIREQDriver):
             self.time_of_flight_width,
             time_of_flight - 1,
         )
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
         self.log.debug("set the time of flight to %s fabric clock cycles", time_of_flight)
 
         return 0
@@ -302,6 +301,7 @@ class AcquisitionDriver(_FIREQDriver):
             self.log.error("output_type: %s not recognized", output_mode)
             return -3
 
+        # set the bits relative to the interface enable and decimated output mode
         ctl = _set_bit(
             self._axi_lite_interface_mmio.read(self._ctrl * 4),
             self._accumulate_select_pos,
@@ -317,8 +317,9 @@ class AcquisitionDriver(_FIREQDriver):
             self._raw_enable_pos,
             raw_enable,
         )
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, ctl)
 
+        # write the control register
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, ctl)
         self.log.debug("set the decimated output type to %s", output_mode)
         self._calculate_payload()
 
