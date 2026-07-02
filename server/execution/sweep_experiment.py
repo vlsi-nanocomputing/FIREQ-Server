@@ -11,31 +11,30 @@ class SweepExperiment:
 
     OPERATORS = "+-" # TODO: check if is necessary to constrain the operators
 
-    # def __init__(self, sweep_expr: list[tuple[callable, str, int]], var: list[dict[str: dict]]) -> None:
-    def __init__(self, node: object, queue: object) -> None:
+    def __init__(self, node: object) -> None:
         """
         Initialize with the sweeping expressions and variables values.
 
-        :param node:
-        :type node:
-        :param queue:
-        :type queue:
+        :param node: object representing the FIREQ system
+        :type node: RegisterNode
         """
         # Fireq Node
         self.node = node
-        # Output queue
+
+        # queue where the experiment are put, will be set after
+        self.queue = None
+
+        # dict with all the computed sweeping variables
+        self.computed_vars = {}
+    
+    def set_queue(self, queue: object):
+        """Set the queue where the results are put.
+
+        :param queue: queue istance
+        :type queue: Queue
+        """
         self.queue = queue
 
-        # dict with computed variables
-        self.computed_vars = {}
-
-        # dict to store variables and their corresponding sweep costs
-        # self.sweep_costs = {}
-        # list to store the order of variables based on their costs
-        # self.vars_order = []        
-        # set to store the expressions that must be apply with this format: [callback, expression, dependency variables]
-        # self.sweep_routine = set()
-    
     def _check_sweep_expressions(self, expr: str) -> None:
         """Check the sweep expressions for validity.
 
@@ -59,6 +58,8 @@ class SweepExperiment:
     def _get_vars(expr: str) -> tuple[str]:
         """Extract the involved varibles from expression
 
+        The expression shuold not cointain the first char '#'
+
         :param expr: expression
         :type str
         :return tuple with the involved variables
@@ -66,17 +67,21 @@ class SweepExperiment:
         """
         return tuple(re.findall(r'[a-zA-Z_]\w*', expr))
 
-    def _parse_config(self, config) -> None:
+    def _parse_config(self, config) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
         """Parse the sweep configuration and fill sweep_cost dict and sweep_routine set.
 
-        
+        :param config: configuration parameters for the experiment
+        :type config: dict
+        :return the sweep_routine (the callbacks to execute with expressions and involved variables) and vars_order (the variables to change in order of cost)
+        :rtype tuple[set[tuple[callable, str, tuple[str]]], list[str]]
         """
         sweep_costs = {}
         sweep_routine = set()
 
+        # apply the configuration to the node and get the  sweeping expressions
         sweep_expr = self.node.apply_configuration(config)
 
-        # identify the sweeping expressions and fill ...
+        # identify the sweeping expressions compute cost and fill the expr_routine dict 
         for callback, expr, cost in sweep_expr:
 
             # check expression validity
@@ -162,8 +167,8 @@ class SweepExperiment:
         :type dict_vars: dict
         :param sweep_routine: sweep_routine dict for the current step
         :type sweep_routine: set
-        :param vars_order
-        :type vars_order
+        :param vars_order: variables ordered by total cost
+        :type vars_order: list
         :param iterating_vars: list of iterating variables for the current step
         :type iterating_vars: list
         """
