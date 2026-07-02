@@ -46,19 +46,13 @@ class _DelayItem(_GenericNode):
 
     nodetype = "delay"
 
-    def __init__(
-        self,
-        name: str,
-        parent: TriggerGeneratorNode,
-        _ttype: str,
-        _channel: int,
-        _index: int = 0,
-        _generate_trigger: bool = False,
-    ) -> None:
+    def __init__(self, name: str, parent: TriggerGeneratorNode, _ttype: str, _channel_mask: int, _index: int) -> None:
         """Initialize a trigger delay item.
 
-        The ``_generate_trigger`` and ``_index`` parameters should only be used
-        for drive delays.
+        This delay will be pushed to the trigger generator IP, the ""_channel_mask"" input will determine
+        which channels of the relative trigger word (drive or readout) will be triggered.
+        Setting this value to 0 will generate no triggers, thus it can be used to generate a delay without
+        triggering any channel.
 
         :param name: Name of the delay item
         :type name: str
@@ -66,20 +60,16 @@ class _DelayItem(_GenericNode):
         :type parent: TriggerGeneratorNode
         :param _ttype: Type of the delay, either ``"drive"`` or ``"readout"``
         :type _ttype: str
-        :param _channel: Channel of the drive or readout trigger
-        :type _channel: int
-        :param _index: Index of the drive trigger, defaults to 0
+        :param _channel_mask: Channel of the drive or readout trigger
+        :type _channel_mask: int
+        :param _index: Index of the drive trigger, defines the order, starts at 1
         :type _index: int
-        :param _generate_trigger: Whether a drive trigger should be generated,
-            defaults to ``False``
-        :type _generate_trigger: bool
         :raises ValueError: If the delay type is not supported
         """
         super().__init__(name, parent)
         self._ttype = _ttype
-        self._channel = _channel
+        self._channel_mask = _channel_mask
         self._index = _index
-        self._generate_trigger = _generate_trigger
         if self._ttype not in ["readout", "drive"]:
             self.log.error("unsupported delay type %s", self._ttype)
             raise ValueError(f"unsupported delay type {self._ttype}")
@@ -94,15 +84,12 @@ class _DelayItem(_GenericNode):
         :rtype: int
         """
         if self._ttype == "readout":
-            return self.parent._ll_handler.set_readout_delay(
-                _get_periods_from_clock(delay, self.parent._clock_frequency), self._channel
+            return self.parent._ll_handler.insert_delay(
+                self._channel_mask, True, self._index, _get_periods_from_clock(delay, self.parent._clock_frequency)
             )
         elif self._ttype == "drive":
-            return self.parent._ll_handler.insert_drive_delay(
-                self._channel,
-                self._index,
-                _get_periods_from_clock(delay, self.parent._clock_frequency),
-                int(self._generate_trigger),
+            return self.parent._ll_handler.insert_delay(
+                self._channel_mask, False, self._index, _get_periods_from_clock(delay, self.parent._clock_frequency)
             )
         return -3
 

@@ -245,8 +245,11 @@ class _Pulse(_GenericNode):
         _envelope: str | None = None,
         _switch_iq: bool = False,
         _keep_last: bool = False,
+        _dac_target: int = 1,
     ) -> None:
         """Initialize the pulse.
+
+        The ''_dac_target'' is used in combination with the crossbar, to send the pulse to a certain set of dacs.
 
         :param name: Name of the pulse
         :type name: str
@@ -260,6 +263,8 @@ class _Pulse(_GenericNode):
         :type _switch_iq: bool
         :param _keep_last: Whether to keep the last sample, defaults to ``False``
         :type _keep_last: bool
+        :param _dac_target: Mask, sets where the pulse is sent, defaults to 1
+        :type _dac_target: int
         :raises ValueError: If the envelope name is ``None`` or not found
         """
         super().__init__(name, parent)
@@ -267,6 +272,7 @@ class _Pulse(_GenericNode):
         self._envelope = _envelope
         self._switch_iq = _switch_iq
         self._keep_last = _keep_last
+        self._dac_target = _dac_target
         if _envelope is None:
             self.log.error("envelope not specified")
             raise ValueError("envelope not specified")
@@ -275,9 +281,7 @@ class _Pulse(_GenericNode):
         if self._envelope not in [child.name for child in envelope_children]:
             self.log.error("envelope %s not found", self._envelope)
             raise ValueError(f"envelope {self._envelope} not found")
-        self._envelope_ref = next(
-            child for child in envelope_children if child.name == self._envelope
-        )
+        self._envelope_ref = next(child for child in envelope_children if child.name == self._envelope)
         if not self._readout:
             self._address = self.parent.reserve_wdw()
         else:
@@ -319,13 +323,13 @@ class _Pulse(_GenericNode):
         # build the wdw
         wdw = self.parent._ll_handler.build_pulse_wdw(
             envelope_wdw=self._envelope_ref.envelope_wdw,
-            for_interpolation=self._envelope_ref._for_interpolation,
             start_address=self._envelope_ref._address,
             duration=self._wanted_duration,
             natural_duration=self._envelope_ref.natural_length,
             normalized_gain=self._wanted_gain,
             switch_iq=self._switch_iq,
             keep_last=self._keep_last,
+            dac_target_mask=self._dac_target,
         )
         if self._readout:
             return self.parent._ll_handler.write_readout_wave(wdw)
