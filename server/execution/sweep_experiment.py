@@ -1,25 +1,39 @@
+"""Sweep experiment module.
+
+This module implements the SweepExperiment class, which is responsible for executing multi-point sweep experiments on 
+the FIREQ system. It provides methods to parse sweep configurations, compute variable values, and execute the experiment
+"""
+import logging
 import re
+from queue import Queue
+
 import numpy as np
+
+from system import FIREQSystemNode
 
 
 class SweepExperiment:
-    """Execute multi-sweep points using high-level callbacks
+    """Execute multi-sweep points using high-level callbacks.
     
-        :param OPERATORS: string containings the operator characters available
-        :type OPERATORS: str
+    :param OPERATORS: string containings the operator characters available
+    :type OPERATORS: str
     """
 
     OPERATORS = "+-" # TODO: check if is necessary to constrain the operators
 
-    def __init__(self, node: object) -> None:
+    def __init__(self, node: FIREQSystemNode, queue: Queue, logger: logging.Logger | None = None) -> None:
         """
         Initialize with the sweeping expressions and variables values.
 
         :param node: object representing the FIREQ system
         :type node: RegisterNode
+        :param queue: queue istance
+        :type queue: Queue
         """
         # Fireq Node
         self.node = node
+        self.queue = queue
+        self.logger = logger or logging.getLogger(__name__)
 
         # queue where the experiment are put, will be set after
         self.queue = None
@@ -27,14 +41,6 @@ class SweepExperiment:
         # dict with all the computed sweeping variables
         self.computed_vars = {}
     
-    def set_queue(self, queue: object):
-        """Set the queue where the results are put.
-
-        :param queue: queue istance
-        :type queue: Queue
-        """
-        self.queue = queue
-
     def _check_sweep_expressions(self, expr: str) -> None:
         """Check the sweep expressions for validity.
 
@@ -49,14 +55,14 @@ class SweepExperiment:
         
         # check if the expression contains only valid operators (TODO: can be removed and method can be static)
         for char in expr[1:]:
-            if not char.isalnum() and char != '_' and char != ' ' and char != '(' and char != ')':
+            if not char.isalnum() and char not in {'_', ' ', '(', ')'}:
                 # check only special char
                 if char not in self.OPERATORS:
                     raise ValueError(f"Invalid operator used for the expression: '{char}'")
     
     @staticmethod
     def _get_vars(expr: str) -> tuple[str]:
-        """Extract the involved varibles from expression
+        """Extract the involved varibles from expression.
 
         The expression shuold not cointain the first char '#'
 
@@ -67,7 +73,7 @@ class SweepExperiment:
         """
         return tuple(re.findall(r'[a-zA-Z_]\w*', expr))
 
-    def _parse_config(self, config) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
+    def _parse_config(self, config: dict) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
         """Parse the sweep configuration and fill sweep_cost dict and sweep_routine set.
 
         :param config: configuration parameters for the experiment
@@ -102,15 +108,25 @@ class SweepExperiment:
         
         # order the varibles based on their costs
         vars_order = sorted(sweep_costs, key=lambda x: sweep_costs[x], reverse=True)
+        self.logger.info(f"Variable sweep order: {vars_order}")
 
         return sweep_routine, vars_order
     
+    def put_queue_header(self, vars_order: list[str]) -> None:
+        """Put the header on the queue with the variables order.
+
+        :param vars_order: list of variables ordered by total cost
+        :type vars_order: list[str]
+        """
+        self.queue.put({"type": "sweep_experiment_header", "variables_order": vars_order})
+    
     @staticmethod
     def _compute_variable_values(var: dict[str: dict]) -> dict[str: np.array]:
-        """Compute all the values for the variables
+        """Compute all the values for the variables.
 
         The field 'mode' must be present and indicates how the values are computed
-        - 'lin'   mode: linear spacing -> require fields 'start' (first element), 'stop' (last element), 'num' (number of elements) 
+        - 'lin'   mode: linear spacing -> require fields 'start' (first element), 'stop' (last element), 
+                                          'num' (number of elements) 
         - 'const' mode: constant value -> require field 'value' (constant and unique value)
         - 'list'  list: list of values -> reuire field 'values' (list of elements)
 
@@ -132,35 +148,37 @@ class SweepExperiment:
                 try:
                     return_dict[v] = np.linspace(desc["start"], desc["stop"], desc["num"])
                 
-                except KeyError:
-                    raise KeyError(f"For 'lin' mode the keys 'start', 'stop' and 'num' must be present for '{v}' variable")
-                except:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable")
+                except KeyError as e:
+                    raise KeyError(f"For 'lin' mode the keys 'start', 'stop' and 'num' must be present for '{v}' \
+                                   variable.") from e
+                except Exception as e:
+                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
             
             elif desc["mode"] == 'const':
                 try:
                     return_dict[v] = np.array([desc["value"]])
                 
-                except KeyError:
-                    raise KeyError(f"For 'const' mode the key 'value' must be present for '{v}' variable")
-                except:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable")
+                except KeyError as e:
+                    raise KeyError(f"For 'const' mode the key 'value' must be present for '{v}' variable") from e
+                except Exception as e:
+                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
             
             elif desc["mode"] == 'list':
                 try:
                     return_dict[v] = np.array(desc["values"])
                 
-                except KeyError:
-                    raise KeyError(f"For 'list' mode the key 'values' must be present for '{v}' variable")
-                except:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable")
+                except KeyError as  e:
+                    raise KeyError(f"For 'list' mode the key 'values' must be present for '{v}' variable") from e
+                except Exception as e:
+                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
             
             else:
-                raise ValueError(f"Sweeping spacing '{desc["mode"]}' not available")
+                raise ValueError(f"Sweeping spacing '{ desc['mode'] }' not available")
 
         return return_dict
 
-    def _nested_loop_recursive(self, dict_vars: dict, sweep_routine: set, vars_order: list, iterating_vars) -> None:
+    def _nested_loop_recursive(self, dict_vars: dict, sweep_routine: set, vars_order: list, 
+                               iterating_vars: list) -> None:
         """Iterate recursivelly through variables executing callbacks and finally run the experiment.
 
         :param dict_vars: dict with the value associated to each varible for the current step
@@ -175,6 +193,7 @@ class SweepExperiment:
         if not vars_order:
             # if variables are empty, run the experiment
             self.node.run_experiment(self.queue)
+            self.logger.info("Run experiment")
         
         else:
             # pop the first variable and get values of iteration
@@ -207,11 +226,14 @@ class SweepExperiment:
                 # execute the callbacks
                 for callback in callbacks:
                     callback[0](eval(callback[1], {}, dict_vars))
+                    self.logger.info(f"Parameter change -> callback:'{callback[0].__name__}', params: '{callback[1]}', \
+                                     variables: { {k: v.item() for k, v in dict_vars.items()} }")
                 
                 # recursively call the function to iterate over the next variable
-                self._nested_loop_recursive(dict_vars=dict_vars, sweep_routine=sweep_routine.copy(), vars_order=vars_order.copy(), iterating_vars=iterating_vars.copy())
+                self._nested_loop_recursive(dict_vars=dict_vars, sweep_routine=sweep_routine.copy(), 
+                                            vars_order=vars_order.copy(), iterating_vars=iterating_vars.copy())
 
-    def run(self, config, var):
+    def run(self, config: list, var: list) -> None:
         """Run the sweep experiment by parsing the configuration and executing the recursive sweep routine.
         
         :param sweep_expr: A list of tuples containing the sweep expressions.
@@ -224,6 +246,10 @@ class SweepExperiment:
 
         # parse the configuration
         sweep_routine, vars_order = self._parse_config(config)
+
+        # create and the header on the queue
+        self.put_queue_header(vars_order)
         
         # execute the experiment changing the sweeping variables
-        self._nested_loop_recursive(dict_vars={}, sweep_routine=sweep_routine.copy(), vars_order=vars_order.copy(), iterating_vars=set())
+        self._nested_loop_recursive(dict_vars={}, sweep_routine=sweep_routine.copy(), vars_order=vars_order.copy(), 
+                                    iterating_vars=set())
