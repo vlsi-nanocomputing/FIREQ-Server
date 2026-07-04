@@ -9,7 +9,7 @@ import numpy as np
 from FIREQ_LL_API import AcquisitionDriver
 
 from ._generic_node import _GenericNode
-from ._utils import _get_dict_hash, _get_periods_from_clock, _MutableRef
+from ._utils import _get_periods_from_clock, _MutableRef
 
 logger = logging.getLogger(__name__)
 

@@ -71,6 +71,8 @@ class DMANode(_GenericNode):
         # fetch the input payload and the maximum size of the input buffers
         self._input_payload = self.root.get_reference(f"{self._input_interface}/payload")
         self._max_payload_size = self.root.get_reference(f"{self._input_interface}/max_payload_size")
+        # fetch the hw shots reference
+        self._hw_shots = self.root.get_reference(self.root.make_func_label(self.root, "hw_shots"))
         # Do not allocate the buffer yet, since we do not know if the max payload size has a valid value
         # try to get the input switch node
         if isinstance(self._input_payload, list):
@@ -114,6 +116,7 @@ class DMANode(_GenericNode):
         # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
         self._saved_payload = copy.deepcopy(self._input_payload)
+        self._saved_hw_shots = copy.deepcopy(self._hw_shots)
         return True
 
     def transfer_all(self, data_queue: queue.Queue) -> bool:
@@ -143,7 +146,12 @@ class DMANode(_GenericNode):
             # data = self._buffer[: current_payload["size"]].view(current_payload["format"])
             # data = data["real"].astype(np.float32) + 1j * data["imag"].astype(np.float32)
             data_queue.put(
-                (current_payload["source"], current_payload["format"], self._buffer[: current_payload["size"]].copy())
+                (
+                    current_payload["source"],
+                    self._saved_hw_shots["value"],
+                    current_payload["format"],
+                    self._buffer[: current_payload["size"]].copy(),
+                )
             )
             # break the loop if the input is not a switch or if the current payload is the last
             if not self._is_switch_input or self._current_payload_index >= len(self._saved_payload) - 1:
