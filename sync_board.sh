@@ -5,9 +5,9 @@ set -e
 # -----------------------------
 # CONFIG (edit these)
 # -----------------------------
-LOCAL_DIR="${1:-.}"
+LOCAL_DIR="."
 REMOTE_USER="xilinx"
-REMOTE_HOST="vlsi-rf4x2.polito.it"
+REMOTE_HOST="${1:-vlsi-rf4x2.polito.it}"
 REMOTE_DIR="/home/xilinx/FIREQ-test"
 
 # -----------------------------
