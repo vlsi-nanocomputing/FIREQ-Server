@@ -237,7 +237,7 @@ class GeneratorDriver(_FIREQDriver):
         )
 
         self._axi_lite_interface_mmio.write(self._trigger_mask_l * 4, trigger_reg)
-        self.log.debug("set the trigger channel to %s for %s", channel, ttype)
+        self.log.debug("set the generation trigger channel to %s for %s", channel, ttype)
 
         return 0
 
@@ -307,7 +307,7 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
-        self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
+        self.log.debug("set readout frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
@@ -328,7 +328,7 @@ class GeneratorDriver(_FIREQDriver):
         # write inc HIGH
         self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
 
-        self.log.debug("set initial phase to %s and phase offset to %s", phase, poff)
+        self.log.debug("set readout initial phase to %s and phase offset to %s", phase, poff)
 
         return 0
 
@@ -351,7 +351,7 @@ class GeneratorDriver(_FIREQDriver):
         self._axi_lite_interface_mmio.write(self._drive_inc_h * 4, pinc >> 32)
 
         # log with deferred formatting string arguments to avoid eager evaluation
-        self.log.debug("set frequency to %s and phase increment to %s", frequency, pinc)
+        self.log.debug("set drive frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
@@ -405,7 +405,7 @@ class GeneratorDriver(_FIREQDriver):
         # write to wave memory
         self._wdw_memory_interface.write(wdw_index * (128 // 8), wdw.to_bytes(128 // 8, "little"))
 
-        self.log.debug("added wave definition %s to wave memory at index %s", wdw, wdw_index)
+        self.log.debug("added wave definition %s to wave memory at index %s", hex(wdw), wdw_index)
 
         return 0
 
@@ -427,6 +427,7 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         self._memory_mapped_fifo_interface.write(order_index * 4, wdw_index)
+        self.log.debug("added wave %s to wave sequence at index %s", wdw_index, order_index)
         return 0
 
     def write_readout_wave(self, wave_definition: int) -> int | None:
@@ -442,14 +443,14 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: Literal[-3] | None
         """
         if wave_definition < 0:
-            self.log.error("wave definition %s is out of range", wave_definition)
+            self.log.error("wave definition %s is out of range", hex(wave_definition))
             return -3
         for i in range(4):
             self._axi_lite_interface_mmio.write(
                 (self._readout_wave_l + i) * 4, (wave_definition >> i * 32) & 0xFFFFFFFF
             )
 
-        self.log.debug("wrote the readout wave definition to the IP %s", wave_definition)
+        self.log.debug("wrote the readout wave definition to the IP %s", hex(wave_definition))
 
         return 0
 
@@ -541,11 +542,11 @@ class GeneratorDriver(_FIREQDriver):
         if normalized_gain < 0:
             wdw |= 1 << 124
         gain = abs(normalized_gain)
-        # set the gain, cap to 1 if gain was bigger than 1
-        gain = int(2**self.sample_size * gain)
         if gain >= 1:
             self.log.warning("Gain amplitude is out of bounds. Gain amplitude was saturated to 1")
             gain = 2**self.sample_size - 1
+        # set the gain, cap to 1 if gain was bigger than 1
+        gain = int(2**self.sample_size * gain)
         wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width + self.duration_width, self.sample_size, gain)
 
         # compute a safe duration and set it

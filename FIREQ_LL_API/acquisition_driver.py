@@ -42,7 +42,7 @@ class AcquisitionDriver(_FIREQDriver):
     _formats = {
         "raw": (("real", "<i2"), ("imag", "<i2")),
         "decimated": (("real", "<i2"), ("imag", "<i2")),
-        "accumulated": (("real", "<i2"), ("imag", "<i2")),
+        "accumulated": (("real", "<i4"), ("imag", "<i4")),
     }
 
     # Port name of the fabric clock
@@ -241,7 +241,7 @@ class AcquisitionDriver(_FIREQDriver):
         trigger_mask_reg = _set_bits(trigger_mask_reg, self._trigger_mask_pos, self.trigger_channels, channel_mask)
 
         self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
-        self.log.debug("set the trigger channel to %s", channel)
+        self.log.debug("set the acquisition trigger channel to %s", channel)
         self._cache["active"] = channel > 0
         self._calculate_payload()
 
@@ -320,7 +320,7 @@ class AcquisitionDriver(_FIREQDriver):
 
         # write the control register
         self._axi_lite_interface_mmio.write(self._ctrl * 4, ctl)
-        self.log.debug("set the decimated output type to %s", output_mode)
+        self.log.debug("set the output mode to %s", output_mode)
         self._calculate_payload()
 
         return 0
