@@ -94,7 +94,7 @@ class _GenericEnvelope(_GenericNode):
             i_even=self._i_even if self._i_even is not None else False,
             q_even=self._q_even if self._q_even is not None else False,
             forceone=False,
-            interpolate=self._for_interpolation,
+            for_interpolation=self._for_interpolation,
         )
 
     @_GenericNode.parameter_callback("$samples", sweepable=False, cost=1000)
@@ -116,12 +116,14 @@ class _GenericEnvelope(_GenericNode):
         )
 
 
-class _RectangularEnvelope(_GenericEnvelope):
+class _RectangularEnvelope(_GenericNode):
     """Object representing a rectangular envelope.
 
     Reserved for rectangular shaped pulses; only created once at initialization time
     with the reserved name ``_RECTANGULAR``.
     """
+
+    nodetype = "envelope"
 
     def __init__(self, name: str, parent: SignalGeneratorNode) -> None:
         """Initialize the rectangular envelope.
@@ -131,17 +133,11 @@ class _RectangularEnvelope(_GenericEnvelope):
         :param parent: Parent signal generator node
         :type parent: SignalGeneratorNode
         """
-        super().__init__(
-            name=name,
-            parent=parent,
-            _for_interpolation=False,
-            _is_symmetric=False,
-            _i_even=False,
-            _q_even=False,
-        )
+        super().__init__(name, parent)
         self.natural_length = 1
+        self._address = 0
         self.envelope_wdw = self.parent._ll_handler.build_envelope_specific_wdw(
-            is_symmetric=False, i_even=False, q_even=False, forceone=True, interpolate=False
+            is_symmetric=False, i_even=False, q_even=False, forceone=True, for_interpolation=False
         )
 
 
