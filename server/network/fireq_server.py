@@ -11,6 +11,7 @@ Protocol:
 - Responses: JSON messages (4-byte length) and streamed binary data (acquistion frames + timing).
   For run_experiment/run_sweep: StreamHeader (JSON) -> BinaryChunk (frames) -> StreamTiming (JSON).
 """
+
 import json
 import logging
 import socket
@@ -22,8 +23,8 @@ from threading import Event, Thread
 
 import numpy as np
 
-from ..execution.handlers import EnvelopeHandler
-from ..execution.message_handler import MessageHandler
+from system import FIREQSystemNode
+
 from ..models import (
     BinaryChunk,
     ConfigurationError,
@@ -55,18 +56,12 @@ _EXCEPTION_CONFIG: dict[type, tuple[str, str, str]] = {
 class FIREQServer:
     """TCP server for FIREQ experiments.
 
-    Routes client JSON commands to a :class:`~.message_handler.MessageHandler`.
-
-    :param handler: MessageHandler for command execution.
-    :type handler: MessageHandler
-    :param host: TCP bind address ("0.0.0.0" for all interfaces).
-    :type host: str
-    :param port: TCP port to bind.
-    :type port: int
-    :param auth_token: Shared token for handshake authentication.
-    :type auth_token: str
-    :param logger: Optional logger instance.
-    :type logger: logging.Logger | None
+    Spawns three threads:
+    - a client handler thread, which communicates with the client to receive
+      commands and send info/configuration
+    - an execution thread, which manages the hw and runs commands received
+      from the client
+    - a data streamer, which sends acquisition data back to the client
     """
 
     # =========================================================================
@@ -75,7 +70,7 @@ class FIREQServer:
 
     def __init__(
         self,
-        handler: MessageHandler,
+        fireq_soc: FIREQSystemNode,
         host: str = "0.0.0.0",
         port: int = 5000,
         auth_token: str = "fireq",
@@ -83,31 +78,30 @@ class FIREQServer:
     ) -> None:
         """Initialize the FIREQ TCP server.
 
-        :param handler: MessageHandler instance for command execution.
-        :type handler: MessageHandler
+        :param fireq_soc: FIREQ system node representing the HW soc.
+        :type fireq_soc: FIREQSystemNode
         :param host: TCP bind address (use "0.0.0.0" for all interfaces).
         :type host: str
         :param port: TCP port to bind.
         :type port: int
         :param auth_token: Shared token for client authentication.
         :type auth_token: str
-        :param logger: Optional logger instance.
-        :type logger: logging.Logger | None
+        :param log: Optional log instance.
+        :type log: logging.log | None
         """
-        self.handler = handler
-        self.host = host
-        self.port = port
-        self.auth_token = auth_token
-        self.logger = logger or logging.getLogger(__name__)
+        self._fireq_soc = fireq_soc
+        self._host = host
+        self._port = port
+        self._auth_token = auth_token
+        self.log = logger or logging.getLogger(__name__)
 
         # Inter-thread queues (receiver -> queue_in -> main -> queue_out -> sender)
-        self.queue_in = Queue()
+        self.queue_in = Queue(maxsize=10)
         self.queue_out = MemoryBoundedQueue(max_memory_bytes=QUEUE_MAX_MEMORY_BYTES)
 
         # Server state
         self._running = False
         self._stop_event = Event()  # Cooperative sweep cancellation
-        self._authenticated = False
         self._abort_in_progress = Event()
         self._sweep_active = Event()  # Tracks active sweep for cleanup sync
         self._sender_dead = Event()  # Signals sender thread death
@@ -125,7 +119,7 @@ class FIREQServer:
         self._running = True
         self._net_thread = Thread(target=self._network_receiver_thread, daemon=True)
         self._net_thread.start()
-        self.logger.info(f"FIREQ Server started on {self.host}:{self.port}")
+        self.log.info(f"FIREQ Server started on {self.host}:{self.port}")
         self._main_loop()
 
     def stop(self) -> None:
@@ -134,7 +128,7 @@ class FIREQServer:
         Sets running flag to False, triggers stop event to abort sweeps,
         unblocks the main loop, and closes server/client sockets.
         """
-        self.logger.info("Stopping server...")
+        self.log.info("Stopping server...")
         self._running = False
         self._stop_event.set()
         self.queue_in.put(None)
@@ -156,7 +150,7 @@ class FIREQServer:
         Runs on the main thread for hardware stability. Exits on ``None``
         from ``queue_in`` or when ``_running`` becomes False.
         """
-        self.logger.info("Main loop started, waiting for commands...")
+        self.log.info("Main loop started, waiting for commands...")
 
         while self._running:
             try:
@@ -173,7 +167,7 @@ class FIREQServer:
 
             self._process_message(msg)
 
-        self.logger.info("Main loop exited")
+        self.log.info("Main loop exited")
 
     def _process_message(self, msg: dict) -> None:
         """Execute one command message and enqueue a response.
@@ -186,40 +180,30 @@ class FIREQServer:
         cmd = msg.get("cmd", "")
         session_id = msg.get("session_id", "")
 
-        self.logger.info(f"Processing command: {cmd}")
+        self.log.info(f"Processing command: {cmd}")
 
         try:
-            if cmd == "upload_envelopes":
-                total_envelopes, invalid_metadata = EnvelopeHandler.validate_metadata(msg)
-
-                if invalid_metadata:
-                    raise ValueError("Envelope metadata must include num_samples.")
-
-                envelope_data = msg.get("envelope_data")
-                if total_envelopes > 0 and envelope_data is None:
-                    raise ValueError("Missing binary envelope frames.")
-
-                result = self.handler.env_h.upload(msg, envelope_data)
-                self.queue_out.put(self._build_response(cmd, session_id, result))
-
-            elif cmd == "compile_waves":
-                result = self.handler.wave_h.compile(msg)
-                self.queue_out.put(self._build_response(cmd, session_id, result))
+            if cmd == "apply_configuration":
+                # apply the system configuration dictionary to the fireq soc
+                pass
 
             elif cmd == "run_experiment":
+                # run a single experiment, by applying the system configuration to
+                # the fireq soc and then running a single experiment
                 self._stop_event.clear()
                 t_start = time.perf_counter()
                 last_timing = self._stream_items_to_queue(self.handler.run(msg, cmd, session_id))
                 self._add_server_timing(last_timing, t_start)
 
             elif cmd == "run_sweep":
+                # run a sweep, by applying the system configuration and running the sweep
                 t_start = time.perf_counter()
                 self._do_hardware_cleanup("Pre-sweep")
                 self._sweep_active.set()
                 self._stop_event.clear()
 
                 sweep_id = msg.get("sweep_id", "unnamed")
-                self.logger.info(f"Sweep '{sweep_id}' with stream_mode=header_binary")
+                self.log.info(f"Sweep '{sweep_id}' with stream_mode=header_binary")
 
                 try:
                     last_timing = self._stream_items_to_queue(
@@ -326,7 +310,7 @@ class FIREQServer:
         self._server_socket.bind((self.host, self.port))
         self._server_socket.listen(1)
         self._server_socket.settimeout(1.0)
-        self.logger.info(f"Listening on {self.host}:{self.port}")
+        self.log.info(f"Listening on {self.host}:{self.port}")
 
         while self._running:
             try:
@@ -336,24 +320,24 @@ class FIREQServer:
                     continue
                 except OSError:
                     if self._running:
-                        self.logger.error("Accept failed")
+                        self.log.error("Accept failed")
                     continue
 
-                self.logger.info(f"Client connected from {addr}")
+                self.log.info(f"Client connected from {addr}")
                 client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 try:
                     self._handle_client(client_socket)
                 except Exception as e:
-                    self.logger.error(f"Critical error handling client: {e}")
+                    self.log.error(f"Critical error handling client: {e}")
             except Exception as main_e:
-                self.logger.critical(f"Unexpected error in network loop: {main_e}")
+                self.log.critical(f"Unexpected error in network loop: {main_e}")
 
         try:
             self._server_socket.close()
         except (OSError, Exception):
             pass
-        self.logger.info("Network thread exited")
+        self.log.info("Network thread exited")
 
     def _handle_client(self, client_socket: socket.socket) -> None:
         """Handle a single client session: handshake, sender thread, receiver loop, cleanup.
@@ -362,13 +346,12 @@ class FIREQServer:
         :type client_socket: socket.socket
         """
         self._client_socket = client_socket
-        self._authenticated = False
         client_socket.settimeout(None)
 
         try:
             client_socket.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
             if not self._do_handshake(client_socket):
-                self.logger.warning("Handshake failed, closing connection")
+                self.log.warning("Handshake failed, closing connection")
                 return
             client_socket.settimeout(None)
 
@@ -380,10 +363,10 @@ class FIREQServer:
             sender.join(timeout=2.0)
 
         except Exception as e:
-            self.logger.error(f"Client handler error: {e}")
+            self.log.error(f"Client handler error: {e}")
 
         finally:
-            self.logger.info("Client teardown...")
+            self.log.info("Client teardown...")
             self._stop_event.set()
 
             # Drain stale messages from disconnected client
@@ -397,7 +380,7 @@ class FIREQServer:
             self._cleanup_done.clear()
             cleanup_timeout = SWEEP_WAIT_TIMEOUT_SECONDS + 5.0
             if not self._cleanup_done.wait(timeout=cleanup_timeout):
-                self.logger.warning("Cleanup acknowledgment timeout (%.1fs)", cleanup_timeout)
+                self.log.warning("Cleanup acknowledgment timeout (%.1fs)", cleanup_timeout)
 
             self.queue_out.clear()
 
@@ -410,9 +393,8 @@ class FIREQServer:
             except Exception:
                 pass
             self._client_socket = None
-            self._authenticated = False
             self._sender_dead.clear()
-            self.logger.info("Client disconnected, ready for new connection")
+            self.log.info("Client disconnected, ready for new connection")
 
     def _receiver_loop(self, sock: socket.socket) -> None:
         """Receive client messages and enqueue commands. Abort bypasses queue_in.
@@ -424,12 +406,12 @@ class FIREQServer:
             try:
                 msg = self._receive_message(sock)
                 if msg is None:
-                    self.logger.info("Client connection closed")
+                    self.log.info("Client connection closed")
                     break
 
                 cmd = msg.get("cmd", "")
                 if cmd == "abort":
-                    self.logger.info("Abort command received")
+                    self.log.info("Abort command received")
                     self._stop_event.set()
                     self._abort_in_progress.set()
                     self.queue_out.clear()
@@ -446,12 +428,12 @@ class FIREQServer:
                         total_envelopes, invalid_metadata = EnvelopeHandler.validate_metadata(msg)
                         if (not invalid_metadata) and total_envelopes > 0:
                             msg["envelope_data"] = self._recv_envelope_frames(sock, total_envelopes)
-                            self.logger.info(f"Received {total_envelopes} binary envelope frames")
+                            self.log.info(f"Received {total_envelopes} binary envelope frames")
                     self.queue_in.put(msg)
             except (ConnectionResetError, ConnectionAbortedError, OSError):
-                self.logger.warning("Connection lost")
+                self.log.warning("Connection lost")
             except Exception as e:
-                self.logger.error(f"Receiver error: {e}")
+                self.log.error(f"Receiver error: {e}")
                 break
 
     def _sender_loop(self) -> None:
@@ -495,30 +477,22 @@ class FIREQServer:
                         self._abort_in_progress.clear()
 
             except (BrokenPipeError, ConnectionResetError, OSError):
-                self.logger.error("Client disconnected during send")
+                self.log.error("Client disconnected during send")
                 self._stop_event.set()
                 self._sender_dead.set()
                 self.queue_out.clear()
                 break
             except Exception as e:
-                self.logger.error(f"Send error: {e}")
+                self.log.error(f"Send error: {e}")
                 self._sender_dead.set()
                 self.queue_out.clear()
                 break
 
-        self.logger.debug("Sender loop exited")
+        self.log.debug("Sender loop exited")
 
     # =========================================================================
     # HANDSHAKE & AUTHENTICATION
     # =========================================================================
-
-    def _build_handshake_info(self) -> dict:
-        """Build the server -> client handshake message."""
-        return {
-            "type": "handshake",
-            "protocol_version": "0.1.0",
-            "hw_summary": self.handler.status_h.hw_summary,
-        }
 
     def _do_handshake(self, sock: socket.socket) -> bool:
         """Perform handshake authentication with the client.
@@ -529,45 +503,50 @@ class FIREQServer:
         :rtype: bool
         """
         try:
-            self._send_message(sock, self._build_handshake_info())
-            self.logger.info("Handshake sent, waiting for client response...")
+            # create a handshake payload and send it to the client
+            handshake_payload = {
+                "type": "handshake",
+                "protocol_version": "0.1.0",
+                "hw_summary": self.handler.status_h.hw_summary,
+            }
+            self._send_message(sock, handshake_payload)
+            self.log.info("Handshake sent, waiting for client response...")
 
+            # wait for the client response and handle it
             response = self._receive_message(sock)
             if response is None:
-                self.logger.warning("Client disconnected during handshake")
+                self.log.warning("Client disconnected during handshake")
                 return False
-
             if response.get("type") != "handshake_ack":
-                self.logger.warning(f"Invalid handshake response: {response.get('type')}")
+                self.log.warning(f"Invalid handshake response: {response.get('type')}")
                 return False
 
             client_token = response.get("token", "")
             client_name = response.get("client_name", "unknown")
 
             if client_token != self.auth_token:
-                self.logger.warning(f"Authentication failed for client '{client_name}'")
+                self.log.warning(f"Authentication failed for client '{client_name}'")
                 self._send_message(sock, {"type": "handshake_error", "error": "Invalid token"})
                 return False
 
-            self._authenticated = True
             self._send_message(sock, {"type": "handshake_ok", "message": f"Welcome {client_name}"})
-            self.logger.info(f"Client '{client_name}' authenticated successfully")
+            self.log.info(f"Client '{client_name}' authenticated successfully")
             return True
 
         except Exception as e:
-            self.logger.error(f"Handshake failed: {e}")
+            self.log.error(f"Handshake failed: {e}")
             return False
 
     def _handle_logout(self) -> None:
         """Reset server-side caches and notify the client."""
-        self.logger.info("Logout requested, resetting caches...")
+        self.log.info("Logout requested, resetting caches...")
         try:
             results = self.handler.reset_h.reset_all_generators()
             for r in results:
                 if not r["waves"]["ok"]:
-                    self.logger.warning(f"Wave reset failed for gen {r['gen_index']}")
+                    self.log.warning(f"Wave reset failed for gen {r['gen_index']}")
                 if not r["envelopes"]["ok"]:
-                    self.logger.warning(f"Envelope reset failed for gen {r['gen_index']}")
+                    self.log.warning(f"Envelope reset failed for gen {r['gen_index']}")
             self.queue_out.put(
                 {
                     "ok": True,
@@ -576,7 +555,7 @@ class FIREQServer:
                 }
             )
         except Exception as e:
-            self.logger.exception("Logout failed")
+            self.log.exception("Logout failed")
             self.queue_out.put({"ok": False, "cmd": "logout", "error": str(e)})
 
     # =========================================================================
@@ -597,17 +576,17 @@ class FIREQServer:
                 return None
             length = int.from_bytes(length_bytes, "big")
             if length > MAX_PAYLOAD_BYTES:
-                self.logger.error(f"Payload too large: {length} bytes")
+                self.log.error(f"Payload too large: {length} bytes")
                 return None
             payload = self._recv_exact(sock, length)
             if not payload:
                 return None
             return json.loads(payload.decode("utf-8"))
         except json.JSONDecodeError:
-            self.logger.error("Malformed JSON received")
+            self.log.error("Malformed JSON received")
             return None
         except Exception as e:
-            self.logger.error(f"Receive error: {e}")
+            self.log.error(f"Receive error: {e}")
             return None
 
     def _send_message(self, sock: socket.socket, msg: dict, include_timing: bool = False) -> None:
@@ -644,7 +623,7 @@ class FIREQServer:
         :type data: np.ndarray
         """
         t_start = time.perf_counter()
-        self.logger.debug(
+        self.log.debug(
             f"Sending binary frame: AcqIp={acq_index}, size={data.nbytes}B, " f"dtype={data.dtype}, shape={data.shape}"
         )
         sock.sendall(struct.pack(">I", acq_index))
@@ -652,7 +631,7 @@ class FIREQServer:
         elapsed_ms = (time.perf_counter() - t_start) * 1000
         data_bytes_len = data.nbytes
         if elapsed_ms > 50:
-            self.logger.warning(f"Slow send: AcqIp {acq_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
+            self.log.warning(f"Slow send: AcqIp {acq_index}, {data_bytes_len}B in {elapsed_ms:.1f}ms")
 
     def _send_timing_trailer(self, sock: socket.socket, hw_ms: float, sw_ms: float) -> None:
         """Send timing trailer (2x float32 big-endian).
@@ -728,14 +707,14 @@ class FIREQServer:
             try:
                 self.queue_out.put(item, timeout=timeout)
                 if retry_count > 0:
-                    self.logger.warning(
+                    self.log.warning(
                         f"Queue put after {retry_count} retries, {(time.perf_counter() - t_start) * 1000:.1f}ms"
                     )
                 return True
             except Full:
                 retry_count += 1
                 if retry_count % 5 == 0:
-                    self.logger.warning(f"Queue full, retry #{retry_count}")
+                    self.log.warning(f"Queue full, retry #{retry_count}")
         return False
 
     def _build_response(self, cmd: str, session_id: str, result: object = None, **extra: object) -> dict:
@@ -807,10 +786,10 @@ class FIREQServer:
         config = _EXCEPTION_CONFIG.get(type(exc))
         if config:
             error_type, log_level, log_suffix = config
-            getattr(self.logger, log_level)(f"Command '{cmd}' {log_suffix}: {exc}")
+            getattr(self.log, log_level)(f"Command '{cmd}' {log_suffix}: {exc}")
         else:
             error_type = "unknown"
-            self.logger.exception(f"Command '{cmd}' failed")
+            self.log.exception(f"Command '{cmd}' failed")
         self.queue_out.put(self._build_response(cmd, session_id, ok=False, error=str(exc), error_type=error_type))
 
     def _do_hardware_cleanup(self, context: str) -> None:
@@ -824,4 +803,4 @@ class FIREQServer:
         try:
             self.handler.cleanup()
         except Exception as e:
-            self.logger.warning(f"{context}: cleanup failed: {e}")
+            self.log.warning(f"{context}: cleanup failed: {e}")
