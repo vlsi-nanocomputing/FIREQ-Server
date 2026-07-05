@@ -1,8 +1,11 @@
 # file: fireq-utils/server/network/fireq_server.py
 """FIREQ TCP Server - single-client TCP server for hardware experiments.
 
+Handles client connections at startup, owns the client socket and handles the connection lifetime
+Handles the execution of commands received from the client
+
 Architecture: 3 threads communicate via queue_in/queue_out.
-- Main thread: executes commands, interfaces hardware
+- Main thread: executes commands, interfaces hardware (this module)
 - Receiver thread: accepts connections, parses messages
 - Sender thread: writes responses to client
 
@@ -18,6 +21,7 @@ import socket
 import struct
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
 
@@ -70,7 +74,7 @@ class FIREQServer:
 
     def __init__(
         self,
-        fireq_soc: FIREQSystemNode,
+        overlay_file: Path = None,
         host: str = "0.0.0.0",
         port: int = 5000,
         auth_token: str = "fireq",
@@ -78,8 +82,8 @@ class FIREQServer:
     ) -> None:
         """Initialize the FIREQ TCP server.
 
-        :param fireq_soc: FIREQ system node representing the HW soc.
-        :type fireq_soc: FIREQSystemNode
+        :param overlay_file: Path to the overlay to load.
+        :type overlay_file: Path
         :param host: TCP bind address (use "0.0.0.0" for all interfaces).
         :type host: str
         :param port: TCP port to bind.
@@ -89,7 +93,9 @@ class FIREQServer:
         :param log: Optional log instance.
         :type log: logging.log | None
         """
-        self._fireq_soc = fireq_soc
+        if overlay_file is None:
+            raise ValueError("overlay_file must be provided")
+        self._fireq_soc = FIREQSystemNode(overlay_file)
         self._host = host
         self._port = port
         self._auth_token = auth_token
@@ -117,8 +123,8 @@ class FIREQServer:
         experiment loop in the current thread. Stops when :meth:`stop` is called.
         """
         self._running = True
-        self._net_thread = Thread(target=self._network_receiver_thread, daemon=True)
-        self._net_thread.start()
+        self._client_handler_thread = Thread(target=self._client_handler, daemon=True)
+        self._client_handler_thread.start()
         self.log.info(f"FIREQ Server started on {self.host}:{self.port}")
         self._main_loop()
 
@@ -303,8 +309,12 @@ class FIREQServer:
     # NETWORK THREADS - Connection Handling
     # =========================================================================
 
-    def _network_receiver_thread(self) -> None:
-        """Accept TCP connections and handle one client at a time (single-client design)."""
+    def _client_handler(self) -> None:
+        """Accept TCP connections and handle one client at a time (single-client design).
+
+        Spawns a sender thread if a client connects.
+        """
+        # create the server socket, to
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind((self.host, self.port))
@@ -322,12 +332,24 @@ class FIREQServer:
                     if self._running:
                         self.log.error("Accept failed")
                     continue
-
-                self.log.info(f"Client connected from {addr}")
+                # set the socket options
                 client_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                 client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+
+                # perform handshake
+                self.log.info(f"Client connected from {addr}, performing handshake...")
+                client_socket.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
+                if not self._do_handshake(client_socket):
+                    self.log.warning("Handshake failed, closing connection")
+                    continue
+
+                # if the handshake was successful, set the socket, start the sender thread and
+                # go into the receiver loop
+                self._client_socket = client_socket
+                sender = Thread(target=self._sender_loop, daemon=True)
+                sender.start()
                 try:
-                    self._handle_client(client_socket)
+                    self._receiver_loop()
                 except Exception as e:
                     self.log.error(f"Critical error handling client: {e}")
             except Exception as main_e:
@@ -339,26 +361,13 @@ class FIREQServer:
             pass
         self.log.info("Network thread exited")
 
-    def _handle_client(self, client_socket: socket.socket) -> None:
-        """Handle a single client session: handshake, sender thread, receiver loop, cleanup.
-
-        :param client_socket: Connected client socket.
-        :type client_socket: socket.socket
-        """
-        self._client_socket = client_socket
-        client_socket.settimeout(None)
-
+    def _handle_client(self) -> None:
+        """Spawn threads to receive from the client and send responses."""
         try:
-            client_socket.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
-            if not self._do_handshake(client_socket):
-                self.log.warning("Handshake failed, closing connection")
-                return
-            client_socket.settimeout(None)
-
+            self._client_socket.settimeout(None)
             self._sender_dead.clear()
-            sender = Thread(target=self._sender_loop, daemon=True)
-            sender.start()
-            self._receiver_loop(client_socket)
+
+            self._receiver_loop()
             self.queue_out.put(None)
             sender.join(timeout=2.0)
 
@@ -396,12 +405,8 @@ class FIREQServer:
             self._sender_dead.clear()
             self.log.info("Client disconnected, ready for new connection")
 
-    def _receiver_loop(self, sock: socket.socket) -> None:
-        """Receive client messages and enqueue commands. Abort bypasses queue_in.
-
-        :param sock: Connected socket.
-        :type sock: socket.socket
-        """
+    def _receiver_loop(self) -> None:
+        """Receive client messages and enqueue commands. Abort bypasses queue_in."""
         while self._running:
             try:
                 msg = self._receive_message(sock)

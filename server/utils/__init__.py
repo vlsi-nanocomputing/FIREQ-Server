@@ -7,25 +7,8 @@ This package contains:
 - Custom exception hierarchy for hardware errors
 """
 
-from ..hardware.ol_adapter.overlay_adapter_types import (
-    EnvelopeSpec,
-    WaveEntry,
-    WaveKind,
-)
-from .config_types import (
-    AcquisitionConfig,
-    ExperimentConfig,
-    GeneratorConfig,
-    GeneratorDriveConfig,
-    GeneratorReadoutConfig,
-    Modulation,
-    SweepMessage,
-    SweepVariableSpec,
-    TriggerCommand,
-    TriggerConfig,
-    TriggerDelayConfig,
-)
 from .exceptions import (
+    ClientDisconnectedError,
     ConfigurationError,
     DMAError,
     DMATimeoutError,
@@ -35,6 +18,8 @@ from .exceptions import (
     FrequencyError,
     HardwareResourceError,
     HardwareStateError,
+    IncompleteTransferError,
+    InvalidPayloadError,
     RecoverableDMAError,
     TimingError,
     WaveCompilationError,
@@ -81,4 +66,7 @@ __all__ = [
     "RecoverableDMAError",
     "HardwareResourceError",
     "HardwareStateError",
+    "ClientDisconnectedError",
+    "IncompleteTransferError",
+    "InvalidPayloadError",
 ]

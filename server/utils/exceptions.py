@@ -367,6 +367,24 @@ class HardwareStateError(FireqHardwareError):
         self.actual_state = actual_state
 
 
+class ClientDisconnectedError(Exception):
+    """Raised when the remote peer disconnects (gracefully or abruptly)."""
+
+    pass
+
+
+class IncompleteTransferError(Exception):
+    """Raised when a socket transfer was not completed successfully."""
+
+    pass
+
+
+class InvalidPayloadError(Exception):
+    """Raised when payload parsing fails."""
+
+    pass
+
+
 __all__ = [
     "FireqHardwareError",
     "DriverError",
@@ -380,4 +398,7 @@ __all__ = [
     "RecoverableDMAError",
     "HardwareResourceError",
     "HardwareStateError",
+    "ClientDisconnectedError",
+    "IncompleteTransferError",
+    "InvalidPayloadError",
 ]
