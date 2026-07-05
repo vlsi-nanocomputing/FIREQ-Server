@@ -156,7 +156,7 @@ class DMANode(_GenericNode):
                     current_payload["source"],
                     self._saved_hw_shots["value"],
                     current_payload["format"],
-                    self._buffer[: current_payload["size"]].copy(),
+                    self._buffer[: current_payload["size"]].tobytes(),
                 )
             )
             # break the loop if the input is not a switch or if the current payload is the last
@@ -175,5 +175,6 @@ class DMANode(_GenericNode):
                 break
             self._ll_handler.recvchannel.transfer(self._buffer)
         # end of transfer
+        self._current_payload_index = None
         self._transferring = False
         return True
