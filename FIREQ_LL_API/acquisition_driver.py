@@ -17,11 +17,11 @@ class AcquisitionDriver(_FIREQDriver):
 
     # Register offset definitions
     _ctrl = 0
-    _readout_inc_l = 3
-    _readout_inc_h = 4
     _readout_off_l = 1
     _readout_off_h = 2
-    _trigger_mask = 5
+    _readout_inc_l = 3
+    _readout_inc_h = 4
+    _trigger_mask_l = 5
 
     # Bit position definitions
     _manual_trigger_pos = 31
@@ -237,10 +237,10 @@ class AcquisitionDriver(_FIREQDriver):
             return -3
 
         channel_mask = (1 << channel) >> 1
-        trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask * 4)
+        trigger_mask_reg = self._axi_lite_interface_mmio.read(self._trigger_mask_l * 4)
         trigger_mask_reg = _set_bits(trigger_mask_reg, self._trigger_mask_pos, self.trigger_channels, channel_mask)
 
-        self._axi_lite_interface_mmio.write(self._trigger_mask * 4, trigger_mask_reg)
+        self._axi_lite_interface_mmio.write(self._trigger_mask_l * 4, trigger_mask_reg)
         self.log.debug("set the acquisition trigger channel to %s", channel)
         self._cache["active"] = channel > 0
         self._calculate_payload()
@@ -320,7 +320,7 @@ class AcquisitionDriver(_FIREQDriver):
 
         # write the control register
         self._axi_lite_interface_mmio.write(self._ctrl * 4, ctl)
-        self.log.debug("set the output mode to %s", output_mode)
+        self.log.debug("set the output mode to %s, ctl: %s", output_mode, hex(ctl))
         self._calculate_payload()
 
         return 0

@@ -144,6 +144,9 @@ class FIREQSoC(Overlay):
         if gen_count == 0 or acq_count == 0 or ctrl_count == 0:
             self.log.error("The design does not contain the necessary FIREQ IPs to conduct experiments.")
             raise RuntimeError("The design does not contain the necessary FIREQ IPs to conduct experiments.")
+        if ctrl_count > 1:
+            self.log.error("Only one control IP (TriggerGenerator) is allowed in the design at this time")
+            raise NotImplementedError("Only one control IP (TriggerGenerator) is allowed in the design at this time")
 
     def _init_fireq_ips(self) -> None:
         """Initialize the axi interfaces for FIREQ IPs.

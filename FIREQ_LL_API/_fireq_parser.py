@@ -173,7 +173,7 @@ class FireqParser:
                 bus_vlnv = bus_if.get("VLNV")  # bus VLNV
                 bus_name = bus_if.get("NAME")  # interface name (like drive_axis or m00_axis etc.)
                 bus_id = bus_if.get("BUSNAME")  # bus identifier, unique for each connection
-                if not bus_id or bus_id.upper() == "UNCONNECTED":
+                if not bus_id or bus_id.upper() == "UNCONNECTED" or bus_id == "__NOC__":
                     continue
                 if bus_vlnv and bus_vlnv in [STREAM_AXI_VLNV, AXI4_VLNV]:
                     if bus_type in MASTER_TYPE_LIST:
