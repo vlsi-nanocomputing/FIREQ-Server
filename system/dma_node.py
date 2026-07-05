@@ -79,15 +79,15 @@ class DMANode(_GenericNode):
             self._switch_func = self.root.get_reference(f"{self._input_interface}/payload_switch_func")
             self._is_switch_input = True
 
-    def init_dma(self) -> bool:
+    def init_dma(self) -> None:
         """Initialize the DMA transfer.
 
-        Sets the master to the first available payload and starts the receive
-        channel transfer.
+        Will start the transfer in the receive channel and optionally set the input of the
+        switch if the input of the DMA is a switch.
+        This also means that, for implementation reasons, this function must be called
+        before any data is being sent to the input of the switch.
+        Failure to do so may lead to unaligned payloads and DMA errors.
 
-        :return: ``True`` if the DMA was initialized and a transfer was started,
-            ``False`` if no payload is available
-        :rtype: bool
         :raises RuntimeError: If the DMA is already transferring
         """
         if self._buffer is None:
@@ -99,7 +99,7 @@ class DMANode(_GenericNode):
             raise RuntimeError("DMA already transferring, cannot initialize")
         if not self._input_payload:
             self.log.warning("No payload to transfer for DMA node %s", self.name)
-            return False
+            raise RuntimeError("No payload to transfer for DMA node %s", self.name)
         # further checks and set the current payload
         if self._is_switch_input:
             for i, payload in enumerate(self._input_payload):
@@ -111,16 +111,24 @@ class DMANode(_GenericNode):
             else:
                 # loop exhausted without break -> no valid payload found
                 self.log.warning("No payload to transfer for DMA node %s", self.name)
-                return False
+                raise RuntimeError("No payload to transfer for DMA node %s", self.name)
         self._transferring = True
         # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
+
+    def save_variables(self) -> None:
+        """Save the variables needed for the transfer.
+
+        This function must be called after the dma init_dma method and before the transfer_all method.
+        After running this function, non-hw parameters in the dependency orchestrator can be changed.
+        """
         self._saved_payload = copy.deepcopy(self._input_payload)
         self._saved_hw_shots = copy.deepcopy(self._hw_shots)
-        return True
 
     def transfer_all(self, data_queue: queue.Queue) -> bool:
         """Transfer all available data from the DMA into the provided queue.
+
+        This function expects saved variables to be set. This is done by the save_variables method.
 
         :param data_queue: Queue in which to put ``(source_name, data_array)`` tuples
         :type data_queue: queue.Queue
@@ -141,10 +149,8 @@ class DMANode(_GenericNode):
             if self._ll_handler.recvchannel.error:
                 self.log.error("DMA transfer error for node %s", self.name)
                 return False
+            # wait for the transfer to complete and put the data in the queue
             self._ll_handler.recvchannel.wait()
-            # extract data and format it, then convert to complex
-            # data = self._buffer[: current_payload["size"]].view(current_payload["format"])
-            # data = data["real"].astype(np.float32) + 1j * data["imag"].astype(np.float32)
             data_queue.put(
                 (
                     current_payload["source"],
@@ -168,5 +174,6 @@ class DMANode(_GenericNode):
                 # no more valid payloads
                 break
             self._ll_handler.recvchannel.transfer(self._buffer)
+        # end of transfer
         self._transferring = False
         return True

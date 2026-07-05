@@ -108,9 +108,9 @@ class FIFONode(_GenericNode):
         # check if the dict is empty and that the payload is in the correct interface
         if self._input_payload:
             self.max_hw_shots["value"] = self._size // self._input_payload["size"]
+            self.log.debug("Recomputed max hw shots to %s for FIFO node %s", self.max_hw_shots["value"], self.name)
         else:
             self.max_hw_shots.clear()
-        self.log.debug("Recomputed max hw shots for FIFO node %s", self.name)
         return self.max_hw_shots.hash_and_compare()
 
     def update_payload(self) -> bool:

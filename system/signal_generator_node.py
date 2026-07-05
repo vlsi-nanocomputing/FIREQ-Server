@@ -284,7 +284,7 @@ class _Pulse(_GenericNode):
             self._address = None
         # starting values for duration and gain
         self._wanted_duration = self._envelope_ref.natural_length
-        self._wanted_gain = 1.0
+        self._wanted_gain = 0.0
 
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=10)
     def set_duration(self, duration: float) -> int:

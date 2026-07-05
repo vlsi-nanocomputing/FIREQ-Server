@@ -128,7 +128,7 @@ class _DependencyOrchestrator:
 
             did_change = update_func()
             if is_debug:
-                self.log.debug("Updated node: %s, has changed: %s", node_id, did_change)
+                self.log.debug("Updated node %s, has changed: %s", node_id, did_change)
 
             evaluated_nodes += 1
 

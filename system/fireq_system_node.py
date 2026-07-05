@@ -161,7 +161,7 @@ class FIREQSystemNode(_GenericNode):
             self.max_hw_shots.clear()
         max_hw_shots = min(max_hw_shots, self._hw_supported_hw_shots["value"])
         self.max_hw_shots["value"] = max_hw_shots
-        self.log.debug("Hardware shots set to %s", self.max_hw_shots["value"])
+        self.log.debug("Max hardware shots set to %s", self.max_hw_shots["value"])
         return self.max_hw_shots.hash_and_compare()
 
     def update_requested_hw_shots(self) -> bool:
@@ -291,12 +291,15 @@ class FIREQSystemNode(_GenericNode):
         # get the actual number of hw shots
         hw_shots = self.hw_shots["value"]
         while executed_shots < self.shots:
-            # run the experiment, at this point we are certain that the number of hw shots is set correctly
-            self._trigger_generator_nodes[0].start_experiment()
             # init the dma
             for dma_nodes in self._dma_nodes:
                 dma_nodes.init_dma()
-            # while the experiment runs, compute the remaining shots
+            # run the experiment, at this point we are certain that the number of hw shots is set correctly
+            self._trigger_generator_nodes[0].start_experiment()
+            # save the dma variables
+            for dma_node in self._dma_nodes:
+                dma_node.save_variables()
+            # do some work while the experiment runs, before extracting the data
             executed_shots += hw_shots
             remaining_shots = self.shots - executed_shots
             # if we have less remaining shots than the currently set hw shots, request a different number of hw shots
@@ -317,6 +320,9 @@ class FIREQSystemNode(_GenericNode):
                 dma_node.transfer_all(queue)
             # increment number of sw shots
             sw_shots += 1
+            # wait until experiment is done
+            while not self._trigger_generator_nodes[0].is_done():
+                pass
         self.log.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 
     # ------------------------------------------------------------------
