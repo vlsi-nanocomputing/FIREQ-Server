@@ -4,7 +4,7 @@ This package exposes the main adapter, data structures, exceptions, and the TCP 
 class for the FIREQ system.
 """
 
-from .network.fireq_server import FIREQServer
+from .fireq_server import FIREQServer
 
 __all__ = [
     # Main Server Class

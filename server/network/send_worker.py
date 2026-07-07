@@ -4,23 +4,11 @@ The only rule on the queue objects is that they must have a "to_buffers" method 
 bytes-like objects ready for sendmsg(). The protocol is defined in the to_buffers method of the object.
 """
 
-import json
 import logging
 import socket
-import struct
-import time
-import msgpack
-from collections.abc import Iterator
-from pathlib import Path
-from queue import Empty, Full, Queue
 from threading import Event, Thread
 
-import numpy as np
-
-from system import FIREQSystemNode
-
-from ..utils import ClientDisconnectedError, IncompleteTransferError
-from .memory_queue import MemoryBoundedQueue
+from ..utils import ClientDisconnectedError, MemoryBoundedQueue
 
 
 class SendWorker:

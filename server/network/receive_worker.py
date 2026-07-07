@@ -1,19 +1,11 @@
 """Handles the incoming packets, owns the client sock.recv() method, puts packets in the input queue."""
 
-import json
 import logging
-import msgpack
-import socket
-import struct
-import time
-from collections.abc import Iterator
-from pathlib import Path
-from queue import Empty, Full, Queue
+from queue import Queue
 from threading import Event, Thread
 
-import numpy as np
-
 from ..utils import ClientDisconnectedError, IncompleteTransferError, InvalidPayloadError
+from .protocol import FIREQNetworkPacket, unpack_header
 
 
 class ReceiveWorker:
@@ -75,10 +67,8 @@ class ReceiveWorker:
             try:
                 # receive a message
                 msg = self._receive_message()
-                # parse it
-                parsed = self._parse_message(msg)
                 # parse the payload and place it in queue
-                self.queue_in.put(parsed)
+                self.queue_in.put(msg)
             except InvalidPayloadError as e:
                 self.log.warning(f"Invalid payload received: {e}")
                 continue
@@ -97,30 +87,26 @@ class ReceiveWorker:
         self.log.info("Detected stop flag or unexpected error, exiting...")
         self._cleanup_and_exit()
 
-    def _receive_message(self) -> bytes:
+    def _receive_message(self) -> FIREQNetworkPacket:
         """Receive a message from the client socket.
 
-        Internally calls the socket recv method, which is blocking.
-        The message is expected to be a 4-byte length prefix followed by a payload.
-
-        :return: The payload bytes.
-        :rtype: bytes
+        :return: A data packet.
+        :rtype: FIREQNetworkPacket
         """
         # first, receive the length of the message
-        try:
-            length_bytes = self._recv_exact(4)
-            length = int.from_bytes(length_bytes, "big")
+        length_bytes = self._recv_exact(4)
+        length = int.from_bytes(length_bytes, "big")
 
-        except Exception:
-            raise
+        # now, receive the header
+        payload = self._recv_exact(length)
+        msg = FIREQNetworkPacket(header=unpack_header(payload))
 
-        try:
-            # now, receive the payload
-            payload = self._recv_exact(length)
-        except Exception:
-            raise
+        # see if there is data
+        dlength = msg.header.get("tsize", 0)
+        if dlength > 0:
+            msg.data = self._recv_exact(dlength)
 
-        return payload
+        return msg
 
     def _recv_exact(self, n: int) -> bytes:
         """Receive exactly n bytes from the socket.
@@ -150,21 +136,6 @@ class ReceiveWorker:
         if len(data) != n:
             raise IncompleteTransferError(f"Expected {n} bytes, got {len(data)}")
         return data
-
-    def _parse_message(self, payload: bytes) -> dict:
-        """Parse a payload message from the client.
-
-        Always returns a dict, which is the payload bytes parsed as a message pack.
-
-        :param payload: Raw payload bytes.
-        :type payload: bytes
-        :return: Parsed message dictionary.
-        :rtype: dict
-        """
-        try:
-            return msgpack.unpackb(payload, raw=False)
-        except Exception as e:
-            raise InvalidPayloadError(f"Failed to unpack msgpack: {e}") from e
 
     def _cleanup_and_exit(self) -> None:
         """Clean-up and exit the thread safely."""
