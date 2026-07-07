@@ -13,8 +13,11 @@ race conditions with the sender thread.
 """
 
 from dataclasses import dataclass
+import copy
+import msgpack
 
 import numpy as np
+import struct
 
 
 @dataclass
@@ -27,8 +30,18 @@ class SimpleMessage:
     :type metadata: dict
     """
 
-    type: str
-    metadata: dict
+    header: dict
+    data: bytes
+
+    def to_buffers(self) -> tuple:
+        nheader = copy.deepcopy(self.header)
+        if self.data:
+            nheader["tdata"] = len(self.data)
+        header_bytes = msgpack.packb(nheader)
+        header_size_bytes = struct.pack(">I", len(header_bytes))  # 4 bytes, network byte order
+        if self.data:
+            return (header_size_bytes, header_bytes, self.data)
+        return (header_size_bytes, header_bytes)
 
 
 @dataclass
@@ -65,4 +78,4 @@ class StreamTiming:
     metadata: dict
 
 
-__all__ = ["StreamHeader", "BinaryChunk", "StreamTiming"]
+__all__ = ["SimpleMessage", "BinaryChunk", "StreamTiming"]

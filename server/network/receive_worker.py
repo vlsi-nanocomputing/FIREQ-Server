@@ -27,19 +27,20 @@ class ReceiveWorker:
     Will clear the client connected event if the connection is lost.
     """
 
-    def init(self, queue_in: Queue, client_connected: Event, logger: logging.Logger = None) -> None:
+    def __init__(self, client_connected: Event, logger: logging.Logger = None) -> None:
         """Initialize the receive worker.
 
-        :param queue_in: Queue to put incoming messages in.
-        :type queue_in: Queue
         :param client_connected: Event that is set when a client is connected.
         :type client_connected: Event
         :param logger: Optional logger instance.
         :type logger: logging.Logger | None
         """
-        self._client_socket = None
+        # input queue
+        self.queue_in = Queue(maxsize=10)
+        # public attribute to set the client socket
+        self.client_socket = None
+        # input mutable objects and events
         self._client_connected = client_connected
-        self._queue_in = queue_in
         self.log = logger or logging.getLogger(__name__)
         # thread safe events that determine if the thread is running and if the thread should stop
         self._stop_event = Event()
@@ -77,7 +78,7 @@ class ReceiveWorker:
                 # parse it
                 parsed = self._parse_message(msg)
                 # parse the payload and place it in queue
-                self._queue_in.put(parsed)
+                self.queue_in.put(parsed)
             except InvalidPayloadError as e:
                 self.log.warning(f"Invalid payload received: {e}")
                 continue
@@ -135,7 +136,7 @@ class ReceiveWorker:
         data = b""
         while len(data) < n and not self._stop_event.is_set():
             try:
-                chunk = self._client_socket.recv(n - len(data))
+                chunk = self.client_socket.recv(n - len(data))
             except TimeoutError:
                 continue
             except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
@@ -164,3 +165,7 @@ class ReceiveWorker:
             return msgpack.unpackb(payload, raw=False)
         except Exception as e:
             raise InvalidPayloadError(f"Failed to unpack msgpack: {e}") from e
+
+    def _cleanup_and_exit(self) -> None:
+        """Clean-up and exit the thread safely."""
+        self._thread_running.clear()
