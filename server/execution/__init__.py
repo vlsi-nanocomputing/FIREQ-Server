@@ -4,6 +4,6 @@
 Currently only contains the sweep execution routines
 """
 
-from sweep_experiment import SweepExperiment
+from .sweep_experiment import SweepExperiment
 
 __all__ = ["SweepExperiment"]

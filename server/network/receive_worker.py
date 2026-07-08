@@ -1,7 +1,7 @@
 """Handles the incoming packets, owns the client sock.recv() method, puts packets in the input queue."""
 
 import logging
-from queue import Queue
+from queue import Empty, Queue
 from threading import Event, Thread
 
 from ..utils import ClientDisconnectedError, IncompleteTransferError, InvalidPayloadError
@@ -52,6 +52,15 @@ class ReceiveWorker:
         self._thread.join(timeout=2.0)
         if self._thread.is_alive():
             self.log.warning("Thread did not exit cleanly")
+
+    def clear_input_queue(self) -> None:
+        """Empty the input queue."""
+        # this is safe because the method owns the put method
+        while True:
+            try:
+                self.queue_in.get_nowait()
+            except Empty:
+                break
 
     def _run(self) -> None:
         """Run loop for the thread.

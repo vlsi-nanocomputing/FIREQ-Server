@@ -26,6 +26,7 @@ from threading import Event
 from system import FIREQSystemNode
 
 from .network import FIREQNetworkPacket, ReceiveWorker, SendWorker
+from .execution import SweepExperiment
 
 MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max payload
 QUEUE_MAX_MEMORY_BYTES = 1024 * 1024 * 1024  # 1 GB queue memory limit
@@ -102,8 +103,8 @@ class FIREQServer:
         self._queue_out = self._send_worker.queue_out
 
         # server
-        self._server_socket: socket.socket | None = None
-        self._client_socket: socket.socket | None = None
+        self._server_socket: socket.socket
+        self._client_socket: socket.socket
 
     def start(self) -> None:
         """Start the server and block on the main thread.
@@ -199,23 +200,26 @@ class FIREQServer:
         try:
             if cmd == "apply_configuration":
                 # apply the system configuration dictionary to the fireq soc
-                self.log.debug("apply configuration")
+                callbacks = self._config_from_message(msg)
+                if len(callbacks) > 0:
+                    self.log.warning("Configuration from apply_configuration has sweepable parameters")
 
-            elif cmd == "run_experiment":
-                # run a single experiment, by applying the system configuration to
-                # the fireq soc and then running a single experiment
-                self.log.debug("run_experiment")
-                self._run_experiment(msg)
-
-            elif cmd == "run_sweep":
-                # run a sweep, by applying the system configuration and running the sweep
-                self.log.debug("run_sweep")
+            elif cmd == "config_and_run":
+                # run an experiment
+                callbacks = self._config_from_message(msg)
+                if callbacks is None:
+                    self.log.warning("Configuration failed to apply, aborting experiment run")
+                    return
+                if len(callbacks) > 0:
+                    pass
+                else:
+                    self._run_experiment()
 
             elif cmd == "ping":
                 self._queue_out.put(FIREQNetworkPacket({"resp": "pong"}))
 
-            elif cmd == "status":
-                self.log.debug("status")
+            # elif cmd == "status":
+            #    self.log.debug("status")
 
             # deprecated functions:
             # rf_mapping
@@ -224,13 +228,14 @@ class FIREQServer:
             # reset_envelopes
 
             elif cmd == "logout":
-                self._handle_logout()
+                self._close_client()
 
-            elif cmd == "reset_all":
-                self.log.debug("reset all")
+            # elif cmd == "reset_all":
+            #    self.log.debug("reset all")
 
             else:
-                self.log.debug("command not supported")
+                self.log.debug("received a non-supported command from the client")
+                self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"unrecognized command '{cmd}'"}))
 
         except Exception as e:
             self.log.error(f"caught error {e}")
@@ -278,6 +283,19 @@ class FIREQServer:
                 self.log.critical(f"Unexpected error in network loop: {e}")
                 raise
 
+    def _close_client(self) -> None:
+        if self._client_connected.is_set():
+            self._client_socket.close()
+            self.log.debug("closing client connection ...")
+        disconnected = self._client_connected.wait(3.0)
+        if not disconnected:
+            self._client_connected.clear()
+            self.log.debug("manually cleared the client connected flag")
+        # empty the buffers
+        self._receive_worker.clear_input_queue()
+        self._send_worker.clear_output_queue()
+        self.log.debug("emptied the input and output queues")
+
     def _perform_handshake(self) -> bool:
         """Perform handshake authentication with the client.
 
@@ -315,59 +333,42 @@ class FIREQServer:
         self.log.debug("Received the stop condition or client disconnected on handshake")
         return False
 
-    def _run_experiment(self, experiment_def: dict):
-        config = experiment_def.get("system", None)
+    def _config_from_message(self, message: dict) -> list:
+        config = message.get("system", None)
         if config is None:
-            self.log.error("Could not get the system dict from the client message")
+            self.log.warning("Could not get the system dict from the client message, aborting apply")
             self._queue_out.put(
-                FIREQNetworkPacket({"type": "error", "msg": "system dict not found in run experiment command message"})
+                FIREQNetworkPacket({"type": "error", "msg": "system dict not found in command message"})
             )
-            return
+            return None
+
         # apply the configuration to the system
         try:
             callbacks = self._fireq_soc.apply_configuration(config)
         except Exception as e:
-            self.log.error(f"Invalid configuration: {e}")
+            self.log.warning(f"Invalid configuration: {e}")
             self._queue_out.put(
                 FIREQNetworkPacket({"type": "error", "msg": f"system dict for run experiment command is invalid: {e}"})
             )
-            return
+            return None
 
-        # check that the callbacks are empty
-        if len(callbacks) != 0:
-            self.log.error("User configuration requires callabacks to be executed")
-            self._queue_out.put(
-                FIREQNetworkPacket(
-                    {
-                        "type": "error",
-                        "msg": "system dict for run experiment requires callbacks, use run_sweep instead",
-                    }
-                )
-            )
-            return
+        # return the callbacks
+        return callbacks
 
+    def _run_experiment(self) -> None:
         # actually run the experiment
         try:
+            start = time.perf_counter_ns()
             self._fireq_soc.run_experiment(self._queue_out)
+            end = time.perf_counter_ns()
         except Exception as e:
             self.log.error(f"Exception occurred while running experiment: {e}")
-            self._queue_out.put(
-                FIREQNetworkPacket(
-                    {
-                        "type": "error",
-                        "msg": "error while running experiment",
-                    }
-                )
-            )
+            self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": "error while running experiment"}))
             return
 
         self._queue_out.put(
             FIREQNetworkPacket(
-                {
-                    "type": "status",
-                    "status": "ok",
-                    "msg": "run_experiment ended",
-                }
+                {"type": "status", "status": "ok", "msg": "run_experiment ended", "time": f"{end-start} ns"}
             )
         )
 

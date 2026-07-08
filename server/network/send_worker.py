@@ -6,6 +6,7 @@ bytes-like objects ready for sendmsg(). The protocol is defined in the to_buffer
 
 import logging
 import socket
+from queue import Empty
 from threading import Event, Thread
 
 from ..utils import ClientDisconnectedError, MemoryBoundedQueue
@@ -51,6 +52,15 @@ class SendWorker:
         self._thread.join(timeout=2.0)
         if self._thread.is_alive():
             self.log.warning("Thread did not exit cleanly")
+
+    def clear_output_queue(self) -> None:
+        """Empty the output queue."""
+        # this is safe because the method owns the put method
+        while True:
+            try:
+                self.queue_out.clear()
+            except Empty:
+                break
 
     def _run(self):
         self._thread_running.set()
