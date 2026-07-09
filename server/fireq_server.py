@@ -25,8 +25,8 @@ from threading import Event
 
 from system import FIREQSystemNode
 
-from .network import FIREQNetworkPacket, ReceiveWorker, SendWorker
 from .execution import SweepExperiment
+from .network import FIREQNetworkPacket, ReceiveWorker, SendWorker, get_command, get_sweep_variables
 
 MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max payload
 QUEUE_MAX_MEMORY_BYTES = 1024 * 1024 * 1024  # 1 GB queue memory limit
@@ -192,8 +192,8 @@ class FIREQServer:
 
         Note: ``abort`` is handled in the receiver loop for immediacy.
         """
-        cmd = msg.get("cmd", "")
-        session_id = msg.get("session_id", "")
+        cmd = get_command(msg)
+        # session_id = msg.get("session_id", "")
 
         self.log.debug(f"Processing command: {cmd}")
 
@@ -211,7 +211,19 @@ class FIREQServer:
                     self.log.warning("Configuration failed to apply, aborting experiment run")
                     return
                 if len(callbacks) > 0:
-                    pass
+                    variables = get_sweep_variables(msg)
+                    if not variables:
+                        self.log_and_send_warning(
+                            "Message from client tryed to execute a sweep experiment without specifing variables"
+                        )
+                        return
+                    exp = SweepExperiment(self, self._queue_out)
+                    execution_time = exp.run(callbacks, variables)
+                    self._queue_out.put(
+                        FIREQNetworkPacket(
+                            {"type": "status", "status": "ok", "msg": "sweep ended", "time": f"{execution_time} ns"}
+                        )
+                    )
                 else:
                     self._run_experiment()
 
@@ -371,6 +383,14 @@ class FIREQServer:
                 {"type": "status", "status": "ok", "msg": "run_experiment ended", "time": f"{end-start} ns"}
             )
         )
+
+    def log_and_send_warning(self, warning: str):
+        self.log.warning(warning)
+        self._queue_out.put(FIREQNetworkPacket({"type": "warning", "msg": f"{warning}"}))
+
+    def log_and_send_error(self, error: str):
+        self.log.warning(error)
+        self._queue_out.put(FIREQNetworkPacket({"type": "warning", "msg": f"{error}"}))
 
     # def _handle_client(self) -> None:
     #    """Spawn threads to receive from the client and send responses."""

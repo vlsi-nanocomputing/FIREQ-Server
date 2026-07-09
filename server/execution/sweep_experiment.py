@@ -6,11 +6,12 @@ the FIREQ system. It provides methods to parse sweep configurations, compute var
 
 import logging
 import re
+import copy
 from queue import Queue
 
 import numpy as np
-
-from system import FIREQSystemNode
+from ..network import FIREQNetworkPacket
+import time
 
 
 class SweepExperiment:
@@ -22,7 +23,7 @@ class SweepExperiment:
 
     OPERATORS = "+-"  # TODO: check if is necessary to constrain the operators
 
-    def __init__(self, node: FIREQSystemNode, queue: Queue, logger: logging.Logger | None = None) -> None:
+    def __init__(self, server, queue_out: Queue, logger: logging.Logger | None = None) -> None:
         """
         Initialize with the sweeping expressions and variables values.
 
@@ -32,14 +33,15 @@ class SweepExperiment:
         :type queue: Queue
         """
         # Fireq Node
-        self.node = node
-        self.queue = queue
-        self.logger = logger or logging.getLogger(__name__)
+        self._server = server
+        self._queue_out = queue_out
+        self.log = logger or logging.getLogger(__name__)
 
         # dict with all the computed sweeping variables
         self.computed_vars = {}
+        self._current_sweep_point = {}
 
-    def _check_sweep_expressions(self, expr: str) -> None:
+    def _check_sweep_expression(self, expr: str) -> None:
         """Check the sweep expressions for validity.
 
         Raise ValueError if the expression does not pass the check.
@@ -72,56 +74,56 @@ class SweepExperiment:
         """
         return tuple(re.findall(r"[a-zA-Z_]\w*", expr))
 
-    def _parse_config(self, config: dict) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
+    def _parse_callbacks(self, callbacks: list) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
         """Parse the sweep configuration and fill sweep_cost dict and sweep_routine set.
 
-        :param config: configuration parameters for the experiment
-        :type config: dict
-        :return the sweep_routine (the callbacks to execute with expressions and involved variables)
+        :param callbacks: configuration parameters for the experiment
+        :type callbacks: dict
+        :return: the sweep_routine (the callbacks to execute with expressions and involved variables)
             and vars_order (the variables to change in order of cost)
-        :rtype tuple[set[tuple[callable, str, tuple[str]]], list[str]]
+        :rtype: tuple[set[tuple[callable, str, tuple[str]]], list[str]]
         """
         sweep_costs = {}
         sweep_routine = set()
-
-        # apply the configuration to the node and get the  sweeping expressions
-        sweep_expr = self.node.apply_configuration(config)
+        self.log.debug(f"{callbacks}")
 
         # identify the sweeping expressions compute cost and fill the expr_routine dict
-        for callback, expr, cost in sweep_expr:
+        for callback, expr, cost in callbacks:
 
             # check expression validity
-            self._check_sweep_expressions(expr)
+            self._check_sweep_expression(expr)
 
             # get the variables from the expression
-            varibles = self._get_vars(expr[1:])  # remove the '#' character and get the variables
+            variables = self._get_vars(expr[1:])  # remove the '#' character and get the variables
 
             # update sweep_cost dict
-            for var in varibles:
+            for var in variables:
                 if var not in sweep_costs:
                     sweep_costs[var] = cost
                 else:
                     sweep_costs[var] += cost
 
             # update sweep_routine
-            sweep_routine.add((callback, expr[1:], varibles))
+            sweep_routine.add((callback, compile(expr[1:], "compiled_expression", "eval"), variables))
 
         # order the varibles based on their costs
         vars_order = sorted(sweep_costs, key=lambda x: sweep_costs[x], reverse=True)
-        self.logger.info(f"Variable sweep order: {vars_order}")
+        self.log.debug(f"Variable sweep order: {vars_order}")
 
         return sweep_routine, vars_order
 
-    def put_queue_header(self, vars_order: list[str]) -> None:
+    def _put_sweep_info_in_network(self, vars_order: list[str]) -> None:
         """Put the header on the queue with the variables order.
 
         :param vars_order: list of variables ordered by total cost
         :type vars_order: list[str]
         """
-        self.queue.put({"type": "sweep_experiment_header", "variables_order": vars_order})
+        self._queue_out.put(
+            FIREQNetworkPacket({"type": "sweep_experiment_header", "variables_order": copy.deepcopy(vars_order)})
+        )
 
     @staticmethod
-    def _compute_variable_values(var: dict[str:dict]) -> dict[str : np.array]:
+    def _compute_variable_values(var: dict[str, dict]) -> dict[str : np.array]:
         """Compute all the values for the variables.
 
         The field 'mode' must be present and indicates how the values are computed
@@ -132,53 +134,63 @@ class SweepExperiment:
 
         :param var: dict with variable and correspondent description
         :type var: dict[str: dict]
-        :return dict with sweeping values
+        :return: dict with sweeping values
         :rtype: dict[str: np.array]
         """
         return_dict = {}
 
         # iterate through variables
-        for v, desc in var.items():
-            # check if is present the field space
-            if "mode" not in desc:
-                raise KeyError(f"For the sweeping variable '{v}' the 'mode' field is not present")
+        for var_name, var_description in var.items():
+            # check that the variable is not in the dict already
+            if return_dict.get(var_name) is not None:
+                raise KeyError(f"Variable '{var_name}' has already been defined earlier.")
+
+            # get variable "mode" field, check if it exists
+            mode = var_description.get("mode")
 
             # get mode
-            if desc["mode"] == "lin":
+            if mode == "lin":
                 try:
-                    return_dict[v] = np.linspace(desc["start"], desc["stop"], desc["num"])
+                    return_dict[var_name] = np.linspace(
+                        var_description["start"], var_description["stop"], var_description["num"]
+                    )
 
                 except KeyError as e:
-                    raise KeyError(f"For 'lin' mode the keys 'start', 'stop' and 'num' must be present for '{v}' \
-                                   variable.") from e
+                    raise KeyError(
+                        f"For 'lin' mode the keys 'start', 'stop' and 'num' must be present for '{var_name}' \
+                                   variable."
+                    ) from e
                 except Exception as e:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
+                    raise TypeError(f"Error during computing sweeping values for '{var_name}' variable: {e}") from e
 
-            elif desc["mode"] == "const":
+            elif mode == "const":
                 try:
-                    return_dict[v] = np.array([desc["value"]])
+                    return_dict[var_name] = np.array([var_description["value"]])
 
                 except KeyError as e:
-                    raise KeyError(f"For 'const' mode the key 'value' must be present for '{v}' variable") from e
+                    raise KeyError(f"For 'const' mode the key 'value' must be present for '{var_name}' variable") from e
                 except Exception as e:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
+                    raise TypeError(f"Error during computing sweeping values for '{var_name}' variable: {e}") from e
 
-            elif desc["mode"] == "list":
+            elif mode == "list":
                 try:
-                    return_dict[v] = np.array(desc["values"])
+                    return_dict[var_name] = np.array(var_description["values"])
 
                 except KeyError as e:
-                    raise KeyError(f"For 'list' mode the key 'values' must be present for '{v}' variable") from e
+                    raise KeyError(f"For 'list' mode the key 'values' must be present for '{var_name}' variable") from e
                 except Exception as e:
-                    raise TypeError(f"Error during computing sweeping values for '{v}' variable: {e}") from e
+                    raise TypeError(f"Error during computing sweeping values for '{var_name}' variable: {e}") from e
+
+            elif mode is None:
+                raise KeyError(f"For the sweeping variable '{var_name}' the 'mode' field is not present")
 
             else:
-                raise ValueError(f"Sweeping spacing '{ desc['mode'] }' not available")
+                raise ValueError(f"Sweeping spacing '{ var_description['mode'] }' not available")
 
         return return_dict
 
     def _nested_loop_recursive(
-        self, dict_vars: dict, sweep_routine: set, vars_order: list, iterating_vars: list
+        self, sweep_routine: set, vars_order: list, depth: int = 0, accounted_callbacks: set = None
     ) -> None:
         """Iterate recursivelly through variables executing callbacks and finally run the experiment.
 
@@ -191,73 +203,65 @@ class SweepExperiment:
         :param iterating_vars: list of iterating variables for the current step
         :type iterating_vars: list
         """
-        if not vars_order:
-            # if variables are empty, run the experiment
-            self.node.run_experiment(self.queue)
-            self.logger.info("Run experiment")
-
-        else:
-            # pop the first variable and get values of iteration
-            var = vars_order[0]
-            var_values = self.computed_vars[var]
-            del vars_order[0]
-
-            # add the variable to the iterating_vars set
-            iterating_vars.add(var)
-
-            # add callbacks to execute in the loop
-            callbacks = []
-            remaining_routine = set()
-            for f, expr, dep_vars in sweep_routine:
-                # check if the callback must be executed
-                if set(dep_vars).issubset(iterating_vars):
-                    # expression to execute
-                    callbacks.append((f, expr))
-                else:
-                    # expression to not execute
-                    remaining_routine.add((f, expr, dep_vars))
-
-            sweep_routine = remaining_routine
-
-            # iterate over the values of the variable
-            for value in var_values:
-                # update the dict_vars with the current value of the variable
-                dict_vars[var] = value
-
-                # execute the callbacks
-                for callback in callbacks:
-                    callback[0](eval(callback[1], {}, dict_vars))
-                    self.logger.debug(
-                        f"Parameter change -> callback:'{callback[0].__name__}', params: '{callback[1]}', \
-                                     variables: { {k: v.item() for k, v in dict_vars.items()} }"
-                    )
-
-                # recursively call the function to iterate over the next variable
+        # pop the first variable and get values of iteration
+        iterating_var = vars_order[depth]
+        callbacks_executing = set()
+        # add callbacks to execute in the loop
+        callbacks = []
+        for index, (func, compiled, variable_dependencies) in enumerate(sweep_routine):
+            # check if the callback has already been accounted for
+            if accounted_callbacks is not None and index in accounted_callbacks:
+                continue
+            # check if the callback must be executed
+            if set(variable_dependencies).issubset(vars_order[: depth + 1]):
+                # expression to execute
+                callbacks.append((func, compiled))
+                callbacks_executing.add(index)
+        # iterate over the values of the variable
+        var_values = self.computed_vars[iterating_var]
+        for value in var_values:
+            # update the dict_vars with the current value of the variable
+            self._current_sweep_point[iterating_var] = value
+            # execute the callbacks
+            for callback in callbacks:
+                callback[0](eval(callback[1], {}, self._current_sweep_point))
+                # self.logger.debug(f"Parameter change -> callback:'{callback[0].__name__}', params: '{callback[1]}', \
+                #                 variables: { {k: v.item() for k, v in dict_vars.items()} }")
+            # recursively call the function to iterate over the next variable
+            if depth == len(vars_order) - 1:
+                self._server._run_experiment()
+            else:
                 self._nested_loop_recursive(
-                    dict_vars=dict_vars,
-                    sweep_routine=sweep_routine.copy(),
-                    vars_order=vars_order.copy(),
-                    iterating_vars=iterating_vars.copy(),
+                    sweep_routine=sweep_routine,
+                    vars_order=vars_order,
+                    depth=depth + 1,
+                    accounted_callbacks=sum(accounted_callbacks, callbacks_executing),
                 )
 
-    def run(self, config: list, var: list) -> None:
+    def run(self, sweep_callbacks: list, variables: list) -> int:
         """Run the sweep experiment by parsing the configuration and executing the recursive sweep routine.
 
-        :param sweep_expr: A list of tuples containing the sweep expressions.
-        :type sweep_expr: list[tuple[callable, str, int]]
-        :param var: A list of dictionaries containing the variable parameters for the sweep.
-        :type var: list[dict[str: dict]]
+        Sweep callbacks is a list of tuples: (callback func, expression, callback cost)
+
+        :param sweep_callbacks: A list of tuples containing the sweep expressions.
+        :type sweep_callbacks: list[tuple[callable, str, int]]
+        :param variables: A list of dictionaries containing the variable parameters for the sweep.
+        :type variables: dict[str: dict]
         """
         # compute variables values
-        self.computed_vars = self._compute_variable_values(var)
+        self.computed_vars = self._compute_variable_values(variables)
 
         # parse the configuration
-        sweep_routine, vars_order = self._parse_config(config)
+        sweep_routine, vars_order = self._parse_callbacks(sweep_callbacks)
 
         # create and the header on the queue
-        self.put_queue_header(vars_order)
+        self._put_sweep_info_in_network(vars_order)
 
         # execute the experiment changing the sweeping variables
+        start = time.perf_counter_ns()
         self._nested_loop_recursive(
-            dict_vars={}, sweep_routine=sweep_routine.copy(), vars_order=vars_order.copy(), iterating_vars=set()
+            sweep_routine,
+            vars_order,
         )
+        stop = time.perf_counter_ns()
+        return stop - start

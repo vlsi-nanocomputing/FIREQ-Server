@@ -47,3 +47,11 @@ class FIREQNetworkPacket:
 def unpack_header(serial: bytes) -> dict:
     """Unpack bytes to return a dictionary using msgpack."""
     return msgpack.unpackb(serial, raw=False)
+
+
+def get_command(message: dict) -> str:
+    return message.get("cmd", "")
+
+
+def get_sweep_variables(message: dict) -> dict:
+    return message.get("variables", {})
