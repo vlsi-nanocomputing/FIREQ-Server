@@ -275,6 +275,11 @@ class FIREQSoC(Overlay):
         self.dac_samplerate = gen_sr[0] / 1e6
         self.adc_samplerate = acq_sr[0] / 1e6
 
+        # set the DAC to ADC ratio for the acquisition drivers
+        for full_name, ip in self.ips.items():
+            if ip[2] == AcquisitionDriver.__name__:
+                ip[1].set_dac_to_adc_ratio(int(self.dac_samplerate // self.adc_samplerate))
+
     # ------------------------------------------------------------------
     # IP helpers
     # ------------------------------------------------------------------

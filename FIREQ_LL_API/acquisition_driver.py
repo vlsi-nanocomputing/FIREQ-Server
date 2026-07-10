@@ -82,6 +82,16 @@ class AcquisitionDriver(_FIREQDriver):
             "output_mode": "raw",
         }
         self.payload = {}
+        # ratio between dac and adc sampling rates - 1, gives a mask of bits to truncate
+        self.dac_to_adc_ratio_mask = 2 - 1
+
+    def set_dac_to_adc_ratio(self, ratio: int) -> None:
+        """Set the ratio between the sampling rate of the dac and the adc."""
+        if ratio < 1:
+            self.log.error("DAC to ADC cannot be smaller than 1")
+            raise RuntimeError("DAC to ADC cannot be smaller than 1")
+        self.dac_to_adc_ratio_mask = ratio - 1
+        self.log.debug(f"Set the DAC to ADC ratio to {ratio}, with mask {bin(self.dac_to_adc_ratio_mask)}")
 
     def _calculate_payload(self) -> None:
         """Calculate the payload of the acquisition for a single shot."""
@@ -152,7 +162,7 @@ class AcquisitionDriver(_FIREQDriver):
         # increment for the acquisition (at equal modulation and demodulation frequencies) is equal to double the one
         # of the generation. Masking the LSB accounts for the truncation done in the generation portion, and keeps the
         # two systems in sync.
-        pinc = pinc & (2**self.phase_depth - 2)
+        pinc = pinc & (2**self.phase_depth - 1) & (~self.dac_to_adc_ratio_mask)
 
         # write inc LOW
         self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
@@ -175,14 +185,9 @@ class AcquisitionDriver(_FIREQDriver):
         # compute the phase increment
         poff = int(2**self.phase_depth * normalized_phase)
 
-        # masking off the LSB of the phases. This is done in an effort to keep the generation and acquisition in phase.
-        # Generation is done (at the DAC) at a frequency that is double the one used for the ADC. As a result, the phase
-        # increment for the acquisition (at equal modulation and demodulation frequencies) is equal to double the one
-        # of the generation. Masking the LSB accounts for the truncation done in the generation portion, and keeps the
-        # two systems in sync.
         # TODO: check that this is ok even when moving away from the first nyquist zone.
         #       I am unsure if I have to invert the phase or not when in the second nyquist zone.
-        poff = poff & (2**self.phase_depth - 2)
+        poff = poff & (2**self.phase_depth - 1)
 
         # write inc LOW
         self._axi_lite_interface_mmio.write(self._readout_off_l * 4, poff & 0xFFFFFFFF)
