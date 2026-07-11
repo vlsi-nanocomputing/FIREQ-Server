@@ -6,18 +6,18 @@ This module starts the FIREQServer with a loaded FIREQ SoC overlay.
 import logging
 import os
 import sys
+from typing import Literal
 
-from FIREQ_LL_API import FIREQSoC
-from server import FIREQServer, MessageHandler, OverlayAdapter
+from server import FIREQServer
 
 # Path to the base directory where the overlay files are stored
-BASE_PATH = "/home/xilinx/jupyter_notebooks/"
+HOME_PATH = "/home/xilinx/"
 
 
-def setup_logging() -> logging.Logger:
+def setup_logging(level=Literal) -> logging.Logger:
     """Configure logging for the server."""
     logging.basicConfig(
-        level=logging.INFO,
+        level=level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
     return logging.getLogger(__name__)
@@ -25,37 +25,26 @@ def setup_logging() -> logging.Logger:
 
 def main() -> None:
     """Prompt for overlay, load it, and start the FIREQ server."""
-    logger = setup_logging()
+    logger = setup_logging(level=logging.INFO)
     logger.info("### FIREQ Server startup ###\n")
 
+    # set logging level
+    log_level = input("Input logging level: 'debug', 'info' (press enter for 'info')\n")
+    if log_level == "debug":
+        logger = setup_logging(logging.DEBUG)
+    else:
+        pass
+
     # Get overlay path
-    ol_folder = input("\n# Insert Overlay folder\n")
-    ol_filename = input('# Insert Overlay filename (press Enter for "overlay.bit")\n')
+    ol_filename = input(f"# Insert Overlay filename relative to '{HOME_PATH}' (press Enter for 'overlay.bit')\n")
     if not ol_filename:
         ol_filename = "overlay.bit"
 
-    ol_filepath = BASE_PATH + ol_folder + "/" + ol_filename
+    ol_filepath = HOME_PATH + ol_filename
 
     # Check existence of overlay
     if not os.path.exists(ol_filepath):
         logger.error(f"Overlay invalid filepath '{ol_filepath}'")
-        sys.exit(-1)
-
-    # Load the overlay
-    logger.info(f"Loading overlay from {ol_filepath}")
-    try:
-        overlay_driver = FIREQSoC(ol_filepath)
-    except Exception as e:
-        logger.error(f"Failed to load overlay: {e}")
-        sys.exit(-1)
-
-    # Create adapter and message handler
-    logger.info("Initializing hardware adapter and message handler...")
-    try:
-        adapter = OverlayAdapter(overlay_driver, logger=logger)
-        handler = MessageHandler(adapter, logger=logger)
-    except Exception as e:
-        logger.error(f"Failed to initialize adapter/handler: {e}")
         sys.exit(-1)
 
     # Get server configuration
@@ -77,17 +66,19 @@ def main() -> None:
     if not auth_token:
         auth_token = "fireq"
 
-    # Create and start server
-    logger.info(f"Starting FIREQ Server on {host}:{port}")
+    # run the server
+    logger.info(f"Starting server using overlay '{ol_filepath}, on address '{host}:{port}', with token {auth_token}")
     try:
-        server = FIREQServer(handler, host=host, port=port, auth_token=auth_token, logger=logger)
+        server = FIREQServer(ol_filepath, host, port)
+    except Exception as e:
+        logger.error(f"Failed to initialize server: {e}")
+        sys.exit(-1)
+
+    try:
         server.start()
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt, stopping server...")
         server.stop()
-    except Exception as e:
-        logger.error(f"Server error: {e}")
-        sys.exit(-1)
 
 
 if __name__ == "__main__":
