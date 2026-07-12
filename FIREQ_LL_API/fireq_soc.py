@@ -93,6 +93,9 @@ class FIREQSoC(Overlay):
         self.adc_samplerate = None
         self.fabric_frequency = None
         self._discover_clocks()
+        self.log.debug(f"DAC sampling rate is: {self.dac_samplerate} MHz")
+        self.log.debug(f"ADC sampling rate is: {self.adc_samplerate} MHz")
+        self.log.debug(f"Fabric clock is: {self.fabric_frequency} MHz")
 
         # freeze calibration for all ADCs
         for adc_index in self.active_adcs:
