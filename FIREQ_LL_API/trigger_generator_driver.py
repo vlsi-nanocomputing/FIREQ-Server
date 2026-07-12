@@ -47,6 +47,13 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # parse the size of the repetition counter
         self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
 
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        for offset in range(0, self._axi_lite_interface_mmio.length, 4):
+            self._axi_lite_interface_mmio.write(offset, 0)
+        for offset in range(0, self._axi_full_interface_mmio.length, 4):
+            self._axi_full_interface_mmio.write(offset, 0)
+
     def print_description(self, printer_func: callable) -> None:
         """Print the description of the trigger generator IP.
 

@@ -75,7 +75,7 @@ class FIREQSoC(Overlay):
         # init the axi interfaces of FIREQ drivers
         self._init_fireq_ips()
 
-        # Organize ALL IPs in the design
+        # Organize ALL IPs in the design as (instance (str), ip_object, type(ip_object).__name__)
         self.ips = {}
         self._discover_ips()
 
@@ -302,6 +302,12 @@ class FIREQSoC(Overlay):
                 return float(data["frequency"])
         # if not found, raise an error
         raise RuntimeError(f"Clock not found for IP {full_ip_name} on port {clock_port}")
+
+    def reset_all_ip_memory_and_registers(self) -> None:
+        """Reset the registers and memory for all FIREQ IPs in the design."""
+        for _, (_, ip, _) in self.ips.items():
+            if isinstance(ip, _FIREQDriver):
+                ip.reset_memory_and_registers()
 
     # ------------------------------------------------------------------
     # RF helpers

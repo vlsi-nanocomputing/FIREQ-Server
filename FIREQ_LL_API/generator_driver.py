@@ -122,6 +122,19 @@ class GeneratorDriver(_FIREQDriver):
         # reset envelope dictionary and memory
         self.clear_envelope_memory()
 
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        for offset in range(0, self._axi_lite_interface_mmio.length, 4):
+            self._axi_lite_interface_mmio.write(offset, 0)
+        for offset in range(0, self._envelope_memory_interface.length, 4):
+            self._envelope_memory_interface.write(offset, 0)
+        for offset in range(0, self._common_envelope_memory_interface.length, 4):
+            self._common_envelope_memory_interface.write(offset, 0)
+        for offset in range(0, self._wdw_memory_interface.length, 4):
+            self._wdw_memory_interface.write(offset, 0)
+        for offset in range(0, self._memory_mapped_fifo_interface.length, 4):
+            self._memory_mapped_fifo_interface.write(offset, 0)
+
     def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface and delete the PYNQ-created MMIO object.
 

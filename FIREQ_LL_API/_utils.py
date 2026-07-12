@@ -37,6 +37,10 @@ class _FIREQDriver(DefaultIP):
         self._axi_lite_interface_mmio = None
         self._debug_level = 0
 
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        self.log.warning("Called reset method without implementation.")
+
     def set_logger(self, new_logger: logging.Logger) -> None:
         """Set the logger for this object.
 

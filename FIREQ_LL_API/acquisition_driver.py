@@ -85,6 +85,11 @@ class AcquisitionDriver(_FIREQDriver):
         # ratio between dac and adc sampling rates - 1, gives a mask of bits to truncate
         self.dac_to_adc_ratio_mask = 2 - 1
 
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        for offset in range(0, self._axi_lite_interface_mmio.length, 4):
+            self._axi_lite_interface_mmio.write(offset, 0)
+
     def set_dac_to_adc_ratio(self, ratio: int) -> None:
         """Set the ratio between the sampling rate of the dac and the adc."""
         if ratio < 1:
