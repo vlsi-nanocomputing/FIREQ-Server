@@ -220,9 +220,7 @@ class FIREQServer:
                     exp = SweepExperiment(self, self._queue_out)
                     execution_time = exp.run(callbacks, variables)
                     self._queue_out.put(
-                        FIREQNetworkPacket(
-                            {"type": "status", "status": "ok", "msg": "sweep ended", "time": f"{execution_time} ns"}
-                        )
+                        FIREQNetworkPacket({"type": "status", "msg": "sweep ended", "time": f"{execution_time} ns"})
                     )
                 else:
                     self._run_experiment()
@@ -250,7 +248,7 @@ class FIREQServer:
                 self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"unrecognized command '{cmd}'"}))
 
         except Exception as e:
-            self.log.error(f"caught error {e}")
+            self.log.exception("Caught error while running command")
 
     # =========================================================================
     # Connection Handling
@@ -369,6 +367,7 @@ class FIREQServer:
 
     def _run_experiment(self) -> None:
         # actually run the experiment
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment started"}))
         try:
             start = time.perf_counter_ns()
             self._fireq_soc.run_experiment(self._queue_out)
@@ -379,9 +378,7 @@ class FIREQServer:
             return
 
         self._queue_out.put(
-            FIREQNetworkPacket(
-                {"type": "status", "status": "ok", "msg": "run_experiment ended", "time": f"{end-start} ns"}
-            )
+            FIREQNetworkPacket({"type": "status", "msg": "experiment ended", "time": f"{end-start} ns"})
         )
 
     def log_and_send_warning(self, warning: str):

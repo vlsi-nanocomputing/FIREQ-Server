@@ -45,6 +45,7 @@ class DMAPayload:
         """
         header_bytes = msgpack.packb(
             {
+                "type": "dma_package",
                 "source": self.source,
                 "shots": self.shots,
                 "format": self.dtype,

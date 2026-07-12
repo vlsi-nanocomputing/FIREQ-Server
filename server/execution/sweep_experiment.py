@@ -203,6 +203,8 @@ class SweepExperiment:
         :param iterating_vars: list of iterating variables for the current step
         :type iterating_vars: list
         """
+        if accounted_callbacks is None:
+            accounted_callbacks = set()
         # pop the first variable and get values of iteration
         iterating_var = vars_order[depth]
         callbacks_executing = set()
@@ -210,7 +212,7 @@ class SweepExperiment:
         callbacks = []
         for index, (func, compiled, variable_dependencies) in enumerate(sweep_routine):
             # check if the callback has already been accounted for
-            if accounted_callbacks is not None and index in accounted_callbacks:
+            if index in accounted_callbacks:
                 continue
             # check if the callback must be executed
             if set(variable_dependencies).issubset(vars_order[: depth + 1]):
