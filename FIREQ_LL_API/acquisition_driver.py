@@ -40,9 +40,9 @@ class AcquisitionDriver(_FIREQDriver):
 
     # Formats of the raw bytes coming from the buffers
     _formats = {
-        "raw": (("real", "<i2"), ("imag", "<i2")),
-        "decimated": (("real", "<i2"), ("imag", "<i2")),
-        "accumulated": (("real", "<i4"), ("imag", "<i4")),
+        "raw": (("imag", "<i2"), ("real", "<i2")),
+        "decimated": (("imag", "<i2"), ("real", "<i2")),
+        "accumulated": (("imag", "<i4"), ("real", "<i4")),
     }
 
     # Port name of the fabric clock
