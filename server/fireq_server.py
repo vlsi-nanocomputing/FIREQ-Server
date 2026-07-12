@@ -228,6 +228,10 @@ class FIREQServer:
             elif cmd == "ping":
                 self._queue_out.put(FIREQNetworkPacket({"resp": "pong"}))
 
+            elif cmd == "reset_all":
+                self._fireq_soc.reset_all()
+                self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "successfully reset"}))
+
             # elif cmd == "status":
             #    self.log.debug("status")
 
@@ -373,7 +377,7 @@ class FIREQServer:
             self._fireq_soc.run_experiment(self._queue_out)
             end = time.perf_counter_ns()
         except Exception as e:
-            self.log.error(f"Exception occurred while running experiment: {e}")
+            self.log.exception("Exception occurred while running experiment")
             self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": "error while running experiment"}))
             return
 

@@ -85,6 +85,13 @@ class AcquisitionNode(_GenericNode):
             self.root.register_update_function(f"{if_id}/payload", self._make_payload_updater(output_if))
             self.root.add_reference(f"{if_id}/payload", self.payload[output_if])
 
+    def _reset_all(self) -> None:
+        """Call the reset all function to all children."""
+        # reset the internal state of the driver
+        self._ll_handler.reset_state()
+        for _, payload in self.payload.items():
+            payload.reset_hash()
+
     @_GenericNode.parameter_callback("$duration", sweepable=True, cost=1)
     def set_acquisition_duration(self, duration: float) -> int:
         """Set the acquisition duration.

@@ -76,14 +76,16 @@ class AcquisitionDriver(_FIREQDriver):
         self.decimated_output_width = int(description["parameters"]["C_M01_AXIS_TDATA_WIDTH"])
         # payload of the acquisition, calculated depending on the parameters set
         # should be recalculated any time that the duration, output mode and trigger channel are set
-        self._cache = {
-            "active": False,
-            "duration": 0,
-            "output_mode": "raw",
-        }
+        self._cache = {}
         self.payload = {}
+        self.reset_state()
         # ratio between dac and adc sampling rates - 1, gives a mask of bits to truncate
         self.dac_to_adc_ratio_mask = 2 - 1
+
+    def reset_state(self) -> None:
+        """Reset the cache and payload to the init value."""
+        self._cache = {"active": False, "duration": 0, "output_mode": None}
+        self.payload = {}
 
     def reset_memory_and_registers(self) -> None:
         """Reset all memory and registers to 0."""
@@ -100,7 +102,7 @@ class AcquisitionDriver(_FIREQDriver):
 
     def _calculate_payload(self) -> None:
         """Calculate the payload of the acquisition for a single shot."""
-        if self._cache["active"] and self._cache["duration"] > 0:
+        if self._cache["active"] and self._cache["duration"] > 0 and self._cache["output_mode"] is not None:
             if self._cache["output_mode"] == "raw":
                 self.payload["size"] = self._cache["duration"] * self.non_decimated_output_width // 8
             elif self._cache["output_mode"] == "decimated":

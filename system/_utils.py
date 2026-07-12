@@ -32,6 +32,10 @@ class _MutableRef:
         self._data: dict[str, Any] = dict(kwargs)
         self.cached_hash = None
 
+    def reset_hash(self) -> None:
+        """Reset the object's hash to the init status, to force hash and compare to return true."""
+        self.cached_hash = None
+
     def set_logger(self, new_logger: logging.Logger) -> None:
         """Set the logger for this object.
 

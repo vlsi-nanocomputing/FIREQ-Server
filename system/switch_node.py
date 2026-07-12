@@ -78,6 +78,11 @@ class SwitchNode(_GenericNode):
         # tracking the current input index
         self.current_input_index: int = 0
 
+    def _reset_all(self) -> None:
+        for payload in self.payload:
+            payload.reset_hash()
+        self.max_payload_size.reset_hash()
+
     def _build_dependencies(self) -> None:
         """Build the dependencies for this node."""
         _max_size: int = 0

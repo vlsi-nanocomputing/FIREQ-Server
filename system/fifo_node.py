@@ -71,6 +71,11 @@ class FIFONode(_GenericNode):
         self._hw_shots = None
         self._input_payload = None
 
+    def _reset_all(self) -> None:
+        self.max_hw_shots.reset_hash()
+        self.payload.reset_hash()
+        self.max_payload_size.reset_hash()
+
     def _build_dependencies(self) -> None:
         """Build the dependencies for this node.
 

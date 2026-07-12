@@ -410,6 +410,14 @@ class SignalGeneratorNode(_GenericNode):
         self._wdw_next_address: int = 0
         return self._ll_handler.clear_envelope_memory()
 
+    def _reset_all(self) -> None:
+        for child in self.children:
+            child.parent = None
+        # recreate the rect envelope
+        _RectangularEnvelope(name="_RECTANGULAR", parent=self)
+        # envelope and wdw memory caching
+        self.init_memory()
+
     def reserve_envelope_segment(self, sample_depth: int) -> int:
         """Reserve a segment of the envelope memory.
 

@@ -100,6 +100,14 @@ class FIREQSystemNode(_GenericNode):
             # create the child node
             _driver_wrappers[driver_type](name=subsystem_name, parent=self, _ll_handler=ll_handler)
 
+    def reset_all(self) -> None:
+        """Reset the state of the system like the first initialization."""
+        self._fireq_soc.reset_all_ip_memory_and_registers()
+        super()._reset_all()
+        self.requested_hw_shots.reset_hash()
+        self.max_hw_shots.reset_hash()
+        self.hw_shots.reset_hash()
+
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericNode:
         """Create a child node of the specified type.
 

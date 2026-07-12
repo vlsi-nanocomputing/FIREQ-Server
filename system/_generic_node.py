@@ -90,6 +90,11 @@ class _GenericNode(Node, metaclass=RegisterNode):
                     value._callback_cost,
                 )
 
+    def _reset_all(self) -> None:
+        """Call the reset all function to all children."""
+        for child in self.children:
+            child._reset_all()
+
     @staticmethod
     def parameter_callback(
         key: str,

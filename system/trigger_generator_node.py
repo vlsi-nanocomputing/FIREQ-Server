@@ -139,6 +139,11 @@ class TriggerGeneratorNode(_GenericNode):
         self._hw_shots: _MutableRef | None = None
         self.root.register_update_function(self.root.make_func_label(self, "hw_shots"), self.update_hw_shots)
 
+    def _reset_all(self) -> None:
+        for child in self.children:
+            child.parent = None
+        self._hw_supported_shots.reset_hash()
+
     def _build_dependencies(self) -> None:
         """Build the dependencies for the trigger generator node."""
         # get the number of hw shots
