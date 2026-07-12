@@ -74,7 +74,7 @@ class SweepExperiment:
         """
         return tuple(re.findall(r"[a-zA-Z_]\w*", expr))
 
-    def _parse_callbacks(self, callbacks: list) -> tuple[set[tuple[callable, str, tuple[str]]], list[str]]:
+    def _parse_callbacks(self, callbacks: list) -> tuple[list[tuple[callable, str, tuple[str]]], list[str]]:
         """Parse the sweep configuration and fill sweep_cost dict and sweep_routine set.
 
         :param callbacks: configuration parameters for the experiment
@@ -84,7 +84,7 @@ class SweepExperiment:
         :rtype: tuple[set[tuple[callable, str, tuple[str]]], list[str]]
         """
         sweep_costs = {}
-        sweep_routine = set()
+        sweep_routine = []
         self.log.debug(f"{callbacks}")
 
         # identify the sweeping expressions compute cost and fill the expr_routine dict
@@ -104,7 +104,7 @@ class SweepExperiment:
                     sweep_costs[var] += cost
 
             # update sweep_routine
-            sweep_routine.add((callback, compile(expr[1:], "compiled_expression", "eval"), variables))
+            sweep_routine.append((callback, compile(expr[1:], "compiled_expression", "eval"), variables))
 
         # order the varibles based on their costs
         vars_order = sorted(sweep_costs, key=lambda x: sweep_costs[x], reverse=True)
@@ -190,7 +190,7 @@ class SweepExperiment:
         return return_dict
 
     def _nested_loop_recursive(
-        self, sweep_routine: set, vars_order: list, depth: int = 0, accounted_callbacks: set = None
+        self, sweep_routine: list, vars_order: list, depth: int = 0, accounted_callbacks: set = None
     ) -> None:
         """Iterate recursivelly through variables executing callbacks and finally run the experiment.
 
@@ -205,8 +205,9 @@ class SweepExperiment:
         """
         if accounted_callbacks is None:
             accounted_callbacks = set()
-        # pop the first variable and get values of iteration
+        # get the name of the variable that is iterating in this loop
         iterating_var = vars_order[depth]
+        # set of callback indices that are executing in this loop
         callbacks_executing = set()
         # add callbacks to execute in the loop
         callbacks = []
@@ -220,16 +221,14 @@ class SweepExperiment:
                 callbacks.append((func, compiled))
                 callbacks_executing.add(index)
         # iterate over the values of the variable
-        var_values = self.computed_vars[iterating_var]
-        for value in var_values:
+        for value in self.computed_vars[iterating_var]:
             # update the dict_vars with the current value of the variable
             self._current_sweep_point[iterating_var] = value
             # execute the callbacks
-            for callback in callbacks:
-                callback[0](eval(callback[1], {}, self._current_sweep_point))
-                # self.logger.debug(f"Parameter change -> callback:'{callback[0].__name__}', params: '{callback[1]}', \
-                #                 variables: { {k: v.item() for k, v in dict_vars.items()} }")
-            # recursively call the function to iterate over the next variable
+            for ll_callback, compiled_eval in callbacks:
+                ll_callback(eval(compiled_eval, {}, self._current_sweep_point))
+            # recursively call the function to iterate over the next variable or call the function to run
+            # the experiement this is the inner most loop
             if depth == len(vars_order) - 1:
                 self._server._run_experiment()
             else:
@@ -237,7 +236,7 @@ class SweepExperiment:
                     sweep_routine=sweep_routine,
                     vars_order=vars_order,
                     depth=depth + 1,
-                    accounted_callbacks=sum(accounted_callbacks, callbacks_executing),
+                    accounted_callbacks=accounted_callbacks | callbacks_executing,
                 )
 
     def run(self, sweep_callbacks: list, variables: list) -> int:
