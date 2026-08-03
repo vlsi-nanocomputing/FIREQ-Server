@@ -1,4 +1,4 @@
-# 3. Dynamic System Tree & Sub-System Nodes
+# Dynamic System Tree & Sub-System Nodes
 
 The FIREQ Server models the hardware setup as an object tree powered by `anytree`. When the root system node initializes, it inspects the FPGA layout and dynamically builds child nodes representing individual hardware blocks. 
 

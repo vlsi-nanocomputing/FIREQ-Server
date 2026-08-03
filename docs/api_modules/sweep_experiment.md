@@ -1,4 +1,4 @@
-# 5. Sweep Experiment Engine
+# Sweep Experiment Engine
 
 Multi-dimensional parameter sweeps (e.g., sweeping drive frequency vs. pulse duration) are handled by the `SweepExperiment` class. 
 

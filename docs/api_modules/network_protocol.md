@@ -1,4 +1,4 @@
-# 6. Network Protocol & Worker Threads
+# Network Protocol & Worker Threads
 
 The server exposes a custom TCP binary protocol using **MsgPack** for structural metadata and raw byte streams for large hardware sample arrays.
 

@@ -1,4 +1,4 @@
-# 2. Top-Level System API
+# Top-Level System API
 
 The `FIREQSystemNode` class serves as the core manager of the server state. Inheriting from `_GenericNode`, it acts as the root of the system tree, holding references to all hardware IP wrappers, frequency parameters, and memory boundaries.
 

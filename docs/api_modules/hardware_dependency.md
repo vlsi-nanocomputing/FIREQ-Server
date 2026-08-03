@@ -1,4 +1,4 @@
-# 4. Hardware Dependency Resolution
+# Hardware Dependency Resolution
 
 Experiment configurations contain interdependent variables. For instance, altering the acquisition duration changes the payload size, which in turn alters the maximum number of hardware shots that can fit into the acquisition FIFO. 
 

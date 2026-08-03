@@ -1,4 +1,4 @@
-# 1. Runtime Management & Entry Point
+# Runtime Management & Entry Point
 
 The server is launched via an interactive CLI entry point module. Upon execution, it establishes standard system logging, prompts for environment settings, instantiates the root system interface with the chosen bitstream, and binds the TCP network server to a specified network interface.
 

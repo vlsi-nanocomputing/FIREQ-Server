@@ -1,135 +1,108 @@
-# Server
+# Server Deployment & Operational Guide
 
-This page documents the FIREQ server deployment and startup workflow on the PYNQ-based target board.
+This page documents the deployment workflow, initial configuration, CLI startup prompts, and execution runtime for the FIREQ server on the PYNQ-based RFSoC board.
 
-## Quick reference
+---
 
-A typical server startup workflow is:
+## Quick Reference
 
-1. copy the project to the board,
-2. connect over SSH,
-3. switch to root with `sudo -i` if needed,
-4. activate the environment with `source /etc/profile.d/pynq_venv.sh`,
-5. install dependencies with `pip install -r requirements.txt`,
-6. start the server with `python API.py`.
+A standard deployment and execution lifecycle follows these steps:
 
-## Deployment on the board
+1. **Copy** the repository to the board: `scp -r FIREQ-Server xilinx@<board-ip>:/home/xilinx/`
+2. **Connect** over SSH: `ssh xilinx@<board-ip>`
+3. **Switch to root**: `sudo -i`
+4. **Activate PYNQ environment**: `source /etc/profile.d/pynq_venv.sh`
+5. **Install dependencies**: `pip install -r requirements.txt`
+6. **Launch the server**: `python API.py`
 
-To deploy the server to the board, copy the relevant project files to the target system, for example:
+---
+
+## Deployment on the Target Board
+
+To deploy the server application, transfer the project folder and the FPGA bitstream files onto the target Linux filesystem:
 
 ```bash
 scp -r /path/to/FIREQ-Server xilinx@<board-ip>:/home/xilinx/
 ```
 
-Make sure the overlay files and any required runtime assets are available on the board before starting the server.
+Before launching the service, ensure that the FPGA overlay artifacts (`.bit` and matching `.hwh` files) are located under the target directory `/home/xilinx/`.
 
-## Overlay path and bitstream files
+## Environment Setup & SSH Access
 
-The server expects the overlay files to be available in the board filesystem. In practice, the overlay path is typically relative to:
-
-```bash
-/home/xilinx
-```
-
-When configuring the overlay, you will need to provide:
-
-- the `.bit` file name,
-- the `.hwh` file name.
-
-These values are used by the server when loading the FPGA overlay.
-
-## SSH connection
-
-Connect to the board over SSH:
+1. Open a terminal session to connect to the board:
 
 ```bash
 ssh xilinx@<board-ip>
 ```
-
-## Switching to root
-
-Once logged in, switch to the root user when privileged operations are required:
+2. Acquire root privileges (required for PYNQ direct memory-mapped access and hardware registers):
 
 ```bash
 sudo -i
 ```
-
-Use the password for the root account when prompted.
-
-## Python environment
-
-Before running the server, activate the PYNQ virtual environment:
+3. Activate the system PYNQ virtual environment to load numpy, pynq, and network libraries:
 
 ```bash
-source /etc/profile.d/pynv_venv.sh
+source /etc/profile.d/pynq_venv.sh
 ```
-
-Then install the Python dependencies:
+4. If dependencies need to be installed or updated, run:
 
 ```bash
+cd /home/xilinx/FIREQ-Server
 pip install -r requirements.txt
 ```
 
-## Starting the server
+## Interactive Startup Sequence (`API.py`)
 
-Change to the project directory and launch the server:
+Launch the server using the main entry point:
 
 ```bash
-cd /home/xilinx/FIREQ-test
 python API.py
 ```
 
-After the server is running, the FIREQ-Client can be started from a separate computer to connect to the board and submit experiments.
-The client repository is available at [FIREQ-Client on GitHub](https://github.com/vlsi-nanocomputing/FIREQ-Client).
+Upon launch, `API.py` executes an interactive prompt setup:
 
-## Guided startup prompts
+- **Logging level**: Type `debug` or press `Enter` for default `info`.
+- **Overlay filename**: Enter the bitstream filename relative to `/home/xilinx/` (press `Enter` for default `overlay.bit`). The matching `.hwh` hardware handoff file must reside in the same directory.
+- **Server host**: Define the listening interface (press `Enter` for `0.0.0.0` to bind all network interfaces).
+- **Server port**: Define the TCP port (press `Enter` for `5000`).
+- **Auth token**: Define the secret security token (press `Enter` for default `"fireq"`).
 
-The server startup flow asks for several values interactively:
+Once inputs are accepted, `FIREQServer` loads the FPGA overlay, initializes memory-mapped registers, binds the socket to the chosen address, and starts worker threads.
 
-- `login level`: choose the logging verbosity, for example `debug` or `info`.
-- `overlay filename`: provide the overlay name relative to `/home/xilinx`.
-- `.bit` and `.hwh`: specify the associated FPGA bitstream and hardware handoff files.
+To stop the server safely without leaving hardware registers in uninitialized states, press `Ctrl+C` (`KeyboardInterrupt`).
 
-## Exposed endpoints or commands
+## Network Communication & Client Commands
 
-The server accepts a small set of client commands over the TCP connection. The main ones are:
+The server operates a binary TCP socket server managed by `ReceiveWorker` and `SendWorker` threads.
 
-- `ping`: checks that the server is reachable and responsive.
-- `apply_configuration`: applies a hardware configuration received from the client.
-- `config_and_run`: applies the configuration and starts an experiment, including sweep execution when variables are provided.
-- `reset_all`: resets the hardware state.
-- `logout`: closes the client connection.
+### Protocol Framing
 
-Unknown or malformed commands are answered with an error message.
+All network frames follow a structured format:
 
-## Communication protocol
+1. **Length Header**: 4-byte Big-Endian Unsigned Integer stating the size ($N$) of the MsgPack header.
+2. **MsgPack Payload**: Serialized dictionary specifying command type (`type`), parameter trees, authentication token, and optional binary size (`tsize`).
+3. **Binary Data (Optional)**: Trailing byte arrays containing raw DMA acquisition samples or envelope buffers.
 
-The server uses a simple framed TCP protocol:
+### Commands Handled by Server
 
-- the client sends a 4-byte big-endian length prefix,
-- followed by a serialized message header,
-- and optionally additional binary payload data.
+- **Authentication & Token Check**: Validates client request tokens against the configured server token.
+- **`apply_configuration`**: Deserializes system configuration maps, updating node tree parameters (`$duration`, `$dfrequency`, etc.) and recalculating execution DAG dependencies.
+- **`config_and_run` / `run_experiment`**: Applies runtime sweeps via `SweepExperiment`, programs hardware registers, triggers pulse generation, and streams `DMAPayload` objects back to the client.
+- **`reset_all`**: Clears memory buffers, resets internal hardware states, and resets sub-system wrappers.
+- **`logout` / Connection Teardown**: Closes worker threads cleanly and frees memory buffers.
 
-The server replies with structured network packets and, for experiment runs, streamed binary data that can include acquisition frames and timing information.
+Clients can connect using the official client library available at [FIREQ-Client on GitHub](https://github.com/vlsi-nanocomputing/FIREQ-Client).
 
-During startup, the server also performs a handshake with the client. The client must provide the expected authentication token, otherwise the connection is rejected.
+## Logging & Traceability
 
-## Logging
+The server employs standard Python `logging` for operational monitoring:
 
-The server uses Python logging with configurable verbosity. The startup script prompts for the logging level and supports:
+- **`INFO` (Default)**: Tracks lifecycle events including bitstream loading, client connection/disconnection, handshake validation, experiment run execution, and teardown.
+- **`DEBUG`**: Detailed logging of binary network frame sizes, raw dictionary payloads, topological order updates within `_DependencyOrchestrator`, and DMA buffer states.
 
-- `info` for standard operational logs,
-- `debug` for more detailed execution traces.
+## Error Handling & Resiliency
 
-Typical messages include server startup, client connection, handshake status, command processing, experiment start/end, and connection teardown.
-
-## Error handling
-
-The server is designed to fail gracefully when something goes wrong:
-
-- invalid or unsupported commands generate an error packet for the client;
-- malformed or invalid configurations are rejected with a warning or error message;
-- experiment execution failures are logged and reported back to the client;
-- broken connections are handled by closing the client session and clearing the I/O queues.
-
-In practice, errors are logged at warning or exception level and propagated back through the network layer whenever possible.
+- **Invalid Overlay Path**: If the requested `.bit` file does not exist, `API.py` logs an error and aborts startup cleanly.
+- **Invalid Port / Binding Error**: Errors during socket binding log an exception and exit immediately without leaving dangling background threads.
+- **Malformed Client Packets / Unauthorized Token**: The server rejects invalid packets or mismatched tokens, returning an explicit error header to the client while keeping the background network loop active.
+- **Hardware & DMA Buffer Safety**: The `FIFONode` and `_DependencyOrchestrator` dynamically calculate physical memory capacity to avoid FPGA buffer overruns during high-shot experiment execution.
