@@ -12,7 +12,14 @@ For a more detailed explanation, see:
 - [API](api.md): entry points and server-side execution concepts.
 
 
-
+```{toctree}
+:maxdepth: 2
+:caption: Index
+overview
+installation
+server
+api
+```
 ## Contributing and Support
 
 The GitHub repository for FIREQ-Server is here:
@@ -34,11 +41,4 @@ If you find a problem, please open an issue on GitHub:
 
 If you have questions, ideas, or need support, feel free to create a discussion or open an issue on GitHub.
 
-```{toctree}
-:maxdepth: 2
 
-overview
-installation
-server
-api
-```

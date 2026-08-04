@@ -4,19 +4,6 @@ This page documents the deployment workflow, initial configuration, CLI startup 
 
 ---
 
-## Quick Reference
-
-A standard deployment and execution lifecycle follows these steps:
-
-1. **Copy** the repository to the board: `scp -r FIREQ-Server xilinx@<board-ip>:/home/xilinx/`
-2. **Connect** over SSH: `ssh xilinx@<board-ip>`
-3. **Switch to root**: `sudo -i`
-4. **Activate PYNQ environment**: `source /etc/profile.d/pynq_venv.sh`
-5. **Install dependencies**: `pip install -r requirements.txt`
-6. **Launch the server**: `python API.py`
-
----
-
 ## Deployment on the Target Board
 
 To deploy the server application, transfer the project folder and the FPGA bitstream files onto the target Linux filesystem:
@@ -51,7 +38,7 @@ cd /home/xilinx/FIREQ-Server
 pip install -r requirements.txt
 ```
 
-## Interactive Startup Sequence (`API.py`)
+## Interactive Startup Sequence
 
 Launch the server using the main entry point:
 
