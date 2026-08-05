@@ -1,7 +1,10 @@
+import logging
 from typing import Any, TextIO
 
 import numpy as np
 from pynq import MMIO, DefaultIP
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "_FIREQDriver",
@@ -29,14 +32,30 @@ class _FIREQDriver(DefaultIP):
         :type description: dict
         """
         super().__init__(description=description)
+        self.log = logging.getLogger(__name__)
         self._axi_full_interface_mmio = None
         self._axi_lite_interface_mmio = None
         self._debug_level = 0
 
-    def print_description(self) -> None:
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        self.log.warning("Called reset method without implementation.")
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
+
+    def print_description(self, printer_func: callable) -> None:
         """Print the description of the IP.
 
         This method should be overridden by subclasses.
+
+        :param printer_func: Function to use to print the description
+        :type printer_func: callable
         """
         pass
 
@@ -117,11 +136,20 @@ class _DebugMMIO:
         :param file: File handler to write AXI transactions
         :type file: TextIO
         """
+        self.log = logging.getLogger(__name__)
         self._file_handler = file
         self._replaces = replaces
         self._debug_level = debug_level
         self._memory = {}
         self.base_addr = self._replaces.base_addr
+
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
+
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
     @property
     def replaces(self) -> MMIO:

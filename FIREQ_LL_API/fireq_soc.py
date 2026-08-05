@@ -1,5 +1,6 @@
 """Low-level FIREQ SoC overlay support and discovery helpers."""
 
+import logging
 import os
 import re
 import time
@@ -11,6 +12,7 @@ from pynq import PL, Overlay
 from ._fireq_parser import FireqParser
 from ._utils import _FIREQDriver
 from .acquisition_driver import AcquisitionDriver
+from .fifo_wrapper import FIFOWrapper
 from .generator_driver import GeneratorDriver
 from .trigger_generator_driver import TriggerGeneratorDriver
 
@@ -47,65 +49,67 @@ class FIREQSoC(Overlay):
         :type init_clocks: bool
         :raises RuntimeError: If overlay creation fails
         """
-        # 1) Load overlay
+        # set up logger
+        self.log = logging.getLogger(__name__)
+
+        # reset the PL server, clears bugged pynq caches that could lead to issues
+        PL.reset()
+
+        # Load overlay
         try:
+            self.log.debug("Creating overlay from %s", bitfile_name)
             super().__init__(bitfile_name, ignore_version=ignore_version)
         except Exception as e:
             # better to raise an exception: server aware of the problem
+            self.log.error("Error during overlay creation: %s", e)
             raise RuntimeError(f"FIREQ: error during overlay creation: {e}") from e
 
-        # 2) HWH + parser
+        # HWH + parser
         self._fireq_hwh_file = os.path.splitext(self.bitfile_name)[0] + ".hwh"
         self._fireq_parser = FireqParser(self._fireq_hwh_file)
 
-        # 3) RF clocks initialisation
+        # RF clocks initialisation
         if init_clocks:
             self._init_rf_clks()
 
-        # 4) FIREQ IPs lists
-        self._generation_ips: list[GeneratorDriver] = []
-        self._acquisition_ips: list[AcquisitionDriver] = []
-        self._trigger_ips: list[TriggerGeneratorDriver] = []
-        self._GEN_RF_MAP: dict[int, dict[str, tuple[int, int]]] = {}
-        self._ACQ_RF_MAP: dict[int, tuple[int, int]] = {}
-        self._cached_nyquist_zone: dict[tuple, int] = {}
+        # init the axi interfaces of FIREQ drivers
+        self._init_fireq_ips()
 
-        # 5) Low-level discovery (bind AXI + classify IPs)
-        self._rf = self.usp_rf_data_converter_0
-        self._axis_switch = self.axis_switch_0
-        self._dma = self.axi_dma_0
+        # Organize ALL IPs in the design as (instance (str), ip_object, type(ip_object).__name__)
+        self.ips = {}
+        self._discover_ips()
 
-        self._discover_fireq_ips()
+        # Check the existance of FIREQ ips in the design
+        self._check_fireq_ips()
 
-        if self._rf:
-            self._map_rf_topology()
-        # Basic resource sanity check
-        if not self._generation_ips:
-            raise RuntimeError("FIREQ_SoC: no Generator IPs found in overlay.")
-        if not self._acquisition_ips:
-            raise RuntimeError("FIREQ_SoC: no Acquisition IPs found in overlay.")
-        if not self._trigger_ips:
-            raise RuntimeError("FIREQ_SoC: no TriggerGenerator IP found in overlay.")
+        # Find the rfdc IP
+        self.rfdc = None
+        self.active_adcs = None
+        self.active_dacs = None
+        self._discover_rfdc()
 
-        # 6) Hardware specs (clock validation, sample rates etc.)
-        self.num_generators = len(self._generation_ips)
-        self.num_acquisitions = len(self._acquisition_ips)
-        self.num_triggers = len(self._trigger_ips)
+        # Find the clocks
+        self.dac_samplerate = None
+        self.adc_samplerate = None
+        self.fabric_frequency = None
+        self._discover_clocks()
+        self.log.debug(f"DAC sampling rate is: {self.dac_samplerate} MHz")
+        self.log.debug(f"ADC sampling rate is: {self.adc_samplerate} MHz")
+        self.log.debug(f"Fabric clock is: {self.fabric_frequency} MHz")
 
-        self.hw_specs = self._build_hw_specs()
+        # freeze calibration for all ADCs
+        for adc_index in self.active_adcs:
+            self.set_adc_autocalibration_status(adc_index, freeze=True)
 
-        # 7) Health flag
-        self._healthy = True  # if _build_hw_specs did not raise exceptions
+    def set_logger(self, new_logger: logging.Logger) -> None:
+        """Set the logger for this object.
 
-        # 8) recommended PL reset
-        PL.reset()
+        :param new_logger: Logger object to use
+        :type new_logger: logging.Logger
+        """
+        self.log = new_logger
 
-        # 9) freeze calibration for all ADCs
-        for acq_idx in range(len(self._acquisition_ips)):
-            self.set_adc_autocalibration_status(acq_idx, freeze=True)
-
-    @staticmethod
-    def _init_rf_clks(lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
+    def _init_rf_clks(self, lmk_freq: float = 245.76, lmx_freq: float = 491.52) -> None:
         """Initialise the LMK and LMX clocks for the RF-DC hierarchy.
 
         The radio clocks are required to talk to the RF-DCs and only need to be
@@ -116,899 +120,218 @@ class FIREQSoC(Overlay):
         :param lmx_freq: Frequency of the LMX clock in MHz, defaults to 491.52
         :type lmx_freq: float
         """
+        self.log.debug("Initialising RF clocks: LMK=%s MHz, LMX=%s MHz", lmk_freq, lmx_freq)
         xrfclk.set_ref_clks(lmk_freq=lmk_freq, lmx_freq=lmx_freq)
 
     # ------------------------------------------------------------------
     # Discovery helpers
     # ------------------------------------------------------------------
-    def _discover_fireq_ips(self) -> None:
-        """Bind AXI interfaces and classify FIREQ IPs by type.
+    def _check_fireq_ips(self) -> None:
+        """Check that the design contains the necessary FIREQ IPs to conduct experiments."""
+        if len(self.ips) == 0:
+            self.log.error("No FIREQ IPs found in the design.")
+            raise RuntimeError("No FIREQ IPs found in the design.")
+        gen_count = 0
+        acq_count = 0
+        ctrl_count = 0
+        for ip in self.ips.values():
+            if ip[2] == GeneratorDriver.__name__:
+                gen_count += 1
+            elif ip[2] == AcquisitionDriver.__name__:
+                acq_count += 1
+            elif ip[2] == TriggerGeneratorDriver.__name__:
+                ctrl_count += 1
+        self.log.debug(
+            "Found %s generators, %s acquisitions and %s trigger generators", gen_count, acq_count, ctrl_count
+        )
+        if gen_count == 0 or acq_count == 0 or ctrl_count == 0:
+            self.log.error("The design does not contain the necessary FIREQ IPs to conduct experiments.")
+            raise RuntimeError("The design does not contain the necessary FIREQ IPs to conduct experiments.")
+        if ctrl_count > 1:
+            self.log.error("Only one control IP (TriggerGenerator) is allowed in the design at this time")
+            raise NotImplementedError("Only one control IP (TriggerGenerator) is allowed in the design at this time")
 
-        Uses the parser's get_address_mapping() to initialize AXI interfaces
-        and populates the following instance attributes:
+    def _init_fireq_ips(self) -> None:
+        """Initialize the axi interfaces for FIREQ IPs.
 
-        - _generation_ips: List of GeneratorDriver instances
-        - _acquisition_ips: List of AcquisitionDriver instances
-        - _trigger_ips: List of TriggerGeneratorDriver instances
+        Some FIREQ IPs have two axi4 interfaces, one full and one lite.
+        PYNQ does not support this, so we need to manually set the axi4 interfaces.
         """
+        self.log.debug("Initialising FIREQ IPs")
         mmap = self._fireq_parser.get_address_mapping()
 
-        for ip_name, maps in mmap.items():
-            if not hasattr(self, ip_name):
+        # check that the ps name is the mapping, otherwise raise an error
+        if self._fireq_parser.ps_name not in mmap.keys():
+            self.log.error("PS name %s not found in memory map.", self._fireq_parser.ps_name)
+            raise RuntimeError(f"PS name {self._fireq_parser.ps_name} not found in memory map.")
+
+        for axi_map in mmap[self._fireq_parser.ps_name]:
+            if not hasattr(self, axi_map["INSTANCE"]):
                 continue
 
-            ip_object = getattr(self, ip_name)
-
+            ip_object = getattr(self, axi_map["INSTANCE"])
             # Only consider FIREQ low-level drivers
             if not isinstance(ip_object, _FIREQDriver):
                 continue
 
             # Init AXI based on mapping
-            for m in maps:
-                axi_base = int(m["BASEVALUE"], 16)
-                axi_range = int(m["HIGHVALUE"], 16) - axi_base + 1
+            self.log.debug("Initialising AXI interfaces for %s", axi_map["INSTANCE"])
+            axi_base = int(axi_map["BASEVALUE"], 16)
+            axi_range = int(axi_map["HIGHVALUE"], 16) - axi_base + 1
+            if axi_map["SLAVEBUSINTERFACE"] == "s00_axi":
+                ip_object.init_axi_full_interface(axi_base, axi_range)
+            elif axi_map["SLAVEBUSINTERFACE"] == "s01_axi":
+                ip_object.init_axi_lite_interface(axi_base, axi_range)
 
-                if m["SLAVEBUSINTERFACE"] == "s00_axi":
-                    ip_object.init_axi_full_interface(axi_base, axi_range)
-                elif m["SLAVEBUSINTERFACE"] == "s01_axi":
-                    ip_object.init_axi_lite_interface(axi_base, axi_range)
+        # find and initialize the FIFOs
+        for node, data in self._fireq_parser.system_graph.nodes(data=True):
+            if data["vlnv"] in FIFOWrapper.bindto:
+                self.log.debug("Initialising FIFO %s", data["instance"])
+                fifo = FIFOWrapper(self._fireq_parser.get_module_parameters(node))
+                setattr(self, data["instance"], fifo)
 
-            # Classification by driver type
-            if isinstance(ip_object, GeneratorDriver):
-                self._generation_ips.append(ip_object)
-            elif isinstance(ip_object, AcquisitionDriver):
-                self._acquisition_ips.append(ip_object)
-            elif isinstance(ip_object, TriggerGeneratorDriver):
-                self._trigger_ips.append(ip_object)
-
-    @staticmethod
-    def _get_gen_label_from_port_alias(gen_port_alias: str) -> str:
-        """Determine the generator label from a port alias.
-
-        Classifies the generator port as either 'drive' or 'readout' based on
-        naming conventions in the port alias. Ports containing 'm0' or 'drive'
-        are classified as drive ports, all others as readout ports.
-
-        :param gen_port_alias: The generator port alias string to analyze
-        :type gen_port_alias: str
-        :return: Generator label, either 'drive' or 'readout'
-        :rtype: str
-        """
-        alias = gen_port_alias.lower()
-        return "drive" if "m0" in alias or "drive" in alias else "readout"
-
-    @staticmethod
-    def _find_rfdc_sinks(
-        node_dict: dict[str, object],
-        rfdc_name: str,
-        source_alias: str | None = None,
-    ) -> list[tuple[str, str]]:
-        """Find all RFDC slave port connections in a connectivity tree.
-
-        :param node_dict: Connectivity graph node
-        :type node_dict: dict[str, object]
-        :param rfdc_name: Instance name of the RF data converter
-        :type rfdc_name: str
-        :param source_alias: Original generator source port alias propagated through
-            pass-through modules
-        :type source_alias: str | None
-        :return: List of (rfdc_port, gen_port_alias) tuples
-        :rtype: list[tuple[str, str]]
-        """
-        results: list[tuple[str, str]] = []
-        curr_alias = source_alias
-        if curr_alias is None and node_dict["BUS_M/S"][0] is not None:
-            curr_alias = node_dict["BUS_M/S"][0]
-
-        if node_dict["NODE"] == rfdc_name:
-            results.append((node_dict["BUS_M/S"][1], curr_alias or node_dict["BUS_M/S"][0]))
-            return results
-        for child in node_dict.get("CHILDREN", []):
-            results.extend(FIREQSoC._find_rfdc_sinks(child, rfdc_name, curr_alias))
-        return results
-
-    @staticmethod
-    def _trace_rfdc_source(
-        node_dict: dict[str, object],
-        source_port_name: str,
-        rfdc_name: str,
-        acquisition_ips: list,
-        at_root: bool = True,
-    ) -> int | None:
-        """Trace an RFDC master port back to the acquisition IP it connects to.
-
-        :param node_dict: Connectivity graph node
-        :type node_dict: dict[str, object]
-        :param source_port_name: RFDC master port name to trace
-        :type source_port_name: str
-        :param rfdc_name: Instance name of the RF data converter
-        :type rfdc_name: str
-        :param acquisition_ips: List of AcquisitionDriver instances
-        :type acquisition_ips: list
-        :param at_root: Whether currently at the root node, defaults to True
-        :type at_root: bool
-        :return: Acquisition IP index, or None if not found
-        :rtype: int | None
-        """
-        if at_root and node_dict["NODE"] == rfdc_name:
-            for child in node_dict["CHILDREN"]:
-                if child["BUS_M/S"][0] == source_port_name:
-                    return FIREQSoC._trace_rfdc_source(
-                        child, source_port_name, rfdc_name, acquisition_ips, at_root=False
-                    )
-            return None
-
-        curr_name = node_dict["NODE"]
-        for idx, acq in enumerate(acquisition_ips):
-            acq_fullpath = getattr(acq, "_fullpath", "")
-            if acq_fullpath and acq_fullpath.split("/")[0] == curr_name:
-                return idx
-
-        for child in node_dict.get("CHILDREN", []):
-            res = FIREQSoC._trace_rfdc_source(child, source_port_name, rfdc_name, acquisition_ips, at_root=False)
-            if res is not None:
-                return res
-        return None
-
-    def _trace_rfdc_sink(
-        self,
-        sink_port_name: str,
-        rfdc_name: str,
-        all_modules: list,
-    ) -> tuple[int, str] | None:
-        """Trace an RFDC slave port back to the generator IP and label it connects to.
-
-        :param sink_port_name: RFDC slave port name (e.g. s20_axis)
-        :type sink_port_name: str
-        :param rfdc_name: Instance name of the RF data converter
-        :type rfdc_name: str
-        :param all_modules: Full module list from HWH parser
-        :type all_modules: list
-        :return: Tuple (gen_index, label) or None if not found
-        :rtype: tuple[int, str] | None
-        """
-        for gen_idx, gen in enumerate(self._generation_ips):
-            gen_fullpath = getattr(gen, "_fullpath", "")
-            if not gen_fullpath:
+    def _discover_ips(self) -> None:
+        """Build the IP lists."""
+        # go through the system graph and find all addressable ips
+        for node in self._fireq_parser.system_graph:
+            instance = self._fireq_parser.system_graph.nodes[node]["instance"]
+            # continue if not an attribute or if the name is the ps name, because pynq crashes
+            if instance is self._fireq_parser.ps_name or not hasattr(self, instance):
                 continue
+            self.log.debug("Found IP %s", instance)
+            ip_object = getattr(self, instance)
+            # add the ip to the dictionary, by storing the instance name as the key and the type as the value
+            self.ips[node] = (instance, ip_object, type(ip_object).__name__)
 
-            gen_instance_name = gen_fullpath.split("/")[0]
-            gen_xml = self._fireq_parser.get_module(gen_instance_name)
-            if gen_xml is None:
-                continue
-
-            conn = self._fireq_parser.get_connectivity(gen_xml, all_modules)
-            for rfdc_port, gen_port_alias in self._find_rfdc_sinks(conn, rfdc_name):
-                if rfdc_port == sink_port_name:
-                    return gen_idx, self._get_gen_label_from_port_alias(gen_port_alias)
-
-        return None
-
-    def _map_rf_topology(self) -> None:
-        """Derive the physical RF connections (Tile/Block) for Generators and Acquisitions.
-
-        Traverses the AXI-Stream connectivity graph to populate:
-
-        - _GEN_RF_MAP: Maps generator indices to their DAC tile/block coordinates
-        - _ACQ_RF_MAP: Maps acquisition indices to their ADC tile/block coordinates
-        """
-        all_modules = list(self._fireq_parser._modules)
-        rfdc_name = "usp_rf_data_converter_0"
-
-        rfdc_xml = self._fireq_parser.get_module(rfdc_name)
-        if rfdc_xml:
-            conn_rfdc = self._fireq_parser.get_connectivity(rfdc_xml, all_modules)
-            rfdc_interfaces = self._fireq_parser.get_bus_interfaces(rfdc_xml)
-
-            # -----------------------------------------------------------------
-            # 1. Map Generators (DAC Path) - same strategy as ADC:
-            #    iterate RFDC ports first, then trace back to endpoint IP index.
-            # -----------------------------------------------------------------
-            for _bus_name, attribs in rfdc_interfaces.items():
-                if attribs["TYPE"] in ["SLAVE", "TARGET"]:
-                    port_name = attribs["NAME"]
-                    # DAC uses sXY_axis (slave ports)
-                    m = re.match(r"s(\d)(\d)_axis", port_name)
-                    if m:
-                        tile = int(m.group(1))
-                        port_indicator = int(m.group(2))
-                        block = port_indicator
-
-                        # Keep compatibility across RFDC variants:
-                        # some expose one AXIS port per block, others expose two ports per block.
-                        if self._rf is not None and tile < len(self._rf.dac_tiles):
-                            n_blocks = len(getattr(self._rf.dac_tiles[tile], "blocks", []))
-                            if n_blocks > 0 and block >= n_blocks:
-                                collapsed_block = port_indicator // 2
-                                if collapsed_block < n_blocks:
-                                    block = collapsed_block
-
-                        trace = self._trace_rfdc_sink(port_name, rfdc_name, all_modules)
-                        if trace is not None:
-                            gen_idx, label = trace
-                            if gen_idx not in self._GEN_RF_MAP:
-                                self._GEN_RF_MAP[gen_idx] = {}
-                            self._GEN_RF_MAP[gen_idx][label] = (tile, block)
-
-            # -----------------------------------------------------------------
-            # 2. Map Acquisitions (ADC Path)
-            # -----------------------------------------------------------------
-            for _bus_name, attribs in rfdc_interfaces.items():
-                if attribs["TYPE"] in ["MASTER", "INITIATOR"]:
-                    port_name = attribs["NAME"]
-                    # ADC uses mXY_axis (master ports)
-                    m = re.match(r"m(\d)(\d)_axis", port_name)
-                    if m:
-
-                        # Dual ADC tile: 2 blocks per tile
-                        tile = int(m.group(1))
-                        port_indicator = int(m.group(2))
-                        block = port_indicator // 2
-
-                        acq_idx = self._trace_rfdc_source(conn_rfdc, port_name, rfdc_name, self._acquisition_ips)
-
-                        if acq_idx is not None:
-                            self._ACQ_RF_MAP[acq_idx] = (tile, block)
-
-    def _get_fifo_depth(self, *, acq_inst: str, mode: str) -> int:
-        """FIFO depth extraction based on HWH structure.
-
-        axisAcquisitionIP_X (m00_axis or m01_axis)
-            -> axis_register_slice (S_AXIS shares BUSNAME)
-            -> axis_data_fifo (S_AXIS shares BUSNAME of regslice M_AXIS)
-            -> read FIFO_DEPTH (or C_FIFO_DEPTH)
-
-        :param acq_inst: Instance name of the acquisition IP
-        :type acq_inst: str
-        :param mode: Acquisition mode, either "raw" or "decimated"
-        :type mode: str
-        :return: The depth of the FIFO in words, or -1 if not found
-        :rtype: int
-        :raises ValueError: If mode is not 'raw' or 'decimated'
-        """
-        # 1) Map mode -> which Acq output port we follow
-        mode_to_port = {
-            "decimated": "m01_axis",
-            "raw": "m00_axis",
-        }
-        if mode not in mode_to_port:
-            raise ValueError(f"Unknown mode={mode}. Expected one of {list(mode_to_port)}")
-
-        port_name = mode_to_port[mode]
-
-        # 2) Get Acq module XML and its BUSNAME for that port
-        acq_mod = self._fireq_parser.get_module(acq_inst)
-        if acq_mod is None:
-            return -1
-
-        acq_busifs = self._fireq_parser.get_bus_interfaces(acq_mod)  # dict: busname -> attribs
-        start_busname = None
-        for busname, a in acq_busifs.items():
-            if a.get("NAME") == port_name:
-                start_busname = busname
-                break
-        if not start_busname:
-            return -1
-
-        # 3) Find the register slice whose S_AXIS shares that BUSNAME
-        regslice_inst = None
-        regslice_mod = None
-        for m in self._fireq_parser._modules:
-            inst = m.attrib.get("INSTANCE", "")
-            vlnv = (m.attrib.get("VLNV", "") or "").lower()
-            if "axis_register_slice" not in vlnv:
-                continue
-
-            busifs = self._fireq_parser.get_bus_interfaces(m)
-            # we want the S_AXIS endpoint bound to the same BUSNAME
-            for busname, a in busifs.items():
-                if busname == start_busname and a.get("NAME") == "S_AXIS":
-                    regslice_inst = inst
-                    regslice_mod = m
-                    break
-            if regslice_inst:
+    def _discover_rfdc(self) -> None:
+        """Discover the RF-DC IP and initialize the clocks."""
+        # find the rfdc ip in the system graph
+        for ip in self.ips.values():
+            if ip[2] == "RFdc":
+                self.log.debug("Found RF-DC IP %s", ip[0])
+                self.rfdc = ip[1]
                 break
 
-        if not regslice_inst:
-            return -1
+        # if the rfdc is not found, assume debug overlay and set the sample rates to 1 and 2 GSps
+        if self.rfdc is None:
+            self.log.warning("RF-DC IP not found, assuming debug overlay")
+            return
 
-        # 4) From that register slice, take its M_AXIS BUSNAME
-        regslice_busifs = self._fireq_parser.get_bus_interfaces(regslice_mod)
-        next_busname = None
-        for busname, a in regslice_busifs.items():
-            if a.get("NAME") == "M_AXIS":
-                next_busname = busname
-                break
-        if not next_busname:
-            return -1
+        # if the rfdc is found, extract the active ADCs and DACs from the rfdc object
+        active_adcs = []
+        active_dacs = []
+        for tile_id, tile in enumerate(self.rfdc.adc_tiles):
+            for block_id, block in enumerate(tile.blocks):
+                try:
+                    _ = block.BlockStatus
+                    active_adcs.append((tile_id, block_id))
+                except Exception:
+                    continue
+        for tile_id, tile in enumerate(self.rfdc.dac_tiles):
+            for block_id, block in enumerate(tile.blocks):
+                try:
+                    _ = block.BlockStatus
+                    active_dacs.append((tile_id, block_id))
+                except Exception:
+                    continue
+        self.active_adcs = active_adcs
+        self.active_dacs = active_dacs
+        self.log.debug("Active ADCs: %s", self.active_adcs)
+        self.log.debug("Active DACs: %s", self.active_dacs)
 
-        # 5) Find the axis_data_fifo whose S_AXIS shares next_busname
-        fifo_inst = None
-        for m in self._fireq_parser._modules:
-            inst = m.attrib.get("INSTANCE", "")
-            vlnv = (m.attrib.get("VLNV", "") or "").lower()
-            if "axis_data_fifo" not in vlnv:
-                continue
+    def _discover_clocks(self) -> None:
+        """Discover the clocks and set the sample rates.
 
-            busifs = self._fireq_parser.get_bus_interfaces(m)
-            for busname, a in busifs.items():
-                if busname == next_busname and a.get("NAME") == "S_AXIS":
-                    fifo_inst = inst
-                    break
-            if fifo_inst:
-                break
+        The FIREQ system is defined by 3 main clocks:
+        - the fabric clock, which is the clock used by IPs
+        - the DAC sampling rate
+        - the ADC sampling rate
+        """
+        # go through the ips, find generators and acquisition and calculate the sampling frequency
+        # sampling frequency is the fabric frequency times the number of channels
+        gen_sr = []
+        acq_sr = []
+        fabric_frequency = []
+        for full_name, ip in self.ips.items():
+            # add the fabric frequency:
+            if ip[2] in [GeneratorDriver.__name__, AcquisitionDriver.__name__, TriggerGeneratorDriver.__name__]:
+                fabric_frequency.append(self.get_ip_frequency(full_name, ip[1].fabric_clock_port))
+            # add the sr
+            if ip[2] == GeneratorDriver.__name__:
+                gen_sr.append(fabric_frequency[-1] * ip[1].number_of_channels)
+            elif ip[2] == AcquisitionDriver.__name__:
+                acq_sr.append(fabric_frequency[-1] * ip[1].number_of_channels)
+        # check that all fabric frequencies are the same
+        if len(set(fabric_frequency)) > 1:
+            self.log.error("IPs have different fabric frequencies")
+            raise NotImplementedError("IPs have different fabric frequencies")
+        # check that all the generators have the same sampling frequency
+        if len(set(gen_sr)) > 1:
+            self.log.error("Generators have different sampling frequencies")
+            raise RuntimeError("Generators have different sampling frequencies")
+        # check that all the acquisitions have the same sampling frequency
+        if len(set(acq_sr)) > 1:
+            self.log.error("Acquisitions have different sampling frequencies")
+            raise RuntimeError("Acquisitions have different sampling frequencies")
+        # set the fabric and sampling frequencies in MHz
+        self.fabric_frequency = fabric_frequency[0] / 1e6
+        self.dac_samplerate = gen_sr[0] / 1e6
+        self.adc_samplerate = acq_sr[0] / 1e6
 
-        if not fifo_inst:
-            return -1
-
-        # 6) Read FIFO depth parameter (Vivado sometimes uses FIFO_DEPTH or C_FIFO_DEPTH)
-        depth = self._fireq_parser.get_parameter(fifo_inst, "FIFO_DEPTH") or self._fireq_parser.get_parameter(
-            fifo_inst, "C_FIFO_DEPTH"
-        )
-        try:
-            return int(depth)
-        except (TypeError, ValueError):
-            return -1
+        # set the DAC to ADC ratio for the acquisition drivers
+        for full_name, ip in self.ips.items():
+            if ip[2] == AcquisitionDriver.__name__:
+                ip[1].set_dac_to_adc_ratio(int(self.dac_samplerate // self.adc_samplerate))
 
     # ------------------------------------------------------------------
-    # Hardware specs builder
-    # ------------------------------------------------------------------
-    def _build_hw_specs(self) -> dict:
-        """Build a validated dictionary of hardware specifications.
-
-        Return structure (high level)::
-
-            {
-              "rf": { ... },              # DAC/ADC tiles, sample rate, nyquist, etc.
-              "acquisitions": [ {...} ],  # one per AcquisitionDriver
-              "generators":   [ {...} ],  # one per GeneratorDriver
-              "triggers":     [ {...} ],  # one per TriggerGeneratorDriver
-              "summary": { ... }          # convenient global aggregates
-            }
-
-        Strong constraint: DAC/ADC clocks (RF-DC tiles) must be synchronous
-        among themselves (multi-tile sync). If not, an exception is raised.
-        For the rest (parallelism, memories, etc.) differences are accepted
-        among the IPs, which are reflected in the acquisitions/generators lists.
-
-        :return: Dictionary containing hardware specifications
-        :rtype: dict
-        :raises RuntimeError: If no RF-DC hierarchy or no active tiles found
-        """
-        rf = self._rf
-        if rf is None:
-            raise RuntimeError(
-                "FIREQ_SoC: no RF Data Converter hierarchy found " "(usp_rf_data_converter_0 is missing)."
-            )
-
-        # --- DAC Validation ---
-        found_dac_sr = None
-        dac_tile_specs = []
-
-        for i, tile in enumerate(rf.dac_tiles):
-            try:
-                lock_stat = getattr(tile, "PLLLockStatus", "Unknown")
-                sr_ghz = tile.PLLConfig["SampleRate"]  # typically in GHz
-                sr = float(sr_ghz) * 1e9
-
-                if found_dac_sr is None:
-                    found_dac_sr = sr
-                elif abs(sr - found_dac_sr) > 1e3:  # tolerance 1 kHz
-                    raise RuntimeError(f"FIREQ_SoC: DAC Clock mismatch! " f"Tile {i} has {sr} Hz vs {found_dac_sr} Hz.")
-
-                dac_tile_specs.append(
-                    {
-                        "tile": i,
-                        "sample_rate_hz": sr,
-                        "pll_lock": lock_stat,
-                    }
-                )
-            except Exception:
-                # skip inactive or invalid tiles
-                continue
-
-        if found_dac_sr is None:
-            raise RuntimeError("FIREQ_SoC: no active DAC tiles found in the RF-DC.")
-
-        dac_sr = found_dac_sr
-
-        # --- ADC Validation ---
-        found_adc_sr = None
-        adc_tile_specs = []
-
-        for i, tile in enumerate(rf.adc_tiles):
-            try:
-                lock_stat = getattr(tile, "PLLLockStatus", "Unknown")
-                sr_ghz = tile.PLLConfig["SampleRate"]
-                sr = float(sr_ghz) * 1e9
-
-                if found_adc_sr is None:
-                    found_adc_sr = sr
-                elif abs(sr - found_adc_sr) > 1e3:
-                    raise RuntimeError(f"FIREQ_SoC: ADC Clock mismatch! " f"Tile {i} has {sr} Hz vs {found_adc_sr} Hz.")
-
-                adc_tile_specs.append(
-                    {
-                        "tile": i,
-                        "sample_rate_hz": sr,
-                        "pll_lock": lock_stat,
-                    }
-                )
-            except Exception:
-                continue
-
-        if found_adc_sr is None:
-            raise RuntimeError("FIREQ_SoC: no active ADC tiles found in the RF-DC.")
-
-        adc_sr = found_adc_sr
-
-        rf_specs = {
-            "dac_sr_hz": dac_sr,
-            "adc_sr_hz": adc_sr,
-            "dac_nyquist_hz": dac_sr / 2.0,
-            "adc_nyquist_hz": adc_sr / 2.0,
-            "dac_tiles": dac_tile_specs,
-            "adc_tiles": adc_tile_specs,
-        }
-
-        # ------------------------------------------------------------------
-        # AcquisitionDrivers: one entry per acquisition IP
-        # ------------------------------------------------------------------
-        acquisitions_specs = []
-        for idx, acq in enumerate(self._acquisition_ips):
-            acq_inst = f"axisAcquisitionIP_{idx}"
-
-            d_dec = self._get_fifo_depth(acq_inst=acq_inst, mode="decimated")
-            d_raw = self._get_fifo_depth(acq_inst=acq_inst, mode="raw")
-
-            acq_specs = {
-                "index": idx,
-                "sample_bits": getattr(acq, "sample_size", None),
-                "parallelism": getattr(acq, "number_of_channels", None),
-                "phase_bits": getattr(acq, "phase_depth", None),
-                "trigger_word_width": getattr(acq, "trigger_channels", None),
-                "duration_bits": getattr(acq, "duration_width", None),
-                "max_duration_cycles": getattr(acq, "maximum_duration", None),
-                "time_of_flight_bits": getattr(acq, "time_of_flight_width", None),
-                "time_of_flight_max": getattr(acq, "time_of_flight_max", None),
-                "raw_output_width_bits": getattr(acq, "non_decimated_output_width", None),
-                "dec_output_width_bits": getattr(acq, "decimated_output_width", None),
-                "raw_fifo_depth_words": d_raw,
-                "decimated_fifo_depth_words": d_dec,
-            }
-            acquisitions_specs.append(acq_specs)
-
-        # ------------------------------------------------------------------
-        # GeneratorDrivers: one entry per generator IP
-        # ------------------------------------------------------------------
-        generators_specs = []
-        for idx, gen in enumerate(self._generation_ips):
-            gen_specs = {
-                "index": idx,
-                "sample_bits": getattr(gen, "sample_size", None),
-                "parallelism": getattr(gen, "number_of_channels", None),
-                "phase_bits": getattr(gen, "phase_depth", None),
-                "trigger_word_width": getattr(gen, "trigger_channels", None),
-                "duration_bits": getattr(gen, "duration_width", None),
-                "max_duration_samples": getattr(gen, "maximum_duration", None),
-                "sample_mem_addr_bits": getattr(gen, "sample_memory_address_width", None),
-                "sample_mem_depth_words_per_channel": getattr(gen, "channel_sample_memory_depth", None),
-                "fractional_precision_bits": getattr(gen, "fractional_precision", None),
-                "wave_memory_depth": getattr(gen, "wave_memory_segment_depth", None),
-                "mm_fifo_depth": getattr(gen, "memory_mapped_fifo_segment_depth", None),
-                "axi_full_depth_bytes": getattr(gen, "axi_full_interface_depth", None),
-                "total_sample_mem_segment_depth": getattr(gen, "total_sample_memory_segment_depth", None),
-                "lfsr_seed_bits": getattr(gen, "seed_lfsr_width", None),
-            }
-            generators_specs.append(gen_specs)
-
-        # ------------------------------------------------------------------
-        # TriggerGeneratorDrivers: one entry per trigger IP
-        # ------------------------------------------------------------------
-        triggers_specs = []
-        for idx, trig in enumerate(self._trigger_ips):
-            trig_specs = {
-                "index": idx,
-                "trigger_channels": getattr(trig, "trigger_channels", None),
-                "fifo_interface_mem_depth_bytes": getattr(trig, "fifo_interface_memory_depth", None),
-                "channel_fifo_depth_words": getattr(trig, "channel_fifo_depth", None),
-                "fifo_output_width_bits": getattr(trig, "fifo_output_width", None),
-                "drive_delay_max": getattr(trig, "drive_delay_max", None),
-                "experiment_timer_max": getattr(trig, "experiment_timer_max", None),
-                "max_hw_repetitions": getattr(trig, "max_hw_repetitions", None),
-            }
-            triggers_specs.append(trig_specs)
-
-        # ------------------------------------------------------------------
-        # Summary
-        # ------------------------------------------------------------------
-
-        adc_parallelism_set = sorted({a["parallelism"] for a in acquisitions_specs if a["parallelism"] is not None})
-        dac_parallelism_set = sorted({g["parallelism"] for g in generators_specs if g["parallelism"] is not None})
-
-        trigger_channels_set = sorted(
-            {t["trigger_channels"] for t in triggers_specs if t["trigger_channels"] is not None}
-        )
-        max_hw_reps_list = [t["max_hw_repetitions"] for t in triggers_specs if t["max_hw_repetitions"] is not None]
-        exp_timer_max_list = [
-            t["experiment_timer_max"] for t in triggers_specs if t["experiment_timer_max"] is not None
-        ]
-
-        summary = {
-            "dac_sr_hz": rf_specs["dac_sr_hz"],
-            "adc_sr_hz": rf_specs["adc_sr_hz"],
-            "dac_nyquist_hz": rf_specs["dac_nyquist_hz"],
-            "adc_nyquist_hz": rf_specs["adc_nyquist_hz"],
-            "adc_parallelism_set": adc_parallelism_set,
-            "dac_parallelism_set": dac_parallelism_set,
-            # the following are set only if uniform across all IPs
-            "adc_parallelism": (adc_parallelism_set[0] if len(adc_parallelism_set) == 1 else None),
-            "dac_parallelism": (dac_parallelism_set[0] if len(dac_parallelism_set) == 1 else None),
-            # Trigger summary
-            # if more than one trigger generator IP, the list is aware and maximum timing is not forced to be uniform
-            "trigger_channels_set": trigger_channels_set,
-            "trigger_channels": (trigger_channels_set[0] if len(trigger_channels_set) == 1 else None),
-            "max_hw_repetitions_min": (min(max_hw_reps_list) if max_hw_reps_list else None),
-            "experiment_timer_max_min": (min(exp_timer_max_list) if exp_timer_max_list else None),
-        }
-
-        specs = {
-            "rf": rf_specs,
-            "acquisitions": acquisitions_specs,
-            "generators": generators_specs,
-            "triggers": triggers_specs,
-            "summary": summary,
-        }
-
-        return specs
-
-    # ------------------------------------------------------------------
-    # GeneratorIP low-level helpers
+    # IP helpers
     # ------------------------------------------------------------------
 
-    _WDW_BYTES = 16  # 128-bit per WDW
+    def get_ip_frequency(self, full_ip_name: str, clock_port: str) -> float:
+        """Get the fabric frequency of an IP.
 
-    def _get_gen(self, gen_index: int) -> GeneratorDriver:
-        """Retrieve a GeneratorDriver by index.
-
-        :param gen_index: Index of the generator
-        :type gen_index: int
-        :return: The GeneratorDriver at the specified index
-        :rtype: GeneratorDriver
-        :raises IndexError: If gen_index is out of range
+        :param full_ip_name: Full name of the IP.
+        :type full_ip_name: str
+        :param clock_port: Name of the clock port of the IP.
+        :type clock_port: str
+        :return: Fabric frequency in MHz.
+        :rtype: float
         """
-        if gen_index < 0 or gen_index >= len(self._generation_ips):
-            raise IndexError(f"gen_index out of range: {gen_index}")
-        return self._generation_ips[gen_index]
+        # use the clock graph on the parser to extract the clock frequency
+        clock_graph = self._fireq_parser.clock_graph
+        # get the clock frequency of the ip
+        for _, v, data in clock_graph.edges(data=True):
+            if v == full_ip_name and data["slave_port"] == clock_port:
+                return float(data["frequency"])
+        # if not found, raise an error
+        raise RuntimeError(f"Clock not found for IP {full_ip_name} on port {clock_port}")
 
-    def envelope_cache(self, gen_index: int = 0) -> dict:
-        """Return a snapshot of the GeneratorDriver envelope cache.
-
-        :param gen_index: Index of the generator
-        :type gen_index: int
-        :return: Dictionary mapping envelope names to metadata
-        :rtype: dict
-        """
-        gen = self._get_gen(gen_index)
-        return dict(gen.envelope_memory_dict)
-
-    def wave_cache(self, gen_index: int = 0) -> dict:
-        """Return a snapshot of the GeneratorDriver wave cache.
-
-        :param gen_index: Index of the generator
-        :type gen_index: int
-        :return: Dictionary mapping wave names/slots to byte addresses
-        :rtype: dict
-        """
-        gen = self._get_gen(gen_index)
-        return dict(gen.wave_memory_dict)
-
-    def wave_mem_stats(self, gen_index: int = 0) -> dict:
-        """Return wave memory usage statistics.
-
-        :param gen_index: Index of the generator
-        :type gen_index: int
-        :return: Dictionary with used_bytes, total_bytes, used_slots, total_slots,
-            free_slots
-        :rtype: dict
-        """
-        gen = self._get_gen(gen_index)
-        used_bytes = int(gen.wave_memory_dict.get("_NEXT", 0))
-        total_bytes = int(getattr(gen, "WaveMemorySegmentDepth", 0))
-        total_slots = (total_bytes // self._WDW_BYTES) if total_bytes else 0
-        used_slots = used_bytes // self._WDW_BYTES
-        return {
-            "used_bytes": used_bytes,
-            "total_bytes": total_bytes,
-            "used_slots": used_slots,
-            "total_slots": total_slots,
-            "free_slots": max(0, total_slots - used_slots),
-        }
+    def reset_all_ip_memory_and_registers(self) -> None:
+        """Reset the registers and memory for all FIREQ IPs in the design."""
+        for _, (_, ip, _) in self.ips.items():
+            if isinstance(ip, _FIREQDriver):
+                ip.reset_memory_and_registers()
 
     # ------------------------------------------------------------------
-    # Public properties
+    # RF helpers
     # ------------------------------------------------------------------
-    def configure_dac_mix_mode(self, gen_index: int, label: str, freq_mhz: float) -> dict:
-        """Configure RF-DC NyquistZone for a generator label based on frequency.
 
-        Automatically determines if mixing mode is needed (even Nyquist zones) and
-        configures the appropriate DAC tile/block.
+    def set_adc_autocalibration_status(self, adc_index: tuple[int, int], freeze: bool = True) -> None:
+        """Freeze or unfreeze the calibration of all ADCs.
 
-        :param gen_index: Generator index
-        :type gen_index: int
-        :param label: 'drive' or 'readout'
-        :type label: str
-        :param freq_mhz: Target frequency in MHz
-        :type freq_mhz: float
-        :return: Dict with zone info
-        :rtype: dict
-        :raises ValueError: If gen_index or label not in mapping
-        """
-        if self._rf is None:
-            return {"status": "skipped", "reason": "no_rf_dc"}
-
-        # Lookup tile/block
-        gen_map = self._GEN_RF_MAP.get(gen_index)
-        if gen_map is None:
-            raise ValueError(f"No RF mapping for gen_index={gen_index}")
-
-        tile_block = gen_map.get(label)
-        if tile_block is None:
-            raise ValueError(f"No RF mapping for label='{label}' on gen={gen_index}")
-
-        tile, block = tile_block
-        if tile < 0 or tile >= len(self._rf.dac_tiles):
-            raise ValueError(
-                f"Invalid DAC mapping for gen_index={gen_index}, label='{label}': "
-                f"tile={tile}, available_tiles={len(self._rf.dac_tiles)}"
-            )
-        n_blocks = len(getattr(self._rf.dac_tiles[tile], "blocks", []))
-        if block < 0 or block >= n_blocks:
-            raise ValueError(
-                f"Invalid DAC mapping for gen_index={gen_index}, label='{label}': "
-                f"tile={tile}, block={block}, available_blocks={n_blocks}"
-            )
-
-        # Compute Nyquist zone
-        dac_nyquist_hz = self.hw_specs["summary"]["dac_nyquist_hz"]
-        freq_hz = freq_mhz * 1e6
-        nyquist_zone = max(1, int(freq_hz / dac_nyquist_hz) + 1)
-
-        # AMD convention: Odd zones → 1, Even zones → 2
-        amd_zone = 1 if nyquist_zone % 2 == 1 else 2
-
-        cache_key = (tile, block)
-        changed = False
-
-        if self._cached_nyquist_zone.get(cache_key) != amd_zone:
-            self._rf.dac_tiles[tile].blocks[block].NyquistZone = amd_zone
-            self._cached_nyquist_zone[cache_key] = amd_zone
-            changed = True
-
-        return {
-            "gen_index": gen_index,
-            "label": label,
-            "freq_mhz": freq_mhz,
-            "nyquist_zone": nyquist_zone,
-            "amd_zone": amd_zone,
-            "tile": tile,
-            "block": block,
-            "changed": changed,
-        }
-
-    # FIREQ IPs
-
-    def set_adc_autocalibration_status(self, acq_index: int, freeze: bool = True) -> None:
-        """Set the ADC autocalibration status for the ADC connected to acq_index.
-
-        If freeze is True, calibration is frozen (deactivated), otherwise it is unfrozen (activated).
-
-        :param acq_index: Acquisition IP index
-        :type acq_index: int
-        :param freeze: Calibration setting, defaults to True
+        :param adc_index: Index of the ADC to set the calibration status for as (tile, block).
+        :type adc_index: tuple[int, int]
+        :param freeze: Whether to freeze the calibration, defaults to True
         :type freeze: bool
-        :rtype: None
-        :raises ValueError: If acq_index not in mapping
         """
-        # Lookup tile/block
-        tile_block = self._ACQ_RF_MAP.get(acq_index)
-        if tile_block is None:
-            raise ValueError(f"No RF mapping for acq_index={acq_index}")
-
-        tile, block = tile_block
+        tile, block = adc_index
 
         # Freeze calibration for the ADC block if freeze, otherwise unfreeze
         if freeze:
-            self._rf.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 1
+            self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 1
         else:
-            self._rf.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
-
-    def calibrate_adc(self, acq_index: int, gen_index: int, label: str, freq_mhz: float) -> None:
-        """Perform ADC calibration for the ADC connected to acq_index.
-
-        Uses the DAC connected to gen_index to generate the calibration tone,
-        on the output defined by label, at the frequency freq_mhz.
-
-        :param acq_index: Acquisition IP index
-        :type acq_index: int
-        :param gen_index: Generator IP index
-        :type gen_index: int
-        :param label: Output selection of generator IP, 'drive' or 'readout'
-        :type label: str
-        :param freq_mhz: Calibration tone frequency in MHz
-        :type freq_mhz: float
-        :rtype: None
-        :raises ValueError: If acq_index not in mapping
-        """
-        # activate auto calibration for acquisition index
-        self.set_adc_autocalibration_status(acq_index, freeze=False)
-
-        # create wave definition word, with keeplast bit set
-        wave_wdw = self._generation_ips[gen_index].create_wave_definition_word(
-            envelope_name="_RECTANGULAR", duration=1000, gain=0.5, switch_iq=0
-        )
-        wave_wdw = wave_wdw | (1 << 122)
-
-        # set required parameters to generate the tone
-        self._generation_ips[gen_index].write_readout_wave(wave_definition=wave_wdw)
-        self._generation_ips[gen_index].set_manual_wave_destination_output_channel(label)
-        self._generation_ips[gen_index].set_readout_dds_parameters(
-            frequency=freq_mhz, phase=0.0, dac_samplerate=self.hw_specs["summary"]["dac_sr_hz"]
-        )
-
-        # start the tone and wait for 1s
-        self._generation_ips[gen_index].trigger_manually()
-        time.sleep(1)
-
-        # stop the tone
-        self._generation_ips[gen_index].write_readout_wave(wave_definition=0)
-        self._generation_ips[gen_index].trigger_manually()
-
-        # freeze calibration for ADC
-        self.set_adc_autocalibration_status(acq_index, freeze=True)
-
-    def configure_adc_mix_mode(self, acq_index: int, freq_mhz: float) -> dict:
-        """Configure RF-DC NyquistZone for an ADC channel based on frequency.
-
-        Automatically determines if mixing mode is needed (even Nyquist zones) and
-        configures the appropriate ADC tile/block.
-
-        :param acq_index: Acquisition IP index
-        :type acq_index: int
-        :param freq_mhz: Demodulation frequency in MHz
-        :type freq_mhz: float
-        :return: Dict with zone info
-        :rtype: dict
-        :raises ValueError: If acq_index not in mapping
-        """
-        if self._rf is None:
-            return {"status": "skipped", "reason": "no_rf_dc"}
-
-        # Lookup tile/block
-        tile_block = self._ACQ_RF_MAP.get(acq_index)
-        if tile_block is None:
-            raise ValueError(f"No RF mapping for acq_index={acq_index}")
-
-        tile, block = tile_block
-
-        # Compute Nyquist zone
-        adc_nyquist_hz = self.hw_specs["summary"]["adc_nyquist_hz"]
-        freq_hz = freq_mhz * 1e6
-        nyquist_zone = max(1, int(freq_hz / adc_nyquist_hz) + 1)
-
-        # AMD convention: Odd zones → 1, Even zones → 2
-        amd_zone = 1 if nyquist_zone % 2 == 1 else 2
-
-        cache_key = ("adc", tile, block)  # prefix to avoid collision with DAC cache
-        changed = False
-
-        if self._cached_nyquist_zone.get(cache_key) != amd_zone:
-            self._rf.adc_tiles[tile].blocks[block].NyquistZone = amd_zone
-            self._cached_nyquist_zone[cache_key] = amd_zone
-            changed = True
-
-        return {
-            "acq_index": acq_index,
-            "freq_mhz": freq_mhz,
-            "nyquist_zone": nyquist_zone,
-            "amd_zone": amd_zone,
-            "tile": tile,
-            "block": block,
-            "changed": changed,
-        }
-
-    def rf_mapping(self) -> dict:
-        """Return internal RF mapping dictionaries as-is.
-
-        :return: Dict with ``_GEN_RF_MAP`` and ``_ACQ_RF_MAP``.
-        :rtype: dict
-        """
-        return {
-            "_GEN_RF_MAP": dict(self._GEN_RF_MAP),
-            "_ACQ_RF_MAP": dict(self._ACQ_RF_MAP),
-        }
-
-    @property
-    def generators(self) -> list[GeneratorDriver]:
-        """List of GeneratorDriver instances.
-
-        :return: The list of available generator drivers
-        :rtype: list[GeneratorDriver]
-        """
-        return list(self._generation_ips)
-
-    @property
-    def acquisitions(self) -> list[AcquisitionDriver]:
-        """List of AcquisitionDriver instances.
-
-        :return: The list of available acquisition drivers
-        :rtype: list[AcquisitionDriver]
-        """
-        return list(self._acquisition_ips)
-
-    @property
-    def trigger(self) -> TriggerGeneratorDriver:
-        """Convenience shortcut: TriggerGeneratorDriver, if any.
-
-        :return: The main trigger generator driver
-        :rtype: TriggerGeneratorDriver
-        """
-        return self._trigger_ips[0]
-
-    # Infra IPs
-
-    @property
-    def rf(self) -> object | None:
-        """RF-DC hierarchy (usp_rf_data_converter_0).
-
-        :return: The PYNQ RF-DC object or None if not present
-        :rtype: object | None
-        """
-        return self._rf
-
-    @property
-    def axis_switch(self) -> object | None:
-        """AXI-Stream switch (axis_switch_0), if present.
-
-        :return: The AXI Stream Switch object or None
-        :rtype: object | None
-        """
-        return self._axis_switch
-
-    @property
-    def dma(self) -> object | None:
-        """AXI DMA (axi_dma_0), if present.
-
-        :return: The DMA object or None
-        :rtype: pynq.lib.dma.DMA | None
-        """
-        return self._dma
-
-    @property
-    def is_healthy(self) -> bool:
-        """True if hardware specs were built without errors.
-
-        :return: Health status of the SoC configuration
-        :rtype: bool
-        """
-        return bool(self._healthy)
-
-    def summary(self) -> dict:
-        """Return a compact dictionary describing the SoC.
-
-        :return: Dictionary containing bitfile info, IP counts, and hardware specs
-        :rtype: dict
-        """
-        return {
-            "bitfile": self.bitfile_name,
-            "num_generators": self.num_generators,
-            "num_acquisitions": self.num_acquisitions,
-            "num_triggers": self.num_triggers,
-            "has_dma": self.dma is not None,
-            "has_axis_switch": self.axis_switch is not None,
-            "has_rf": self.rf is not None,
-            "hw_specs": self.hw_specs,
-        }
+            self.rfdc.adc_tiles[tile].blocks[block].CalFreeze["FreezeCalibration"] = 0
+        self.log.debug("ADC %s calibration frozen: %s", adc_index, freeze)
 
 
 def load_fireq(bitfile_name: str, init_clocks: bool = True) -> FIREQSoC:

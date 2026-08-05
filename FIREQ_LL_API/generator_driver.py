@@ -1,19 +1,13 @@
 """Low-level driver for the FIREQ generator IP."""
 
-import logging
-
 import numpy as np
+from pynq import MMIO
 
 from ._utils import (
-    _compute_pinc_poff,
     _FIREQDriver,
-    _get_bit,
-    _get_bits,
     _set_bit,
     _set_bits,
 )
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["GeneratorDriver"]
 
@@ -21,11 +15,30 @@ __all__ = ["GeneratorDriver"]
 class GeneratorDriver(_FIREQDriver):
     """Driver class for the generator IP.
 
-    Provides methods to set up envelopes, pulse sequences, readout pulse, and
-    modulation frequency and phase.
+    Provides low-level methods to control the generator IP.
     """
 
-    bindto = ["user.org:user:axisGeneratorIP:2.0"]
+    bindto = ["user.org:user:axisGeneratorIP:1.0"]
+
+    # Offset definition
+    _ctrl = 0
+    _readout_wave_l = 1
+    _readout_inc_l = 5
+    _readout_inc_h = 6
+    _readout_off_l = 9
+    _readout_off_h = 10
+    _drive_inc_l = 7
+    _drive_inc_h = 8
+    _trigger_mask_l = 11
+
+    # Bit position definition - control register
+    man_trig_sel = 28
+    source_pos = 27
+    manual_trigger_pos = 31
+    seed_lfsr_pos = 0
+
+    # Port name of the fabric clock
+    fabric_clock_port = "HS_axi_clock"
 
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the GeneratorDriver.
@@ -35,16 +48,12 @@ class GeneratorDriver(_FIREQDriver):
         """
         super().__init__(description=description)
 
-        # a dictionary that stores useful data about the envelopes that have been written to
-        # the envelope memory
-        self.envelope_memory_dict = {}
-        self.envelope_memory_dict_reserved_names = []
-        # a dictionary that stores useful data about the wave definition words that have
-        # been written to the sequencer's wave memory
-        self.wave_memory_dict = {}
-        self.wave_memory_dict_reserved_names = []
-        # the axi interface
-        self._axi_full_interface_mmio = None
+        # set the axi full interface
+        self.axi_full_initialized = False
+        self._envelope_memory_interface = None
+        self._common_envelope_memory_interface = None
+        self._memory_mapped_fifo_interface = None
+        self._wdw_memory_interface = None
 
         # address width of the envelope memory, word aligned
         self.sample_memory_address_width = int(description["parameters"]["SampleMemoryAddressWidth"])
@@ -72,35 +81,59 @@ class GeneratorDriver(_FIREQDriver):
         self.memory_mapped_fifo_segment_depth = int(description["parameters"]["MemoryMappedFifoDepth"])
         # width of the lfsr seed
         self.seed_lfsr_width = int(description["parameters"]["MmFifoAndLfsrOutputWidth"])
+        # number of dac
+        self.num_dacs = int(description["parameters"]["NumDac"])
         # set debug level
         self.debug_level = 0
-
-        # Offset definition
-        self.ctrl = 0
-        self.readout_wave_l = 1
-        self.readout_inc_l = 5
-        self.readout_inc_h = 6
-        self.readout_off_l = 9
-        self.readout_off_h = 10
-        self.drive_inc_l = 7
-        self.drive_inc_h = 8
-
-        # Bit position definition
-        self.source_pos = 27
-        self.man_trig_sel = 28
-        self.manual_trigger_pos = 31
+        # this constant is the bit length of the addresses used in the generator dds with taylor compensation
+        self.sample_gen_increment_width = self.sample_memory_address_width + self.fractional_precision
+        # Bit position definition - dac_mask in wdw
+        self.dac_mask_lsb = 2 * self.sample_gen_increment_width + self.duration_width + self.sample_size
+        # this should never happen, but just in case
+        if self.num_dacs < 0 or self.num_dacs > 15:
+            raise ValueError(f"Invalid number of DACs: {self.num_dacs}")
 
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
-        """Initialize the AXI Full interface and reset the envelope dictionary.
+        """Initialize the AXI Full interface segments and clear memory.
 
         :param base_address: Base address of the AXI Full interface
         :type base_address: int
         :param axi_depth: Depth of the AXI interface in bytes
         :type axi_depth: int
         """
-        super().init_axi_full_interface(base_address, axi_depth)
+
+        def _next_segment(mmio: MMIO) -> int:
+            return mmio.base_addr + mmio.length
+
+        self._envelope_memory_interface = MMIO(
+            base_address, self.channel_sample_memory_depth * self.number_of_channels * 4
+        )
+        self._common_envelope_memory_interface = MMIO(
+            _next_segment(self._envelope_memory_interface), self.channel_sample_memory_depth * 4
+        )
+        self._wdw_memory_interface = MMIO(
+            _next_segment(self._common_envelope_memory_interface), self.wave_memory_segment_depth
+        )
+        self._memory_mapped_fifo_interface = MMIO(
+            _next_segment(self._wdw_memory_interface), self.memory_mapped_fifo_segment_depth
+        )
+        self.axi_full_initialized = True
+        self.log.debug("AXI Full interface initialized")
         # reset envelope dictionary and memory
-        self.reset_envelope_dict()
+        self.clear_envelope_memory()
+
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        for offset in range(0, self._axi_lite_interface_mmio.length, 4):
+            self._axi_lite_interface_mmio.write(offset, 0)
+        for offset in range(0, self._envelope_memory_interface.length, 4):
+            self._envelope_memory_interface.write(offset, 0)
+        for offset in range(0, self._common_envelope_memory_interface.length, 4):
+            self._common_envelope_memory_interface.write(offset, 0)
+        for offset in range(0, self._wdw_memory_interface.length, 4):
+            self._wdw_memory_interface.write(offset, 0)
+        for offset in range(0, self._memory_mapped_fifo_interface.length, 4):
+            self._memory_mapped_fifo_interface.write(offset, 0)
 
     def init_axi_lite_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Lite interface and delete the PYNQ-created MMIO object.
@@ -114,101 +147,60 @@ class GeneratorDriver(_FIREQDriver):
         # delete the mmio object created by PYNQ
         del self.mmio
 
-    def print_description(self) -> None:
-        """Print a detailed description of the generator IP configuration parameters."""
-        print(
-            "sample_memory_address_width: "
-            + str(self.sample_memory_address_width)
-            + ", address width of the envelope memory (word/IQSample aligned)"
-        )
-        print(
-            "channel_sample_memory_depth: "
-            + str(self.channel_sample_memory_depth)
-            + ", depth of the envelope memory (words/IQSamples aligned)"
-        )
-        print("maximum_duration: " + str(self.maximum_duration) + ", maximum duration of a wave (samples)")
-        print(
-            "fractional_precision: "
-            + str(self.fractional_precision)
-            + ", fractional precision of the interpolator (bits)"
-        )
-        print("sample_size: " + str(self.sample_size) + ", width of samples (bits)")
-        print(
-            "number_of_channels: "
-            + str(self.number_of_channels)
-            + ", parallelism of the generator (samples/clock cycle)"
-        )
-        print("phase_depth: " + str(self.phase_depth) + ", width of phases (bits)")
-        print(
-            "trigger_channels: "
-            + str(self.trigger_channels)
-            + ", number of trigger channels for readout and drive (bits)"
-        )
-        print("axi_full_interface_depth: " + str(self.axi_full_interface_depth) + ", axi full interface depth (bytes)")
-        print(
-            "total_sample_memory_segment_depth: "
-            + str(self.total_sample_memory_segment_depth)
-            + ", envelope memory segment depth (bytes)"
-        )
-        print(
-            "wave_memory_segment_depth: " + str(self.wave_memory_segment_depth) + ", wave memory segment depth (bytes)"
-        )
-        print(
-            "memory_mapped_fifo_segment_depth: "
-            + str(self.memory_mapped_fifo_segment_depth)
-            + ", memory mapped FIFO segment depth (bytes)"
-        )
-        print(
-            "seed_lfsr_width: "
-            + str(self.seed_lfsr_width)
-            + ", width of lsfr seed and memory mapped FIFO entries (bits)"
-        )
+    def write_envelope_memory(self, start_address: int, envelope: np.ndarray, common: bool = False) -> int:
+        """Write samples to the envelope memory starting at the given address.
 
-    def reset_envelope_dict(self) -> None:
-        """Reset the cached information about the envelope memory.
-
-        The actual memory is not modified by this function. Since resetting this
-        memory invalidates the wave definition words, the wave memory cache is also
-        cleared.
+        :param start_address: Start address in the envelope memory (word aligned)
+        :type start_address: int
+        :param envelope: Array of complex samples to write
+        :type envelope: np.ndarray
+        :param common: If True, it write the envelope in all parallelization sub-channels (envelope for interpolation)
+        :type common: bool
+        :return: Error code
+        :rtype: int
         """
-        self.envelope_memory_dict = {}
-        self.envelope_memory_dict_reserved_names = []
+        if not self.axi_full_initialized:
+            self.log.error("AXI Full interface not initialized")
+            return -3
 
-        # set the memory free space in the envelope memory dictionary
-        self.envelope_memory_dict["_FREESPACE"] = {
-            "start": 0,
-            "depth": self.channel_sample_memory_depth,
-        }
-        self.envelope_memory_dict_reserved_names.append("_FREESPACE")
-        # set an entry for rectangular waves
-        self.envelope_memory_dict["_RECTANGULAR"] = {
-            "is_interp": 0,
-            "size": any,
-            "is_sym": 0,
-            "i_even": 0,
-            "q_even": 0,
-            "start": 0,
-        }
-        self.envelope_memory_dict_reserved_names.append("_RECTANGULAR")
-        self.reset_wave_memory_dict()
+        if common:
+            size = len(envelope)
+        else:
+            size = int(np.ceil(len(envelope) / self.number_of_channels))
 
-    def reset_wave_memory_dict(self) -> None:
-        """Reset the cached information about the wave memory.
+        if start_address < 0:
+            self.log.error("start_address %s cannot be negative", start_address)
+            return -3
 
-        This also clears the generator wave memory.
-        """
-        self.wave_memory_dict = {}
-        self.wave_memory_dict_reserved_names = []
+        if start_address + size > self.channel_sample_memory_depth:
+            self.log.error("data exceeds memory bounds")
+            return -3
 
-        # address of next wave in wave memory
-        self.wave_memory_dict["_NEXT"] = 0
-        self.wave_memory_dict_reserved_names.append("_NEXT")
-        for address in range(
-            self.total_sample_memory_segment_depth,
-            self.total_sample_memory_segment_depth + self.wave_memory_segment_depth,
-            4,
-        ):
-            self._axi_full_interface_mmio.write(address, 0)
+        to_write_array = (envelope.real.astype(np.int32) << 16) + envelope.imag.astype(np.int16)
+        if common:
+            # write the samples to all sub-channels, there is a specific space in the generator memory to do just that
+            self._common_envelope_memory_interface.write(start_address * 4, to_write_array.tobytes())
+        else:
+            for channel in range(self.number_of_channels):
+                write_address_start = start_address + self.channel_sample_memory_depth * channel
+                to_write_to_channel = to_write_array[channel :: self.number_of_channels]
+                self._envelope_memory_interface.write(write_address_start * 4, to_write_to_channel.tobytes())
+
+        self.log.debug(
+            "wrote %s samples to envelope memory at address %s (common: %s)", len(envelope), start_address, common
+        )
+
+        return 0
+
+    def clear_envelope_memory(self) -> int:
+        """Clear the envelope memory by writing all zeros to it."""
+        rval = self.write_envelope_memory(0, np.zeros(self.channel_sample_memory_depth, dtype=complex), common=True)
+        if rval != 0:
+            self.log.error("failed to clear envelope memory")
+            return rval
+
+        self.log.debug("cleared envelope memory")
+        return 0
 
     def trigger_manually(self) -> int:
         """Trigger the generator manually.
@@ -216,10 +208,10 @@ class GeneratorDriver(_FIREQDriver):
         :return: Error code
         :rtype: int
         """
-        control_register = self._axi_lite_interface_mmio.read(self.ctrl * 4)
-        self._axi_lite_interface_mmio.write(self.ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
+        control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
 
-        logger.debug("generator, trigger_manually, manually triggered")
+        self.log.debug("generation triggered manually")
 
         return 0
 
@@ -236,88 +228,56 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if channel < 0 or channel > self.trigger_channels:
-            print("channel choice is out of range")
+            self.log.error("channel choice %s is out of range", channel)
             return -3
 
         if ttype == "drive":
-            selector = 0
+            offset_bit = 0
         elif ttype == "readout":
-            selector = 1
+            offset_bit = self.trigger_channels
         else:
-            print("type choice is out of range")
+            self.log.error("trigger type %s is out of range", ttype)
             return -3
+
         # write to the control register
         trigger_mask = (1 << channel) >> 1
-        control_register = _set_bits(
-            self._axi_lite_interface_mmio.read(self.ctrl * 4),
-            selector * self.trigger_channels,
+
+        trigger_reg = _set_bits(
+            self._axi_lite_interface_mmio.read(self._trigger_mask_l * 4),
+            offset_bit,
             self.trigger_channels,
             trigger_mask,
         )
-        self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
 
-        logger.debug(f"generator, set_trigger_channel, got the following for channel: {channel}, ttype: {ttype}")
-
-        return 0
-
-    def get_trigger_channel(self, ttype: str) -> int:
-        """Get the trigger channel for the generator where triggers are received.
-
-        :param ttype: trigger type: 'drive' or 'readout'
-        :type ttype: str
-        :return: Error code
-        :rtype: int
-        """
-        if ttype == "drive":
-            selector = 0
-        elif ttype == "readout":
-            selector = 1
-        else:
-            print("type choice is out of range")
-            return -3
-
-        control_register = self._axi_lite_interface_mmio.read(self.ctrl)
-
-        channel = _get_bits(control_register, selector * self.trigger_channels, self.trigger_channels)
-
-        print("Trigger " + ttype + " mask: " + format(channel, f"0{self.trigger_channels}b"))
+        self._axi_lite_interface_mmio.write(self._trigger_mask_l * 4, trigger_reg)
+        self.log.debug("set the generation trigger channel to %s for %s", channel, ttype)
 
         return 0
 
-    def set_drive_order_source(self, source: int) -> int:
+    def set_drive_order_source(self, source: str) -> int:
         """Set the source for the generator: lfsr or fifo.
 
-        :param source: Source for wave, 1 for LFSR 0 for FIFO
-        :type source: int
+        :param source: Source for wave, 'fifo' or 'lfsr'
+        :type source: str
         :return: Error code
         :rtype: int
         """
-        if source < 0 or source > 1:
-            print("source choice is out of range")
+        if source == "fifo":
+            selector = 0
+        elif source == "lfsr":
+            selector = 1
+        else:
+            self.log.error("source type %s is out of range", source)
             return -3
 
         control_register = _set_bit(
-            value=self._axi_lite_interface_mmio.read(self.ctrl * 4),
+            value=self._axi_lite_interface_mmio.read(self._ctrl * 4),
             pos=self.source_pos,
-            setvalue=source,
+            setvalue=selector,
         )
-        self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug(f"generator, set_drive_order_source, got the following for source: {source}")
-
-        return 0
-
-    def get_drive_order_source(self) -> int:
-        """Get the source for the generator: lfsr or fifo.
-
-        :return: Error code
-        :rtype: int
-        """
-        control_register = self._axi_lite_interface_mmio.read(self.ctrl * 4)
-        if _get_bit(control_register, self.source_pos) == 0:
-            print("Source: FIFO")
-        else:
-            print("Source: LFSR")
+        self.log.debug("set generation order source to %s(%s)", source, selector)
 
         return 0
 
@@ -330,110 +290,89 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if seed < 0 or seed > (2**self.seed_lfsr_width - 1):
-            print("source choice is out of range")
+            self.log.error("seed choice %s is out of range", seed)
             return -3
-        control_register = self._axi_lite_interface_mmio.read(self.ctrl * 4)
-        control_register = _set_bits(control_register, 2 * self.trigger_channels, self.seed_lfsr_width, seed)
-        self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
 
-        logger.debug(f"generator, set_lfsr_seed, got the following for seed: {seed}")
+        control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
+        control_register = _set_bits(control_register, self.seed_lfsr_pos, self.seed_lfsr_width, seed)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        return 0
-
-    def get_lfsr_seed(self) -> int:
-        """Get the seed for lfsr.
-
-        :return: Error code
-        :rtype: int
-        """
-        control_register = self._axi_lite_interface_mmio.read(self.ctrl)
-        seed_value = _get_bits(control_register, 2 * self.trigger_channels, self.seed_lfsr_width)
-        print(f"LFSR seed: {seed_value}")
+        self.log.debug("set the lfsr seed to %s", seed)
 
         return 0
 
-    def _set_readout_pinc_poff(self, inc: int, off: int) -> int:
-        """Set readout phase increment and phase offset values.
+    def set_readout_modulation_frequency(self, frequency: float) -> int:
+        """Set modulation carrier of readout wave.
 
-        These values generate the modulation carrier for waves on the readout output
-        line.
-
-        :param inc: Increment value for readout
-        :type inc: int
-        :param off: Offset value for readout
-        :type off: int
-        :return: Error code
+        :param frequency: Frequency of the modulation signal, normalized to the DAC sampling frequency
+        :type frequency: float
+        :return: Error code (0 on success)
         :rtype: int
         """
+        normalized_frequency = frequency % 1.0
+
+        # compute the phase increment
+        pinc = int(2**self.phase_depth * normalized_frequency)
+
         # write inc LOW
-        self._axi_lite_interface_mmio.write(self.readout_inc_l * 4, inc & 0xFFFFFFFF)
+        self._axi_lite_interface_mmio.write(self._readout_inc_l * 4, pinc & 0xFFFFFFFF)
         # write inc HIGH
-        self._axi_lite_interface_mmio.write(self.readout_inc_h * 4, inc >> 32)
+        self._axi_lite_interface_mmio.write(self._readout_inc_h * 4, pinc >> 32)
 
-        # write off LOW
-        self._axi_lite_interface_mmio.write(self.readout_off_l * 4, off & 0xFFFFFFFF)
-        # write off HIGH
-        self._axi_lite_interface_mmio.write(self.readout_off_h * 4, off >> 32)
+        # log with deferred formatting string arguments to avoid eager evaluation
+        self.log.debug("set readout frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
-    def _get_readout_pinc_poff(self) -> int:
-        """Get readout phase increment and phase offset values.
+    def set_readout_modulation_initial_phase(self, phase: float) -> int:
+        """Set readout modulation initial phase.
 
-        :return: Error code
+        :param phase: Phase offset of the modulation signal, normalized to pi
+        :type frequency: float
+        :return: Error code (0 on success)
         :rtype: int
         """
-        # read inc LOW
-        inc = self._axi_lite_interface_mmio.read(self.readout_inc_l * 4)
-        # read inc HIGH
-        inc += self._axi_lite_interface_mmio.read(self.readout_inc_h * 4) << 32
+        # TODO: check that this is ok even when moving away from the first nyquist zone.
+        #       I am unsure if I have to invert the phase or not when in the second nyquist zone.
+        poff = int(2**self.phase_depth * phase)
 
-        # read off LOW
-        off = self._axi_lite_interface_mmio.read(self.readout_off_l * 4)
-        # read off HIGH
-        off += self._axi_lite_interface_mmio.read(self.readout_off_h * 4) << 32
-
-        print(f"readout phase increment: {inc}, phase offset: {off}")
-
-        return 0
-
-    def _set_drive_pinc(self, inc: int) -> int:
-        """Set drive phase increment value.
-
-        This value generates the modulation carrier for waves on the drive output line.
-
-        :param inc: Increment value for readout
-        :type inc: int
-        :return: Error code
-        :rtype: int
-        """
         # write inc LOW
-        self._axi_lite_interface_mmio.write(self.drive_inc_l * 4, inc & 0xFFFFFFFF)
+        self._axi_lite_interface_mmio.write(self._readout_off_l * 4, poff & 0xFFFFFFFF)
         # write inc HIGH
-        self._axi_lite_interface_mmio.write(self.drive_inc_h * 4, inc >> 32)
+        self._axi_lite_interface_mmio.write(self._readout_off_h * 4, poff >> 32)
+
+        self.log.debug("set readout initial phase to %s and phase offset to %s", phase, poff)
 
         return 0
 
-    def _get_drive_pinc(self) -> int:
-        """Get drive phase increment value.
+    def set_drive_modulation_frequency(self, frequency: float) -> int:
+        """Set the modulation frequency for the drive pulses.
 
-        :return: Error code
+        :param frequency: Frequency of the modulation signal, normalized to the DAC sampling frequency
+        :type frequency: float
+        :return: Error code (0 on success)
         :rtype: int
         """
-        # read inc LOW
-        inc = self._axi_lite_interface_mmio.read(self.drive_inc_l * 4)
-        # read inc HIGH
-        inc += self._axi_lite_interface_mmio.read(self.drive_inc_h * 4) << 32
+        normalized_frequency = frequency % 1.0
 
-        print(f"drive phase increment: {inc}")
+        # compute the phase increment
+        pinc = int(2**self.phase_depth * normalized_frequency)
+
+        # write inc LOW
+        self._axi_lite_interface_mmio.write(self._drive_inc_l * 4, pinc & 0xFFFFFFFF)
+        # write inc HIGH
+        self._axi_lite_interface_mmio.write(self._drive_inc_h * 4, pinc >> 32)
+
+        # log with deferred formatting string arguments to avoid eager evaluation
+        self.log.debug("set drive frequency to %s and phase increment to %s", frequency, pinc)
 
         return 0
 
-    def set_manual_wave_destination_output_channel(self, destination: str) -> int:
+    def set_manual_wave_destination(self, destination: str) -> int:
         """Set the destination of a manually generated wave.
 
-        The wave to be generated is the one set for readout but you can select if the
-        manually generated wave should output on the readout or drive line.
+        When manually triggered, the readout wdw is generated but can be sent to
+        either the drive or readout output channel. This function sets the destination.
 
         :param destination: 'readout' or 'drive'
         :type destination: str
@@ -445,475 +384,70 @@ class GeneratorDriver(_FIREQDriver):
         elif destination == "readout":
             selector = 1
         else:
-            print("type choice is out of range")
+            self.log.error("destination %s is out of range", destination)
             return -3
 
         control_register = _set_bit(
-            self._axi_lite_interface_mmio.read(self.ctrl * 4),
+            self._axi_lite_interface_mmio.read(self._ctrl * 4),
             pos=self.man_trig_sel,
             setvalue=selector,
         )
-        self._axi_lite_interface_mmio.write(self.ctrl * 4, control_register)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
-        logger.debug(
-            f"generator, set_manual_wave_destination_output_channel, got the following for destination: {destination}"
-        )
+        self.log.debug("set manual wave destination to %s(%s)", destination, selector)
 
         return 0
 
-    def get_manual_wave_destination_output_channel(self) -> int:
-        """Get the destination output line for manual trigger."""
-        dest = _get_bit(self._axi_lite_interface_mmio.read(self.ctrl * 4), self.man_trig_sel)
-        if dest:
-            print("Manual trigger destination is readout line")
-        else:
-            print("Manual trigger destination is drive line")
-        return 0
-
-    def set_readout_dds_parameters(self, frequency: float, phase: float, dac_samplerate: int) -> int:
-        """Set frequency and phase for the readout carrier signal.
-
-        :param frequency: Frequency of the carrier in MHz
-        :type frequency: float
-        :param phase: Phase in radians
-        :type phase: float
-        :param dac_samplerate: Sample rate of the dac, in MSps
-        :type dac_samplerate: int
-        :return: Error code
-        :rtype: Literal[-3, 0]
-        """
-        # check inputs
-        if frequency < 0:
-            print("input parameters out of range")
-            return -3
-
-        # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency, phase, dac_samplerate, self.phase_depth)
-
-        # write registers
-        self._set_readout_pinc_poff(phase_parameters[0], phase_parameters[1])
-
-        logger.debug(
-            "generator, set_readout_dds_parameters, got following frequency and phase: %s, %s, %s",
-            frequency,
-            phase,
-            dac_samplerate,
-        )
-
-        return 0
-
-    def set_drive_dds_parameters(self, frequency: float, dac_samplerate: int) -> int:
-        """Set modulation frequency for the drive output channel.
-
-        :param frequency: Frequency in MHz
-        :type frequency: float
-        :param dac_samplerate: Sampling frequency of the dac in MSps
-        :type dac_samplerate: int
-        :return: Error code
-        :rtype: Literal[-3, 0]
-        """
-        # check inputs
-        if frequency < 0:
-            print("input parameters out of range")
-            return -3
-
-        # get poff and pinc
-        phase_parameters = _compute_pinc_poff(frequency, 0, dac_samplerate, self.phase_depth)
-
-        # write registers
-        self._set_drive_pinc(phase_parameters[0])
-
-        logger.debug(
-            f"generator, set_drive_dds_parameters, got following frequency and phase: {frequency}, {dac_samplerate} "
-        )
-
-        return 0
-
-    def add_envelope_to_envelope_memory(
-        self,
-        envelope_samples: np.ndarray,
-        for_interpolation: bool,
-        is_symmetric: bool,
-        i_even: bool,
-        q_even: bool,
-        envelope_name: str,
-    ) -> int:
-        """Write samples into envelope memory for wave generation.
-
-        An envelope description is cached and a name is associated to it. Symmetric
-        waves should have an odd number of samples and only half of the samples
-        (including the center sample) should be passed to this function.
-
-        Warning: values should be representable in int16, otherwise they will be
-        saturated to the maximum or minimum value (values must be within -2^15 and
-        +2^15-1).
-
-        :param envelope_samples: complex array of samples, real and imaginary part used as I/Q values
-        :type envelope_samples: complex int16 numpy array
-        :param for_interpolation: if the envelope is to be used with interpolation
-        :type for_interpolation: bool
-        :param is_symmetric: if the envelope is symmetric, only valid if it's for interpolation
-        :type is_symmetric: bool
-        :param i_even: type of symmetry of the in-phase samples
-        :type i_even: bool
-        :param q_even: type of symmetry of the quadrature samples
-        :type q_even: bool
-        :param envelope_name: name to attach to envelope description
-        :type envelope_name: string
-        """
-        new_dict_item = {
-            "is_interp": 0,
-            "size": 0,
-            "is_sym": 0,
-            "i_even": 0,
-            "q_even": 0,
-        }
-
-        # check inputs
-        if envelope_name in self.envelope_memory_dict.keys():
-            print("error, name '" + envelope_name + "' is already in use")
-            return -3
-        if not np.iscomplexobj(envelope_samples):
-            # NOTE: better than if (envelope_samples.dtype != complex) -> recover in case of any problem
-            print("error, the provided samples for the envelope are not complex")
-            return -3
-
-        envelope_size = envelope_samples.size
-        if envelope_size < 2:
-            print("error, envelope samples must be greater or eaqual than 2")
-            return -3
-
-        # check requirement for non interpolation envelope size
-        if envelope_size % self.number_of_channels != 0 and not for_interpolation:
-            print(
-                "error, envelopes not marked for interpolation must have a number of "
-                "sample divisible by the generator parallelism"
-            )
-            print(
-                "the number of samples: " + str(envelope_size) + " is not divisible by " + str(self.number_of_channels)
-            )
-            print("HINT: pad the envelope with zeros")
-            return -3
-
-        if for_interpolation:
-            new_dict_item["is_interp"] = 1
-            new_dict_item["size"] = envelope_size
-            new_dict_item["is_sym"] = is_symmetric
-            new_dict_item["i_even"] = i_even
-            new_dict_item["q_even"] = q_even
-        else:
-            envelope_size = envelope_size // self.number_of_channels
-            new_dict_item["is_interp"] = 0
-            new_dict_item["size"] = envelope_size
-            new_dict_item["is_sym"] = 0
-            new_dict_item["i_even"] = 0
-            new_dict_item["q_even"] = 0
-
-        # check that we have enough space in the sample memory
-        free_space = self.envelope_memory_dict["_FREESPACE"]["depth"]
-        if free_space < envelope_size:
-            print(
-                "error, not enough space in the envelope memory. Required space: "
-                + str(envelope_size)
-                + ", available space: "
-                + str(free_space)
-            )
-            return -4
-
-        # finish setup of the dictionary entry
-        start_address = self.envelope_memory_dict["_FREESPACE"]["start"]
-        new_dict_item["start"] = start_address
-
-        # commit to envelope dictionary
-        self.envelope_memory_dict[envelope_name] = new_dict_item
-        self.envelope_memory_dict["_FREESPACE"]["start"] = start_address + envelope_size
-        self.envelope_memory_dict["_FREESPACE"]["depth"] = free_space - envelope_size
-
-        # commit to generator sample memory
-        to_write_array = (envelope_samples.real.astype(np.int32) << 16) + envelope_samples.imag.astype(np.int16)
-        if is_symmetric and for_interpolation:
-            # write the samples to all channels, there is a specific space in the generator memory to do just that
-            write_address_start = start_address + self.channel_sample_memory_depth * self.number_of_channels
-            self._axi_full_interface_mmio.write(write_address_start * 4, to_write_array.tobytes())
-        else:
-            for channel in range(self.number_of_channels):
-                write_address_start = start_address + self.channel_sample_memory_depth * channel
-                to_write_to_channel = to_write_array[channel :: self.number_of_channels]
-                self._axi_full_interface_mmio.write(write_address_start * 4, to_write_to_channel.tobytes())
-        return 0
-
-    def create_wave_definition_word(
-        self,
-        envelope_name: str,
-        duration: int,
-        gain: float,
-        switch_iq: bool,
-        keep_last: bool = False,
-    ) -> int:
-        """Generate a wave definition word using cached envelopes.
-
-        For envelopes not marked for interpolation, it is advised to set the duration
-        input to zero, this way the envelope's natural size is used instead.
-
-        :param envelope_name: Name of the envelope precedently stored in envelope memory
-        :type envelope_name: str
-        :param duration: Duration of the wave in samples, set to 0 to use the size of
-            the envelope
-        :type duration: uint
-        :param gain: Gain, values between -1 and 1 included
-        :type gain: float
-        :param switch_iq: Switch the envelope I and Q values, useful for Y-Gates
-        :type switch_iq: bool
-        :param keep_last: If True, holds the last value of the envelope indefinitely (CW
-            Mode)
-        :type keep_last: bool
-        :return: Error code
-        :rtype: Literal[-3] | int
-        """
-        wavedef = 0
-        # check input parameters
-        if envelope_name not in self.envelope_memory_dict.keys():
-            print("error, the envelope name: " + envelope_name + " was not found in the envelope memory.")
-            print("HINT: use the 'add_envelope_to_envelope_memory' function to add the envelope to memory")
-            return -3
-
-        if gain < -1 or gain > 1:
-            print("error, gain out of range")
-            return -3
-
-        # handle duration argument, if set to zero the duration will be the
-        # natural duration of the envelope
-        if (duration < 2 or duration > self.maximum_duration) and duration != 0:
-            print("error, duration out of range")
-            return -3
-
-        envelope_def = self.envelope_memory_dict[envelope_name]
-
-        # handle gain
-        invert = False
-        real_gain = 0
-        if gain < 0:
-            invert = True
-            real_gain = round(-gain * (2**self.sample_size - 1))
-        else:
-            invert = False
-            real_gain = round(gain * (2**self.sample_size - 1))
-
-        real_duration = 0
-        natural_envelope_duration = 0
-        # handle special envelope names
-        if envelope_name == "_RECTANGULAR":
-            if duration == 0:
-                print("error, rectangular wave requires a non-zero duration")
-                return -3
-            # set the force one bit
-            wavedef = wavedef | (1 << 121)
-            real_duration = duration
-            natural_envelope_duration = duration
-        # NOTE (non-interpolated envelopes):
-        # In non-interpolated mode the read address increment is fixed (typically 1/NumberOfChannels),
-        # so the LUT is read sequentially and the waveform length is effectively bounded by the amount
-        # of samples stored in memory (natural_envelope_duration).
-        #
-        # Policy:
-        # - duration == 0  -> use natural_envelope_duration (recommended default)
-        # - duration < natural_envelope_duration -> allowed (truncates the envelope)
-        # - duration > natural_envelope_duration -> NOT allowed because it would read past the loaded data
-        #   (undefined samples). If keep_last is enabled, we clamp to natural_envelope_duration and rely on
-        #   KEEP_LAST for CW behavior instead of reading out-of-range data.
-
-        elif envelope_def["is_interp"]:
-            natural_envelope_duration = envelope_def["size"] * (1 + envelope_def["is_sym"]) - 1
-            real_duration = natural_envelope_duration if (duration == 0) else duration
-        else:
-            natural_envelope_duration = envelope_def["size"] * self.number_of_channels
-            if duration == 0:
-                real_duration = natural_envelope_duration
-            elif duration > natural_envelope_duration:
-                if keep_last:
-                    real_duration = natural_envelope_duration
-                else:
-                    print("error, duration exceeds envelope length for non-interpolated envelope")
-                    return -3
-            else:
-                real_duration = duration
-
-        # set the keep_last bit (Bit 122)
-        if keep_last:
-            wavedef = wavedef | (1 << 122)
-
-        # set the symmetric bit
-        if envelope_def["is_sym"]:
-            wavedef = wavedef | (1 << 127)
-        # set the i_even bit
-        if envelope_def["i_even"]:
-            wavedef = wavedef | (1 << 126)
-        # set the q_even bit
-        if envelope_def["q_even"]:
-            wavedef = wavedef | (1 << 125)
-        # set the interpolation bit
-        if envelope_def["is_interp"]:
-            wavedef = wavedef | (1 << 120)
-
-        # set the iq switch
-        if switch_iq:
-            wavedef = wavedef | (1 << 123)
-        # set the invert bit
-        if invert:
-            wavedef = wavedef | (1 << 124)
-        # set the gain
-        wavedef = wavedef | (
-            real_gain << (2 * (self.sample_memory_address_width + self.fractional_precision) + self.duration_width)
-        )
-        # set the duration bits
-        wavedef = wavedef | ((real_duration - 1) << 2 * (self.sample_memory_address_width + self.fractional_precision))
-        # set sample generator offsets
-        start_offset = 0
-        increment = 0
-        if envelope_def["is_interp"]:
-            # NOTE (fixed-point interpolation fix):
-            # We compute the fractional address increment as num/den in Q(FractionalPrecision).
-            # Using integer division (//) truncates the ideal increment, introducing a small
-            # quantization error that accumulates along the envelope and biases the last samples.
-            # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
-            # half of it to start_offset we "center" the quantization error, reducing the peak
-            # error at the end without changing the hardware behavior.
-            start_offset = envelope_def["start"] << self.fractional_precision
-            num = (natural_envelope_duration - 1) << self.fractional_precision
-            den = real_duration - 1
-
-            increment = num // den
-            reminder = num % den
-
-            # shift by half remainder to "center" the error (reduces peak error at the end)
-            start_offset = start_offset + (reminder // 2)
-        else:
-            start_offset = envelope_def["start"] << self.fractional_precision
-            # set the increment to 1/(number_of_channels), usually 1/16
-            increment = 1 << (self.fractional_precision - self.log_number_of_channels)
-        # set the start offset and increment bits
-        wavedef = wavedef | (start_offset << (self.sample_memory_address_width + self.fractional_precision))
-        wavedef = wavedef | increment
-
-        logger.debug(
-            "generator_driver, create_wave_definition_word, got following inputs %s, %s, %s, %s, %s",
-            envelope_name,
-            duration,
-            gain,
-            switch_iq,
-            keep_last,
-        )
-
-        # return wave definition
-        return wavedef
-
-    def create_vz_gate_definition_word(self, delta_phase_rad: float) -> int:
-        """Create a Wave Definition Word (WDW) for a Virtual-Z gate.
-
-        WDW VZ format:
-        - Bit 119: IS_VZ_GATE = 1
-        - Bits [47:0]: PHASE_OFFSET (48-bit, two's complement)
-
-        Hardware meaning:
-        - During the experiment, for one cycle the carrier phase accumulator adds PHASE_OFFSET,
-          effectively implementing an instantaneous Z rotation (virtual frame update).
-
-        :param delta_phase_rad: Desired Z rotation in radians (can be any real number).
-        :return: 128-bit WDW packed into Python int
-        """
-        IS_VZ_GATE_BIT = 119
-        PHASE_W = 48  # phase offset width required by the IP (DSP accumulator is 48-bit)
-
-        # Map radians -> signed int48 phase word.
-        # Natural convention for an N-bit phase accumulator:
-        #   2π rad  <->  2^N counts
-        full_scale = 1 << PHASE_W
-        phase_word = int(np.round(delta_phase_rad * full_scale / (2.0 * np.pi)))
-
-        # Wrap into signed range [-2^(W-1), 2^(W-1)-1]
-        half = 1 << (PHASE_W - 1)
-        phase_word = ((phase_word + half) % (1 << PHASE_W)) - half
-
-        # Convert to unsigned two's complement for packing in bits [47:0]
-        phase_word_u = phase_word & ((1 << PHASE_W) - 1)
-
-        wavedef = 0
-        wavedef |= 1 << IS_VZ_GATE_BIT
-        wavedef |= phase_word_u  # occupies bits [47:0]
-
-        return wavedef
-
-    def add_wave_in_wave_memory(self, wave_definition: int, wave_name: str) -> int:
+    def add_wave_in_wave_memory(self, wdw: int, wdw_index: int) -> int:
         """Add a wave definition word to the wave memory.
 
-        There are no checks on the word so it should only be generated with provided
-        functions.
+        No checks are performed on the wave definition word.
+        The index is the address aligned to a 128 bit boundary.
 
-        :param wave_definition: Wave definition word, low level definition of a wave
-        :type wave_definition: int
-        :param wave_name: Name of the wave to add
-        :type wave_name: str
+        :param wdw: Wave definition word, low level definition of a wave
+        :type wdw: int
+        :param wdw_index: Wave address/index, aligned to 128 bits
+        :type wdw_index: int
         :return: Error code
         :rtype: Literal[-3, 0]
         """
-        if wave_name in self.wave_memory_dict.keys():
-            print("error, a wave was found in the cached wave memory with the same name")
-            return -3
-
-        # get the address where the wave definition will end up
-        address = self.wave_memory_dict["_NEXT"]
-        if address == self.wave_memory_segment_depth:
-            print("error, the wave memory is full")
+        if wdw_index < 0 or wdw_index >= self.wave_memory_segment_depth // (128 // 8):
+            self.log.error("index %s is out of range", wdw_index)
             return -3
 
         # write to wave memory
-        for i in range(4):
-            self._axi_full_interface_mmio.write(
-                (self.total_sample_memory_segment_depth + i * 4 + address),
-                (wave_definition >> (i * 32)) & 0xFFFFFFFF,
-            )
+        self._wdw_memory_interface.write(wdw_index * (128 // 8), wdw.to_bytes(128 // 8, "little"))
 
-        # write to wave memory cache
-        self.wave_memory_dict[wave_name] = address
-        # add 16 bytes (128/8) to address
-        self.wave_memory_dict["_NEXT"] = address + (128 // 8)
+        self.log.debug("added wave definition %s to wave memory at index %s", hex(wdw), wdw_index)
 
         return 0
 
-    def add_wave_to_drive_wave_sequence(self, index: int, wave_name: str) -> int:
-        """Write to memory mapped FIFO the address of a wave.
+    def add_wave_to_drive_wave_sequence(self, order_index: int, wdw_index: int) -> int:
+        """Write to memory mapped FIFO the address of a wdw at a certain point in the generation order.
 
-        :param index: Sequence index, the first one is 1
-        :type index: int
-        :param wave_name: Name of the wave definition previously added to wave memory
-        :type wave_name: str
+        No checks are performed ensurring that the wdw actually exists at that index.
+
+        :param order_index: 0 refers to the first wdw generated.
+        :type order_index: int
+        :param wdw_index: Index of the wdw in the wave memory.
+        :type wdw_index: int
         """
-        if index < 1 or index > self.memory_mapped_fifo_segment_depth // 4:
-            print("error, the index is out of range")
+        if order_index < 0 or order_index >= self.memory_mapped_fifo_segment_depth // 4:
+            self.log.error("order index %s is out of range", order_index)
             return -3
-        if wave_name not in self.wave_memory_dict.keys():
-            print("error, a wave was not found in the cached wave memory with the same name")
-            print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
-            return -3
-        if wave_name in self.wave_memory_dict_reserved_names:
-            print("wave name is a reserved keyword")
+        if wdw_index < 0 or wdw_index >= self.wave_memory_segment_depth // (128 // 8):
+            self.log.error("wdw index %s is out of range", wdw_index)
             return -3
 
-        # get wave
-        wave_addr = self.wave_memory_dict[wave_name]
-        # this address is byte aligned but we need it 128-bit aligned
-        wave_addr = wave_addr // (128 // 8)
-        # write to memory mapped fifo
-        fifo_start_address = self.total_sample_memory_segment_depth + self.wave_memory_segment_depth
-        actual_address = fifo_start_address + (index - 1) * 4
-        self._axi_full_interface_mmio.write(actual_address, wave_addr)
+        self._memory_mapped_fifo_interface.write(order_index * 4, wdw_index)
+        self.log.debug("added wave %s to wave sequence at index %s", wdw_index, order_index)
         return 0
 
     def write_readout_wave(self, wave_definition: int) -> int | None:
         """Write the readout wave definition to the IP.
 
         This is the wave definition that will be used for manual and readout waves.
-        HINT: for manual waves, you can set the output DAC (readout or drive channel)
+        HINT: for manual waves, you can set the output channel (readout or drive channel)
         with the "trigger_manuallyDestination" function.
 
         :param wave_definition: 128-bit wave defintion
@@ -922,60 +456,190 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: Literal[-3] | None
         """
         if wave_definition < 0:
-            print("error, wave def is negative")
+            self.log.error("wave definition %s is out of range", hex(wave_definition))
             return -3
         for i in range(4):
-            self._axi_lite_interface_mmio.write((self.readout_wave_l + i) * 4, (wave_definition >> i * 32) & 0xFFFFFFFF)
-
-    def replace_wave_in_wave_memory(
-        self, wave_definition: int, old_wave_name: str, new_wave_name: str | None = None
-    ) -> int:
-        """Replace a wave definition word with another one.
-
-        Optionally rename the wave key in the local cache dictionary.
-
-        :param wave_definition: Wave definition word for the new wave (uint128)
-        :param old_wave_name: Existing wave name to replace
-        :param new_wave_name: New wave name (optional). If None or same as old, no
-            rename.
-        :return: Error code
-        :rtype: Literal[-3, 0]
-        """
-        if old_wave_name not in self.wave_memory_dict:
-            print("error, a wave was not found in the cached wave memory with the same name")
-            print("HINT: use the 'InsertWaveInWaveMemory' function to insert a wave definition word in memory")
-            return -3
-
-        if old_wave_name in self.wave_memory_dict_reserved_names:
-            print("old wave name is a reserved keyword")
-            return -3
-
-        # default: no rename
-        if new_wave_name is None:
-            new_wave_name = old_wave_name
-
-        # validate rename
-        if new_wave_name != old_wave_name:
-            if new_wave_name in self.wave_memory_dict_reserved_names:
-                print("new wave name is a reserved keyword")
-                return -3
-            if new_wave_name in self.wave_memory_dict:
-                print("new wave name already exists in cached wave memory")
-                return -3
-
-        # get the address where the wave definition will end up
-        address = self.wave_memory_dict[old_wave_name]
-
-        # write to wave memory (same address)
-        for i in range(4):
-            self._axi_full_interface_mmio.write(
-                (self.total_sample_memory_segment_depth + i * 4 + address),
-                (wave_definition >> (i * 32)) & 0xFFFFFFFF,
+            self._axi_lite_interface_mmio.write(
+                (self._readout_wave_l + i) * 4, (wave_definition >> i * 32) & 0xFFFFFFFF
             )
 
-        # update dictionary key if rename requested
-        if new_wave_name != old_wave_name:
-            self.wave_memory_dict[new_wave_name] = address
-            del self.wave_memory_dict[old_wave_name]
+        self.log.debug("wrote the readout wave definition to the IP %s", hex(wave_definition))
 
         return 0
+
+    def build_envelope_specific_wdw(
+        self,
+        forceone: bool,
+        for_interpolation: bool,
+        is_symmetric: bool,
+        i_even: bool,
+        q_even: bool,
+    ) -> int:
+        """Build the envelope specific part of the wdw.
+
+        :param is_symmetric: If True, the envelope is symmetric
+        :type is_symmetric: bool
+        :param i_even: If True, the I sample symmetry is even
+        :type i_even: bool
+        :param q_even: If True, the Q sample symmetry is even
+        :type q_even: bool
+        :param switch_iq: If True, the I and Q channels are switched
+        :type switch_iq: bool
+        :param forceone: If True, the envelope is forced to be one
+        :type forceone: bool
+        :param for_interpolation: If True, the envelope is supposed to be used with the envelope interpolation feature
+        :type for_interpolation: bool
+        :return: Envelope specific part of the wdw
+        :rtype: int
+        """
+        wdw = int(is_symmetric) << 127
+        wdw |= int(i_even) << 126
+        wdw |= int(q_even) << 125
+        wdw |= int(forceone) << 121
+        wdw |= int(for_interpolation) << 120
+        return wdw
+
+    def build_vz_wdw(self, normalized_phase: float) -> int:
+        """Build the wave definition word for vz gates.
+
+        :param normalized_phase: Phase of the vz gate normalized to 2pi
+        :type normalized_phase: float
+        :return: Wave definition word
+        :rtype: int
+        """
+        wdw = 1 << 119
+        phase = int(normalized_phase * 2 ** (self.phase_depth))
+        wdw |= phase & (2**self.phase_depth - 1)
+        return wdw
+
+    def build_pulse_wdw(
+        self,
+        envelope_wdw: int,
+        start_address: int,
+        duration: int,
+        natural_duration: int,
+        normalized_gain: float,
+        switch_iq: bool,
+        keep_last: bool,
+        dac_target_mask: int,
+    ) -> int:
+        """Build the wave definition word for pulses.
+
+        :param envelope_wdw: Envelope specific part of the wdw
+        :type envelope_wdw: int
+        :param start_address: Start address of the envelope in the envelope memory
+        :type start_address: int
+        :param duration: Duration of the pulse in samples
+        :type duration: int
+        :param natural_duration: Natural duration of the pulse in samples
+        :type natural_duration: int
+        :param normalized_gain: Normalized gain of the pulse
+        :type normalized_gain: float
+        :param switch_iq: If True, the I and Q channels are switched
+        :type switch_iq: bool
+        :param keep_last: If True, the last sample is kept
+        :type keep_last: bool
+        :param dac_target_mask: Integer mask that drives the axis crossbar ip
+        :type dac_target_mask: int
+        :return: Wave definition word
+        :rtype: int
+        """
+        # start with the envelope wdw
+        wdw = envelope_wdw
+
+        # set the switch iq and keep last bits
+        wdw |= int(switch_iq) << 123
+        wdw |= int(keep_last) << 122
+
+        # set the invert bit if gain is negative
+        if normalized_gain < 0:
+            wdw |= 1 << 124
+        gain = abs(normalized_gain)
+        if gain >= 1:
+            self.log.warning("Gain amplitude is out of bounds. Gain amplitude was saturated to 1")
+            gain = 2**self.sample_size - 1
+        # set the gain, cap to 1 if gain was bigger than 1
+        gain = int(2**self.sample_size * gain)
+        wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width + self.duration_width, self.sample_size, gain)
+
+        # compute a safe duration and set it
+        dur = duration
+        if duration > self.maximum_duration:
+            self.log.warning("Duration %s is out of range. Saturating to maximum allowed duration", duration)
+            dur = self.maximum_duration
+        wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width, self.duration_width, dur - 1)
+
+        # compute a safe dac mask and set it
+        dac_mask = dac_target_mask
+        if dac_target_mask < 0 or dac_target_mask > pow(2, self.num_dacs) - 1:
+            self.log.warning("DAC target mask %s is out of range, setting the mask to zero", dac_target_mask)
+            dac_mask = 0
+        wdw = _set_bits(wdw, self.dac_mask_lsb, self.num_dacs, dac_mask)
+
+        # compute a set of sample generator offsets
+        start_offset = 0
+        increment = 0
+        # this condition checks if the input wdw has the "for_interpolation" bit set
+        if ((wdw >> 120) & 1) != 0:
+            # NOTE (fixed-point interpolation fix):
+            # We compute the fractional address increment as num/den in Q(FractionalPrecision).
+            # Using integer division (//) truncates the ideal increment, introducing a small
+            # quantization error that accumulates along the envelope and biases the last samples.
+            # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
+            # half of it to start_offset we "center" the quantization error, reducing the peak
+            # error at the end without changing the hardware behavior.
+            start_offset = start_address << self.fractional_precision
+            num = (natural_duration - 1) << self.fractional_precision
+            den = (dur - 1) << self.fractional_precision
+
+            increment = num // den
+            reminder = num % den
+
+            # shift by half remainder to "center" the error (reduces peak error at the end)
+            start_offset = start_offset + (reminder // 2)
+        else:
+            start_offset = start_address << self.fractional_precision
+            # set the increment to 1/(number_of_channels), usually 1/16
+            increment = 1 << (self.fractional_precision - self.log_number_of_channels)
+        # set the start offset and increment bits
+        wdw = _set_bits(wdw, self.sample_gen_increment_width, self.sample_gen_increment_width, start_offset)
+        wdw = _set_bits(wdw, 0, self.sample_gen_increment_width, increment)
+
+        return wdw
+
+    def print_description(self, printer_func: callable) -> None:
+        """Print a detailed description of the generator IP configuration parameters.
+
+        :param printer_func: Function to use to print the description
+        :type printer_func: callable
+        """
+        string = (
+            f"sample_memory_address_width: {self.sample_memory_address_width}, address width of the envelope "
+            "memory (word/IQSample aligned)"
+        )
+        string += (
+            f"\nchannel_sample_memory_depth: {self.channel_sample_memory_depth}, depth of the envelope "
+            "memory (words/IQSamples aligned)"
+        )
+        string += f"\nmaximum_duration: {self.maximum_duration}, maximum duration of a wave (samples)"
+        string += (
+            f"\nfractional_precision: {self.fractional_precision}, fractional precision of the interpolator (bits)"
+        )
+        string += f"\nsample_size: {self.sample_size}, width of samples (bits)"
+        string += f"\nnumber_of_channels: {self.number_of_channels}, parallelism of the generator (samples/clock cycle)"
+        string += f"\nphase_depth: {self.phase_depth}, width of phases (bits)"
+        string += (
+            f"\ntrigger_channels: {self.trigger_channels}, number of trigger channels for readout and drive (bits)"
+        )
+        string += f"\naxi_full_interface_depth: {self.axi_full_interface_depth}, axi full interface depth (bytes)"
+        string += (
+            f"\ntotal_sample_memory_segment_depth: {self.total_sample_memory_segment_depth}, envelope memory "
+            "segment depth (bytes)"
+        )
+        string += f"\nwave_memory_segment_depth: {self.wave_memory_segment_depth}, wave memory segment depth (bytes)"
+        string += (
+            f"\nmemory_mapped_fifo_segment_depth: {self.memory_mapped_fifo_segment_depth}, memory mapped FIFO "
+            "segment depth (bytes)"
+        )
+        string += f"\nseed_lfsr_width: {self.seed_lfsr_width}, width of lsfr seed and memory mapped FIFO entries (bits)"
+        printer_func(string)
