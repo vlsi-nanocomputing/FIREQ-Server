@@ -1,25 +1,19 @@
-# FIREQ Server API Reference & Software Architecture
+# FIREQ Server API Reference
 
-The `FIREQ Server` represents the central orchestrator of the FIREQ quantum control platform. Operating on the SoC target, it bridges high-level client experiment definitions with the low-level FPGA hardware blocks. 
+Welcome to the FIREQ Server API documentation. The server framework is divided into modular components handling system orchestration, network communications, experiment execution, and hardware nodes.
 
-This document serves as the complete technical specification of the server's API. It describes:
-- The runtime entry point, 
-- The object-oriented system tree,
-- The parameter binding interfaces
-- The dependency resolution,
-- The sweep execution engine,
-- The binary networking protocol.
+---
 
-## Module Index & Core Components
-
-Below is the complete API reference split into functional modules.
+## API Modules
 
 ```{toctree}
-:maxdepth: 1
+:maxdepth: 2
+:titlesonly:
 
 api_modules/runtime
-api_modules/system_api
-api_modules/system_tree
-api_modules/hardware_dependency
-api_modules/sweep_experiment
-api_modules/network_protocol
+api_modules/server_core
+api_modules/execution
+api_modules/network
+api_modules/system_node
+api_modules/utils
+```
