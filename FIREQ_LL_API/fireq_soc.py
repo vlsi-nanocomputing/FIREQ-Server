@@ -26,8 +26,10 @@ class FIREQSoC(Overlay):
     - Load the bitfile.
     - Initialise RF clocks (optional).
     - Use FireqParser on the HWH to:
+
         * Bind AXI full/lite interfaces for FIREQ IPs.
         * Build lists of Generator/Acquisition/Trigger IPs.
+        
     - Discover infrastructure IPs (RF-DC, AXI switch, DMA).
     - Build validated hardware specs (sample rates, Nyquist, etc.).
     """
