@@ -32,10 +32,10 @@ class GeneratorDriver(_FIREQDriver):
     _trigger_mask_l = 11
 
     # Bit position definition - control register
-    man_trig_sel = 28
-    source_pos = 27
-    manual_trigger_pos = 31
-    seed_lfsr_pos = 0
+    _man_trig_sel = 28
+    _source_pos = 27
+    _manual_trigger_pos = 31
+    _seed_lfsr_pos = 0
 
     # Port name of the fabric clock
     fabric_clock_port = "HS_axi_clock"
@@ -209,7 +209,7 @@ class GeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        self._axi_lite_interface_mmio.write(self._ctrl * 4, _set_bit(control_register, self.manual_trigger_pos, 1))
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, _set_bit(control_register, self._manual_trigger_pos, 1))
 
         self.log.debug("generation triggered manually")
 
@@ -272,7 +272,7 @@ class GeneratorDriver(_FIREQDriver):
 
         control_register = _set_bit(
             value=self._axi_lite_interface_mmio.read(self._ctrl * 4),
-            pos=self.source_pos,
+            pos=self._source_pos,
             setvalue=selector,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
@@ -294,7 +294,7 @@ class GeneratorDriver(_FIREQDriver):
             return -3
 
         control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
-        control_register = _set_bits(control_register, self.seed_lfsr_pos, self.seed_lfsr_width, seed)
+        control_register = _set_bits(control_register, self._seed_lfsr_pos, self.seed_lfsr_width, seed)
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
 
         self.log.debug("set the lfsr seed to %s", seed)
@@ -389,7 +389,7 @@ class GeneratorDriver(_FIREQDriver):
 
         control_register = _set_bit(
             self._axi_lite_interface_mmio.read(self._ctrl * 4),
-            pos=self.man_trig_sel,
+            pos=self._man_trig_sel,
             setvalue=selector,
         )
         self._axi_lite_interface_mmio.write(self._ctrl * 4, control_register)
