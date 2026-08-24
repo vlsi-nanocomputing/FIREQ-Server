@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server import ConfigurationError, OverlayAdapter
-from server.hardware.dma_engine import DMAResult
-from server.hardware.ol_adapter.overlay_adapter_types import iq_float_to_cint16, parse_bool_flag
+from FIREQ_SERVER import ConfigurationError, OverlayAdapter
+from FIREQ_SERVER.hardware.dma_engine import DMAResult
+from FIREQ_SERVER.hardware.ol_adapter.overlay_adapter_types import iq_float_to_cint16, parse_bool_flag
 
 try:
     from test.mock_hardware import MockOverlay

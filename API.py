@@ -6,15 +6,14 @@ This module starts the FIREQServer with a loaded FIREQ SoC overlay.
 import logging
 import os
 import sys
-from typing import Literal
 
-from server import FIREQServer
+from FIREQ_SERVER import FIREQServer
 
 # Path to the base directory where the overlay files are stored
 HOME_PATH = "/home/xilinx/"
 
 
-def setup_logging(level=Literal) -> logging.Logger:
+def setup_logging(level: int) -> logging.Logger:
     """Configure logging for the server."""
     logging.basicConfig(
         level=level,

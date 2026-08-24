@@ -549,6 +549,21 @@ class SignalGeneratorNode(_GenericNode):
         self.log.debug("drive order set to %s", order)
         return 0
 
+    @_GenericNode.parameter_callback("$tmanual_dest", sweepable=False, cost=1)
+    def set_manual_wave_destination(self, destination: str) -> int:
+        """Set the destination where manual waves should be sent.
+
+        :param destination: 'readout' or 'drive'
+        :type destination: str
+        :return: Error code (0 on success)
+        :rtype: int
+        """
+        return self._ll_handler.set_manual_wave_destination(destination=destination)
+
+    def manual_trigger(self) -> int:
+        """Trigger the generator manually."""
+        return self._ll_handler.trigger_manually()
+
     def create_child(self, name: str, of_type: str, **kwargs: dict[str, Any]) -> _GenericEnvelope | _Pulse | _VZGate:
         """Create a child node of the specified type.
 

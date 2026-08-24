@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server import FIREQServer, MessageHandler, OverlayAdapter, SweepStatus
+from FIREQ_SERVER import FIREQServer, MessageHandler, OverlayAdapter, SweepStatus
 
 try:
     from test.mock_hardware import MockOverlay

@@ -17,16 +17,15 @@ Protocol:
 
 import logging
 import socket
-import struct
 import time
 from pathlib import Path
-from queue import Empty, Full, Queue
+from queue import Empty
 from threading import Event
 
-from system import FIREQSystemNode
+from FIREQ_SYSTEM import FIREQSystemNode
 
 from .execution import SweepExperiment
-from .network import FIREQNetworkPacket, ReceiveWorker, SendWorker, get_command, get_sweep_variables
+from .network import FIREQNetworkPacket, NetworkDMAPayload, ReceiveWorker, SendWorker, get_command, get_sweep_variables
 
 MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max payload
 QUEUE_MAX_MEMORY_BYTES = 1024 * 1024 * 1024  # 1 GB queue memory limit
@@ -80,9 +79,13 @@ class FIREQServer:
         :param log: Optional log instance.
         :type log: logging.log | None
         """
+        # load the system
         if overlay_file is None:
             raise ValueError("overlay_file must be provided")
         self._fireq_soc = FIREQSystemNode(overlay_file)
+        # set the dma payload interface class to use a class that provides a
+        # compatible network interface
+        self._fireq_soc.set_dma_payload_interface_class(NetworkDMAPayload)
         self._host = host
         self._port = port
         self._auth_token = auth_token
@@ -98,11 +101,11 @@ class FIREQServer:
         self._receive_worker = ReceiveWorker(self._client_connected)
         self._send_worker = SendWorker(self._client_connected)
 
-        # Getting the two queues
+        # Getting the two network packet queues
         self._queue_in = self._receive_worker.queue_in
         self._queue_out = self._send_worker.queue_out
 
-        # server
+        # sockets
         self._server_socket: socket.socket
         self._client_socket: socket.socket
 
@@ -392,283 +395,3 @@ class FIREQServer:
     def log_and_send_error(self, error: str):
         self.log.warning(error)
         self._queue_out.put(FIREQNetworkPacket({"type": "warning", "msg": f"{error}"}))
-
-    # def _handle_client(self) -> None:
-    #    """Spawn threads to receive from the client and send responses."""
-    #    try:
-    #        self._client_socket.settimeout(None)
-    #        self._sender_dead.clear()
-    #
-    #        self._receiver_loop()
-    #        self.queue_out.put(None)
-    #        sender.join(timeout=2.0)
-    #
-    #    except Exception as e:
-    #        self.log.error(f"Client handler error: {e}")
-    #
-    #    finally:
-    #        self.log.info("Client teardown...")
-    #        self._stop_event.set()
-    #
-    #        # Drain stale messages from disconnected client
-    #        while not self.queue_in.empty():
-    #            try:
-    #                self.queue_in.get_nowait()
-    #            except Empty:
-    #                break
-    #
-    #        # Wait for main loop to finish current message + do cleanup
-    #        self._cleanup_done.clear()
-    #        cleanup_timeout = SWEEP_WAIT_TIMEOUT_SECONDS + 5.0
-    #        if not self._cleanup_done.wait(timeout=cleanup_timeout):
-    #            self.log.warning("Cleanup acknowledgment timeout (%.1fs)", cleanup_timeout)
-    #
-    #        self.queue_out.clear()
-    #
-    #        try:
-    #            client_socket.shutdown(socket.SHUT_RDWR)
-    #        except (OSError, AttributeError):
-    #            pass
-    #        try:
-    #            client_socket.close()
-    #        except Exception:
-    #            pass
-    #        self._client_socket = None
-    #        self._sender_dead.clear()
-    #        self.log.info("Client disconnected, ready for new connection")
-
-    # def _receiver_loop(self) -> None:
-    #    """Receive client messages and enqueue commands. Abort bypasses queue_in."""
-    #    while self._running:
-    #        try:
-    #            msg = self._receive_message(sock)
-    #            if msg is None:
-    #                self.log.info("Client connection closed")
-    #                break
-    #
-    #            cmd = msg.get("cmd", "")
-    #            if cmd == "abort":
-    #                self.log.info("Abort command received")
-    #                self._stop_event.set()
-    #                self._abort_in_progress.set()
-    #                self.queue_out.clear()
-    #                self.queue_out.put(
-    #                    {
-    #                        "ok": True,
-    #                        "cmd": "abort",
-    #                        "session_id": msg.get("session_id", ""),
-    #                        "message": "Sweep aborted",
-    #                    }
-    #                )
-    #            else:
-    #                if cmd == "upload_envelopes":
-    #                    total_envelopes, invalid_metadata = EnvelopeHandler.validate_metadata(msg)
-    #                    if (not invalid_metadata) and total_envelopes > 0:
-    #                        msg["envelope_data"] = self._recv_envelope_frames(sock, total_envelopes)
-    #                        self.log.info(f"Received {total_envelopes} binary envelope frames")
-    #                self.queue_in.put(msg)
-    #        except (ConnectionResetError, ConnectionAbortedError, OSError):
-    #            self.log.warning("Connection lost")
-    #        except Exception as e:
-    #            self.log.error(f"Receiver error: {e}")
-    #            break
-    #
-    # def _sender_loop(self) -> None:
-    #    """Send responses from ``queue_out`` to client. Exits on ``None`` or disconnect."""
-    #    while self._running:
-    #        try:
-    #            item = self.queue_out.get(timeout=1.0)
-    #        except Empty:
-    #            continue
-    #
-    #        if item is None:
-    #            break
-    #
-    #        try:
-    #            if self._client_socket is None:
-    #                break
-    #
-    #            # Skip non-abort items when abort is in progress
-    #            is_abort_cmd = isinstance(item, dict) and item.get("cmd") == "abort"
-    #            if self._abort_in_progress.is_set() and not is_abort_cmd:
-    #                continue
-    #
-    #            # Handle typed queue items (streaming commands)
-    #            if isinstance(item, StreamHeader):
-    #                self._send_message(self._client_socket, item.metadata)
-    #
-    #            elif isinstance(item, BinaryChunk):
-    #                for acq_ip_idx, arr in item.binary_data.items():
-    #                    self._send_binary_frame(self._client_socket, acq_ip_idx, arr)
-    #                if item.timing:
-    #                    self._send_timing_trailer(self._client_socket, item.timing[0], item.timing[1])
-    #
-    #            elif isinstance(item, StreamTiming):
-    #                include_timing = item.type == "sweep_status"
-    #                self._send_message(self._client_socket, item.metadata, include_timing=include_timing)
-    #
-    #            elif isinstance(item, dict):
-    #                # Legacy dict handling for simple commands (ping, status, reset_*, abort)
-    #                self._send_message(self._client_socket, item)
-    #                if is_abort_cmd:
-    #                    self._abort_in_progress.clear()
-    #
-    #        except (BrokenPipeError, ConnectionResetError, OSError):
-    #            self.log.error("Client disconnected during send")
-    #            self._stop_event.set()
-    #            self._sender_dead.set()
-    #            self.queue_out.clear()
-    #            break
-    #        except Exception as e:
-    #            self.log.error(f"Send error: {e}")
-    #            self._sender_dead.set()
-    #            self.queue_out.clear()
-    #            break
-    #
-    #    self.log.debug("Sender loop exited")
-
-    # =========================================================================
-    # HANDSHAKE & AUTHENTICATION
-    # =========================================================================
-
-    # def _handle_logout(self) -> None:
-    #    """Reset server-side caches and notify the client."""
-    #    self.log.info("Logout requested, resetting caches...")
-    #    try:
-    #        results = self.handler.reset_h.reset_all_generators()
-    #        for r in results:
-    #            if not r["waves"]["ok"]:
-    #                self.log.warning(f"Wave reset failed for gen {r['gen_index']}")
-    #            if not r["envelopes"]["ok"]:
-    #                self.log.warning(f"Envelope reset failed for gen {r['gen_index']}")
-    #        self.queue_out.put(
-    #            {
-    #                "ok": True,
-    #                "cmd": "logout",
-    #                "message": f"Logout successful, {len(results)} generator(s) reset",
-    #            }
-    #        )
-    #    except Exception as e:
-    #        self.log.exception("Logout failed")
-    #        self.queue_out.put({"ok": False, "cmd": "logout", "error": str(e)})
-
-    # =========================================================================
-    # INTERNAL HELPERS
-    # =========================================================================
-
-    # def _safe_queue_put(self, item: object, timeout: float = 1.0) -> bool:
-    #    """Put item to queue_out with timeout, checking for sender death.
-
-
-#
-#    :param item: Item to enqueue.
-#    :type item: object
-#    :param timeout: Timeout per attempt in seconds.
-#    :type timeout: float
-#    :return: True if enqueued, False if sender died or stop requested.
-#    :rtype: bool
-#    """
-#    t_start, retry_count = time.perf_counter(), 0
-#    while self._running:
-#        if self._sender_dead.is_set() or self._stop_event.is_set():
-#            return False
-#        try:
-#            self.queue_out.put(item, timeout=timeout)
-#            if retry_count > 0:
-#                self.log.warning(
-#                    f"Queue put after {retry_count} retries, {(time.perf_counter() - t_start) * 1000:.1f}ms"
-#                )
-#            return True
-#        except Full:
-#            retry_count += 1
-#            if retry_count % 5 == 0:
-#                self.log.warning(f"Queue full, retry #{retry_count}")
-#    return False
-#
-# def _build_response(self, cmd: str, session_id: str, result: object = None, **extra: object) -> dict:
-#    """Build a standard command response dictionary.
-#
-#    :param cmd: Command name.
-#    :type cmd: str
-#    :param session_id: Client session identifier.
-#    :type session_id: str
-#    :param result: Optional result object with to_dict() method.
-#    :type result: object
-#    :param extra: Additional fields to include in the response.
-#    :return: Response dictionary ready for queue_out.
-#    :rtype: dict
-#    """
-#    response = {"cmd": cmd, "session_id": session_id}
-#    if result is not None:
-#        if hasattr(result, "to_dict"):
-#            response.update(result.to_dict())
-#        elif isinstance(result, dict):
-#            response.update(result)
-#    response.update(extra)
-#    return response
-#
-# def _add_server_timing(self, timing_item: StreamTiming | None, t_start: float) -> None:
-#    """Add total server time to a StreamTiming item's metadata.
-#
-#    :param timing_item: StreamTiming item to update, or None.
-#    :type timing_item: StreamTiming | None
-#    :param t_start: Start time from time.perf_counter().
-#    :type t_start: float
-#    """
-#    if timing_item is not None:
-#        debug_timing = timing_item.metadata.setdefault("debug_timing", {})
-#        debug_timing["total_server_time_ms"] = (time.perf_counter() - t_start) * 1000
-#        self._safe_queue_put(timing_item)
-#
-# def _stream_items_to_queue(
-#    self, items_generator: Iterator[StreamHeader | BinaryChunk | StreamTiming]
-# ) -> StreamTiming | None:
-#    """Stream items from generator to queue_out, tracking the last timing item.
-#
-#    :param items_generator: Generator yielding stream items.
-#    :return: The last StreamTiming item encountered, or None.
-#    :rtype: StreamTiming | None
-#    """
-#    last_timing = None
-#    try:
-#        for item in items_generator:
-#            if isinstance(item, StreamTiming):
-#                last_timing = item
-#                continue
-#            if not self._safe_queue_put(item):
-#                break
-#    finally:
-#        items_generator.close()
-#    return last_timing
-#
-# def _handle_command_error(self, cmd: str, session_id: str, exc: Exception) -> None:
-#    """Handle command execution errors with appropriate logging and response.
-#
-#    :param cmd: Command name that failed.
-#    :type cmd: str
-#    :param session_id: Client session identifier.
-#    :type session_id: str
-#    :param exc: The exception that occurred.
-#    :type exc: Exception
-#    """
-#    config = _EXCEPTION_CONFIG.get(type(exc))
-#    if config:
-#        error_type, log_level, log_suffix = config
-#        getattr(self.log, log_level)(f"Command '{cmd}' {log_suffix}: {exc}")
-#    else:
-#        error_type = "unknown"
-#        self.log.exception(f"Command '{cmd}' failed")
-#    self.queue_out.put(self._build_response(cmd, session_id, ok=False, error=str(exc), error_type=error_type))
-#
-# def _do_hardware_cleanup(self, context: str) -> None:
-#    """Best-effort hardware cleanup to avoid stale DMA/acquisition state.
-#
-#    Must be called from the main thread only — serialized with hardware ops.
-#
-#    :param context: Description for log messages (e.g., "Client disconnect").
-#    :type context: str
-#    """
-#    try:
-#        self.handler.cleanup()
-#    except Exception as e:
-#        self.log.warning(f"{context}: cleanup failed: {e}")
