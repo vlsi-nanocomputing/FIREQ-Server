@@ -1,4 +1,3 @@
-# file: fireq-utils/server/network/__init__.py
 """Network layer for FIREQ server.
 
 This package provides network handling threads and protocol for FIREQ server.

@@ -1,4 +1,3 @@
-# file: fireq-utils/server/network/memory_queue.py
 """Memory-bounded thread-safe queue for streaming data.
 
 This module provides a queue that bounds by memory usage instead of item count,

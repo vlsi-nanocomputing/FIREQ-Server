@@ -1,4 +1,3 @@
-# file: fireq-utils/server/models/exceptions.py
 """Custom exceptions for the hardware layer.
 
 These exceptions provide a clean, typed error interface for the orchestrator, isolating

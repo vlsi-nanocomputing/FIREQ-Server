@@ -1,6 +1,5 @@
 """Tests for OverlayAdapter and related behavior."""
 
-# file: fireq-utils/test/test_ol_adapter.py
 from unittest.mock import MagicMock
 
 import numpy as np

@@ -1,4 +1,3 @@
-# file: fireq-utils/server/models/__init__.py
 """Data structures and exceptions for FIREQ server."""
 
 from .exceptions import (

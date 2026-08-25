@@ -1,4 +1,3 @@
-# file: fireq-utils/server/network/fireq_server.py
 """FIREQ TCP Server - single-client TCP server for hardware experiments.
 
 Handles client connections at startup, owns the client socket and handles the connection lifetime
