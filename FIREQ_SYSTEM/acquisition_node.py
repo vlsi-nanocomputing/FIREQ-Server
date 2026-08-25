@@ -17,38 +17,16 @@ logger = logging.getLogger(__name__)
 class AcquisitionNode(_GenericNode):
     """Object representing the acquisition IP.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the acquisition node instance
-       * - ``_ll_handler``
-         - ``AcquisitionDriver``
-         - Low-level driver handler
-       * - ``$duration``
-         - ``float``
-         - Duration of the acquisition in ns
-       * - ``$output_type``
-         - ``str``
-         - Output type: ``"raw"``, ``"decimated"`` or ``"accumulated"``
-       * - ``$rfrequency``
-         - ``float``
-         - Demodulation frequency in MHz
-       * - ``$rphase``
-         - ``float``
-         - Demodulation initial phase in radians
-       * - ``$rchannel``
-         - ``int``
-         - Trigger channel, set to 0 for no external trigger
-       * - ``$tof``
-         - ``float``
-         - Time of flight in ns
+    - ``_name`` (str): Name of the acquisition node instance.
+    - ``_ll_handler`` (AcquisitionDriver): Low-level driver handler.
+    - ``$duration`` (float): Duration of the acquisition, in ns.
+    - ``$output_type`` (str): Output type. One of ``"raw"``, ``"decimated"``, or ``"accumulated"``.
+    - ``$rfrequency`` (float): Demodulation frequency, in MHz.
+    - ``$rphase`` (float): Demodulation initial phase, in radians.
+    - ``$rchannel`` (int): Trigger channel. Set to ``0`` for no external trigger.
+    - ``$tof`` (float): Time of flight, in ns.
     """
 
     nodetype = "acquisition"

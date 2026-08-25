@@ -15,20 +15,10 @@ logger = logging.getLogger(__name__)
 class FIFONode(_GenericNode):
     """Object representing an AXI-Stream FIFO.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the FIFO node instance
-       * - ``_ll_handler``
-         - ``FIFOWrapper``
-         - Low-level FIFO wrapper handler
+    - ``_name`` (str): Name of the FIFO node instance.
+    - ``_ll_handler`` (FIFOWrapper): Low-level FIFO wrapper handler.
     """
 
     nodetype = "acquisition_fifo"
