@@ -18,32 +18,14 @@ logger = logging.getLogger(__name__)
 class _GenericEnvelope(_GenericNode):
     """Object representing a pulse envelope.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the envelope (``_RECTANGULAR`` is a protected keyword)
-       * - ``_for_interpolation``
-         - ``bool``
-         - Uses hardware interpolation, defaults to ``False``
-       * - ``_is_symmetric``
-         - ``bool``
-         - Only specify in case of interpolation, defaults to ``False``
-       * - ``_i_even``
-         - ``bool``
-         - Only specify if symmetric
-       * - ``_q_even``
-         - ``bool``
-         - Only specify if symmetric
-       * - ``$samples``
-         - ``list[complex]``
-         - List of complex sample values
+    - ``_name`` (str): Name of the envelope (``_RECTANGULAR`` is a protected keyword).
+    - ``_for_interpolation`` (bool): Uses hardware interpolation. Defaults to ``False``.
+    - ``_is_symmetric`` (bool): Only specify in case of interpolation. Defaults to ``False``.
+    - ``_i_even`` (bool): Only specify if symmetric.
+    - ``_q_even`` (bool): Only specify if symmetric.
+    - ``$samples`` (list[complex]): List of complex sample values.
     """
 
     nodetype = "envelope"
@@ -144,23 +126,11 @@ class _RectangularEnvelope(_GenericNode):
 class _VZGate(_GenericNode):
     """Object representing a virtual Z rotation gate.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the gate
-       * - ``_readout``
-         - ``bool``
-         - If set, the pulse is a readout pulse, defaults to ``False``
-       * - ``$vz_rotation``
-         - ``float``
-         - Phase of VZ rotation normalized to 2π
+    - ``_name`` (str): Name of the gate.
+    - ``_readout`` (bool): If set, the pulse is a readout pulse. Defaults to ``False``.
+    - ``$vz_rotation`` (float): Phase of the VZ rotation, normalized to 2π.
     """
 
     nodetype = "vzgate"
@@ -200,35 +170,15 @@ class _VZGate(_GenericNode):
 class _Pulse(_GenericNode):
     """Object representing a pulse (wave definition word).
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the pulse (gate)
-       * - ``_readout``
-         - ``bool``
-         - If set, the pulse is a readout pulse, defaults to ``False``
-       * - ``_envelope``
-         - ``str``
-         - Name of the envelope to use for the pulse
-       * - ``_switch_iq``
-         - ``bool``
-         - If set, I and Q values are switched, defaults to ``False``
-       * - ``_keep_last``
-         - ``bool``
-         - If set, the last sample will be placed at the output, defaults to ``False``
-       * - ``$duration``
-         - ``float``
-         - Duration of the pulse in nanoseconds
-       * - ``$gain``
-         - ``float``
-         - Gain between -1 and 1
+    - ``_name`` (str): Name of the pulse (gate).
+    - ``_readout`` (bool): If set, the pulse is a readout pulse. Defaults to ``False``.
+    - ``_envelope`` (str): Name of the envelope to use for the pulse.
+    - ``_switch_iq`` (bool): If set, I and Q values are switched. Defaults to ``False``.
+    - ``_keep_last`` (bool): If set, the last sample will be placed at the output. Defaults to ``False``.
+    - ``$duration`` (float): Duration of the pulse, in nanoseconds.
+    - ``$gain`` (float): Gain, between -1 and 1.
     """
 
     nodetype = "pulse"
@@ -336,41 +286,17 @@ class _Pulse(_GenericNode):
 class SignalGeneratorNode(_GenericNode):
     """Object representing the signal generator system.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the signal generator node instance
-       * - ``_ll_handler``
-         - ``GeneratorDriver``
-         - Low-level handler for the signal generator
-       * - ``$dfrequency``
-         - ``float``
-         - Drive frequency in MHz
-       * - ``$rfrequency``
-         - ``float``
-         - Readout frequency in MHz
-       * - ``$rphase``
-         - ``float``
-         - Readout phase in radians
-       * - ``$rchannel``
-         - ``int``
-         - Readout trigger channel, set to 0 to deactivate
-       * - ``$dchannel``
-         - ``int``
-         - Drive trigger channel, set to 0 to deactivate
-       * - ``$lfsr_seed``
-         - ``int``
-         - Seed for the LFSR
-       * - ``$drive_order``
-         - ``list[str]``
-         - Ordered list of pulse names to be generated
+    - ``_name`` (str): Name of the signal generator node instance.
+    - ``_ll_handler`` (GeneratorDriver): Low-level handler for the signal generator.
+    - ``$dfrequency`` (float): Drive frequency, in MHz.
+    - ``$rfrequency`` (float): Readout frequency, in MHz.
+    - ``$rphase`` (float): Readout phase, in radians.
+    - ``$rchannel`` (int): Readout trigger channel. Set to ``0`` to deactivate.
+    - ``$dchannel`` (int): Drive trigger channel. Set to ``0`` to deactivate.
+    - ``$lfsr_seed`` (int): Seed for the LFSR.
+    - ``$drive_order`` (list[str]): Ordered list of pulse names to be generated.
     """
 
     nodetype = "signal_generation"

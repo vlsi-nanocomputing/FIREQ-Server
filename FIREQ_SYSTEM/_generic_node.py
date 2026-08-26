@@ -243,11 +243,3 @@ class _GenericNode(Node, metaclass=RegisterNode):
                 self.log.error("unsupported value type for key %s", key)
                 raise TypeError(f"unsupported value type for key {key}")
         return callback_list
-
-    def get_capability_dict() -> dict | None:
-        """Get an example configuration for experiment definition purposes.
-
-        :return: Dictionary describing the capability of the peripheral or None if not applicable
-        :rtype: dict | None
-        """
-        return None

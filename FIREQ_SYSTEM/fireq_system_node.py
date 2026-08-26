@@ -22,17 +22,9 @@ class FIREQSystemNode(_GenericNode):
     loading the bitfile, discovering IPs, building the node tree, and orchestrating
     inter-node dependencies.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``$shots``
-         - ``int``
-         - Number of shots for each experiment
+    - ``$shots`` (int): Number of shots for each experiment.
     """
 
     def __init__(self, bitfile_name: str) -> None:

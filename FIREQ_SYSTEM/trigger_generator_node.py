@@ -16,32 +16,14 @@ logger = logging.getLogger(__name__)
 class _DelayItem(_GenericNode):
     """Object representing a trigger delay.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the delay item
-       * - ``_ttype``
-         - ``str``
-         - Either ``"drive"`` or ``"readout"``
-       * - ``_channel``
-         - ``int``
-         - Channel of the drive or readout trigger
-       * - ``_index``
-         - ``int``
-         - Only used for drive delays
-       * - ``_generate_trigger``
-         - ``bool``
-         - If ``True``, a drive trigger is generated at the end of the delay
-       * - ``$delay``
-         - ``float``
-         - Value of the delay in ns
+    - ``_name`` (str): Name of the delay item.
+    - ``_ttype`` (str): Either ``"drive"`` or ``"readout"``.
+    - ``_channel`` (int): Channel of the drive or readout trigger.
+    - ``_index`` (int): Only used for drive delays.
+    - ``_generate_trigger`` (bool): If ``True``, a drive trigger is generated at the end of the delay.
+    - ``$delay`` (float): Value of the delay, in ns.
     """
 
     nodetype = "delay"
@@ -97,23 +79,11 @@ class _DelayItem(_GenericNode):
 class TriggerGeneratorNode(_GenericNode):
     """Object representing the trigger generator system.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the trigger generator node instance
-       * - ``_ll_handler``
-         - ``TriggerGeneratorDriver``
-         - Low-level handler for the trigger generator
-       * - ``$experiment_duration``
-         - ``float``
-         - Duration of the experiment shot in ns
+    - ``_name`` (str): Name of the trigger generator node instance.
+    - ``_ll_handler`` (TriggerGeneratorDriver): Low-level handler for the trigger generator.
+    - ``$experiment_duration`` (float): Duration of the experiment shot, in ns.
     """
 
     nodetype = "trigger_generator"

@@ -15,20 +15,10 @@ logger = logging.getLogger(__name__)
 class SwitchNode(_GenericNode):
     """Object representing the AXI-Stream switch IP.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the switch instance
-       * - ``_ll_handler``
-         - ``AXIStreamSwitchDriver``
-         - Low-level handler for the switch driver
+    - ``_name`` (str): Name of the switch instance.
+    - ``_ll_handler`` (AXIStreamSwitchDriver): Low-level handler for the switch driver.
     """
 
     nodetype = "data_switch"

@@ -32,20 +32,10 @@ class DMAPayload:
 class DMANode(_GenericNode):
     """Object representing the DMA IP.
 
-    Dictionary definition for configuration:
+    Configuration dictionary keys:
 
-    .. list-table::
-       :header-rows: 1
-
-       * - Key
-         - Type
-         - Description
-       * - ``_name``
-         - ``str``
-         - Name of the DMA node instance
-       * - ``_ll_handler``
-         - ``DMA``
-         - Low-level DMA driver handler
+    - ``_name`` (str): Name of the DMA node instance.
+    - ``_ll_handler`` (DMA): Low-level DMA driver handler.
     """
 
     nodetype = "dma"
