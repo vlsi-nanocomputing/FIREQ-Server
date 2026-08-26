@@ -334,6 +334,33 @@ class FIREQSystemNode(_GenericNode):
         self.log.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 
     # ------------------------------------------------------------------
+    # Async commands
+    # ------------------------------------------------------------------
+
+    def trigger_manually(self, generator_node_name: str) -> None:
+        """
+        Trigger a generator manually.
+
+        :param generator_node_name: Name of the generator that is to be triggered
+        :type generator_node_name: str
+        """
+        gen = self.get_child(generator_node_name)
+        gen.manual_trigger()
+
+    def set_dma_payload_interface_class(self, interface_class: object) -> None:
+        """
+        Set the interface class for all DMA nodes in the design.
+
+        The interface class is used to create the DMA payloads that are put into the
+        outgoing queues when running an experiment.
+
+        :param interface_class: Class that wraps the DMA payload, inherits from dma_node.DMAPayload
+        :type interface_class: object
+        """
+        for dma_node in self._dma_nodes:
+            dma_node.dma_payload_interface_class = interface_class
+
+    # ------------------------------------------------------------------
     # System properties
     # ------------------------------------------------------------------
 

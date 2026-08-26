@@ -4,10 +4,10 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from server import MessageHandler, OverlayAdapter, WaveCompilationError
-from server.execution.sweep_updates import SweepUpdateApplier, ValueTracker
-from server.hardware.dma_engine import DMAResult
-from server.models import BinaryChunk, StreamHeader, StreamTiming
+from FIREQ_SERVER import MessageHandler, OverlayAdapter, WaveCompilationError
+from FIREQ_SERVER.execution.sweep_updates import SweepUpdateApplier, ValueTracker
+from FIREQ_SERVER.hardware.dma_engine import DMAResult
+from FIREQ_SERVER.models import BinaryChunk, StreamHeader, StreamTiming
 
 # Attempt to import Mock Hardware; fallback to local import if the file is adjacent
 try:

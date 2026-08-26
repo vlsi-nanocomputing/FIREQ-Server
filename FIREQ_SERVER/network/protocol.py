@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import msgpack
 
+from FIREQ_SYSTEM.dma_node import DMAPayload
+
 
 @dataclass
 class FIREQNetworkPacket:
@@ -42,6 +44,36 @@ class FIREQNetworkPacket:
     def get(self, key: str, default: object = None) -> object:
         """Get key value from the header dict."""
         return self.header.get(key, default)
+
+
+@dataclass
+class NetworkDMAPayload(DMAPayload):
+    """Object that holds the payload for a DMA transfer and that can be transferred through the network.
+
+    It can be sent over a socket with the to_buffers method, using sock.sendmsg().
+    """
+
+    def to_buffers(self) -> tuple[bytes, bytes, bytes]:
+        """Return a sequence of bytes-like objects ready for sendmsg().
+
+        The layout:
+          buf[0] : 4 bytes header size (big-endian unsigned int)
+          buf[1-N] : msgpack-packed header
+          buf[N+1: M] : raw binary payload
+
+        The msgpack header contains a "tsize" key that specifies the size of the trailing binary payload.
+        """
+        header_bytes = msgpack.packb(
+            {
+                "type": "dma_package",
+                "source": self.source,
+                "shots": self.shots,
+                "format": self.dtype,
+                "tsize": len(self.data),
+            }
+        )
+        header_size_bytes = struct.pack(">I", len(header_bytes))  # 4 bytes, network byte order
+        return (header_size_bytes, header_bytes, self.data)
 
 
 def unpack_header(serial: bytes) -> dict:

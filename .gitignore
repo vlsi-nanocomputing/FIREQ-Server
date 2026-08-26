@@ -53,3 +53,6 @@ testing/
 *.npy
 *.csv
 *.bin
+
+# deprecated stuff
+deprecated/

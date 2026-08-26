@@ -21,39 +21,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DMAPayload:
-    """Object that holds the payload for a DMA transfer.
-
-    It can be sent over a socket with the to_buffers method, using sock.sendmsg().
-
-    The specific protocol used to send it is specified in the to_buffers method.
-    """
+    """Object that holds the payload for a DMA transfer."""
 
     source: str
     shots: int
     dtype: str
     data: bytes
-
-    def to_buffers(self) -> tuple[bytes, bytes, bytes]:
-        """Return a sequence of bytes-like objects ready for sendmsg().
-
-        The layout:
-          buf[0] : 4 bytes header size (big-endian unsigned int)
-          buf[1-N] : msgpack-packed header
-          buf[N+1: M] : raw binary payload
-
-        The msgpack header contains a "tsize" key that specifies the size of the trailing binary payload.
-        """
-        header_bytes = msgpack.packb(
-            {
-                "type": "dma_package",
-                "source": self.source,
-                "shots": self.shots,
-                "format": self.dtype,
-                "tsize": len(self.data),
-            }
-        )
-        header_size_bytes = struct.pack(">I", len(header_bytes))  # 4 bytes, network byte order
-        return (header_size_bytes, header_bytes, self.data)
 
 
 class DMANode(_GenericNode):
@@ -102,6 +75,8 @@ class DMANode(_GenericNode):
         self._is_switch_input: bool = False
         self._switch_func: callable | None = None
         self._current_payload_index: int | None = None
+        # class that holds the data of the dma
+        self.dma_payload_interface_class = DMAPayload
 
     def _build_dependencies(self) -> None:
         """Build the dependencies for this node.
@@ -192,7 +167,7 @@ class DMANode(_GenericNode):
             # wait for the transfer to complete and put the data in the queue
             self._ll_handler.recvchannel.wait()
             data_queue.put(
-                DMAPayload(
+                self.dma_payload_interface_class(
                     source=current_payload["source"],
                     shots=self._saved_hw_shots["value"],
                     dtype=current_payload["format"],

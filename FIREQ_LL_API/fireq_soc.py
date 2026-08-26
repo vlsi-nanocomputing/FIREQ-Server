@@ -2,8 +2,6 @@
 
 import logging
 import os
-import re
-import time
 
 import xrfclk
 import xrfdc  # noqa: F401
@@ -89,6 +87,13 @@ class FIREQSoC(Overlay):
         self.active_adcs = None
         self.active_dacs = None
         self._discover_rfdc()
+
+        # discover mts related info
+        self._mts_dac_mask = None
+        self._mts_adc_mask = None
+        self._mts_dac_master = None
+        self._mts_adc_master = None
+        self._discover_mts()
 
         # Find the clocks
         self.dac_samplerate = None
@@ -240,6 +245,70 @@ class FIREQSoC(Overlay):
         self.active_dacs = active_dacs
         self.log.debug("Active ADCs: %s", self.active_adcs)
         self.log.debug("Active DACs: %s", self.active_dacs)
+
+    def _discover_mts(self) -> None:
+        """Discover MTS DAC and ADC groups in the data converter IP."""
+        if self.rfdc is None:
+            self.log.debug("Skipping MTS discovery, no RFDC found in the design")
+            return
+
+        # find the master tile for DACs
+        self._mts_dac_mask = 0
+        for dac_tile, _ in self.active_dacs:
+            self._mts_dac_mask |= 1 << dac_tile
+            if self.rfdc.dac_tiles[dac_tile].PLLConfig["Enabled"] == 1:
+                self._mts_dac_master = dac_tile
+        self._mts_adc_mask = 0
+
+        # find the master tile for ADCs
+        for adc_tile, _ in self.active_adcs:
+            self._mts_adc_mask |= 1 << adc_tile
+            if self.rfdc.adc_tiles[adc_tile].PLLConfig["Enabled"] == 1:
+                self._mts_adc_master = adc_tile
+
+        self.log.debug(
+            f"Found MTS groups {self._mts_dac_mask} {self._mts_adc_mask} and masters {self._mts_dac_master} {self._mts_adc_master}"
+        )
+
+    def syncronize_mts_groups(self) -> None:
+        """Sync DAC and ADC tiles."""
+        # activate the mts for the dacs
+        self.rfdc.mts_dac_config.RefTile = self._mts_dac_master
+        self.rfdc.mts_dac_config.Tiles = self._mts_dac_mask
+        self.rfdc.mts_dac_config.SysRef_Enable = 1
+        self.rfdc.mts_dac_config.Target_Latency = -1
+        self.rfdc.mts_dac()
+        # TODO: activate the mts for the adcs if necessary
+
+    def set_nyquist_zone(self, tile: int, block_id: int, zone: int) -> None:
+        """
+        Set the nyquist zone for a certain DAC or ADC.
+
+        :param tile: FPGA tile number, such as 228, 224, etc.
+        :type tile: int
+        :param block_id: Converter block number, starts at 0
+        :type block_id: int
+        :param zone: Nyquist zone, starts at 1
+        :type zone: int
+        """
+        dac_t = tile - 228
+        adc_t = tile - 224
+        if dac_t >= 0:
+            if (dac_t, block_id) in self.active_dacs:
+                self.log.debug(f"Change nyquist zone for DAC {tile}, {block_id} to {zone}")
+                self.rfdc.dac_tiles[dac_t].blocks[block_id].NyquistZone = zone
+                return
+            else:
+                self.log.debug(f"Failed to change nyquist zone for DAC {tile}, {block_id}")
+                return
+        if adc_t >= 0:
+            if (adc_t, block_id) in self.active_adcs:
+                self.log.debug(f"Change nyquist zone for ADC {tile}, {block_id} to {zone}")
+                self.rfdc.adc_tiles[adc_t].blocks[block_id].NyquistZone = zone
+                return
+            else:
+                self.log.debug(f"Failed to change nyquist zone for ADC {tile}, {block_id}")
+                return
 
     def _discover_clocks(self) -> None:
         """Discover the clocks and set the sample rates.
