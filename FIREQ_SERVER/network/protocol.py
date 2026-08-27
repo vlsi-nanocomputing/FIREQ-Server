@@ -34,7 +34,7 @@ class FIREQNetworkPacket:
     def to_buffers(self) -> tuple:
         nheader = copy.deepcopy(self.header)
         if self.data:
-            nheader["tdata"] = len(self.data)
+            nheader["tsize"] = len(self.data)
         header_bytes = msgpack.packb(nheader)
         header_size_bytes = struct.pack(">I", len(header_bytes))  # 4 bytes, network byte order
         if self.data:
