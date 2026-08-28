@@ -1,4 +1,3 @@
-# file: fireq-utils/test/test_message_handler.py
 from unittest.mock import MagicMock
 
 import numpy as np

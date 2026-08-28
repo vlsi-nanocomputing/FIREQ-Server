@@ -5,6 +5,9 @@ low-level PYNQ drivers (`FIREQ_LL_API`), a high-level hardware system model
 (`FIREQ_SYSTEM`), and a single-client TCP server (`FIREQ_SERVER`) that exposes
 experiment configuration and execution over the network.
 
+Every Python package has its own README with the details; this file is the
+entry point.
+
 ## Repository layout
 
 ```text
@@ -14,11 +17,15 @@ experiment configuration and execution over the network.
 ├── FIREQ_SYSTEM/         - tree-structured hardware model + dependency DAG
 ├── FIREQ_SERVER/         - TCP server, network protocol, sweep execution
 ├── test/                 - legacy pytest suite (kept for reference)
+├── overlays/             - board overlays (e.g. ZCU216)
+├── deprecated/           - retired code from earlier revisions (not a package)
 ├── pyproject.toml        - project metadata and tool configuration
 ├── requirements.txt      - full board/PYNQ environment snapshot
 ├── sync_board.sh         - rsync deployment helper
 ├── CONTRIBUTING.md       - contribution and style guidelines
-└── .gitlab-ci.yml        - CI pipeline
+├── CODEOWNERS            - code ownership for the CI
+├── .gitlab-ci.yml        - CI pipeline
+└── .pre-commit-config.yaml - pre-commit hooks
 ```
 
 ## Components

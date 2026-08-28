@@ -1,4 +1,3 @@
-# file: fireq-utils/test/test_fireq_server.py
 """FIREQ Server Integration & Robustness Test Suite (Pytest Version)."""
 
 import json
