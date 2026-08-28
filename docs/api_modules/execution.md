@@ -9,5 +9,5 @@ Modules responsible for executing sweep experiments and sequence orchestrations.
    :toctree: ../_autosummary
    :nosignatures:
 
-   server.execution.sweep_experiment.SweepExperiment
+   FIREQ_SERVER.execution.sweep_experiment.SweepExperiment
 ```

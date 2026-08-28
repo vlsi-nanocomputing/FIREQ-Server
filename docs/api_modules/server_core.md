@@ -9,5 +9,5 @@ Core classes and functions used to instantiate and manage the main server lifecy
    :toctree: ../_autosummary
    :nosignatures:
 
-   server.fireq_server.FIREQServer
+   FIREQ_SERVER.fireq_server.FIREQServer
 ```
