@@ -30,7 +30,7 @@ def main() -> None:
     # set logging level
     log_level = input("Input logging level: 'debug', 'info' (press enter for 'info')\n")
     if log_level == "debug":
-        logger = setup_logging(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
     else:
         pass
 
