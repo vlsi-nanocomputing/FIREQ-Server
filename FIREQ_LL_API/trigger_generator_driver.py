@@ -1,10 +1,6 @@
 """Low-level driver for the FIREQ trigger generator IP."""
 
-import logging
-
 from ._utils import _FIREQDriver
-
-logger = logging.getLogger(__name__)
 
 __all__ = ["TriggerGeneratorDriver"]
 
@@ -16,6 +12,18 @@ class TriggerGeneratorDriver(_FIREQDriver):
     """
 
     bindto = ["user.org:user:axisTriggerGeneratorIP:1.0"]
+
+    # Register offset definitions
+    _ctrl = 0
+    _experiment_dur_l = 2
+    _experiment_dur_h = 3
+    _shots_num_l = 1
+
+    # Bit position definition
+    _manual_trigger_pos = 31
+
+    # Port name of the fabric clock
+    fabric_clock_port = "HS_axi_clock"
 
     def __init__(self, description: dict[str, object]) -> None:
         """Initialize the TriggerGeneratorDriver.
@@ -31,30 +39,31 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # fifo depth in number of words
         self.channel_fifo_depth = pow(2, int(description["parameters"]["FifoAddressWidth"]))
         # fifo output width
-        self.fifo_output_width = int(description["parameters"]["FifoOutputWidth"])
+        # self.fifo_output_width = int(description["parameters"]["DriveTimerWidth"])
         # maximum drive delay
-        self.drive_delay_max = pow(2, self.fifo_output_width - 1)
+        self.drive_delay_max = pow(2, int(description["parameters"]["DriveTimerWidth"]))
         # experiment max
         self.experiment_timer_max = pow(2, int(description["parameters"]["ExperimentTimerWidth"]))
         # parse the size of the repetition counter
         self.max_hw_repetitions = pow(2, int(description["parameters"]["RepetitionWidth"]))
 
-        self._ctrl = 0
-        self._experiment_dur_l = 2
-        self._experiment_dur_h = 3
-        self._readout_delay_l = 4
-        self._readout_delay_h = 5
-        self._shots_num_l = 1
+    def reset_memory_and_registers(self) -> None:
+        """Reset all memory and registers to 0."""
+        for offset in range(0, self._axi_lite_interface_mmio.length, 4):
+            self._axi_lite_interface_mmio.write(offset, 0)
+        for offset in range(0, self._axi_full_interface_mmio.length, 4):
+            self._axi_full_interface_mmio.write(offset, 0)
 
-        # Bit position definition
-        self._manual_trigger_pos = 31
+    def print_description(self, printer_func: callable) -> None:
+        """Print the description of the trigger generator IP.
 
-    def print_description(self) -> None:
-        """Print the description of the trigger generator IP."""
-        print(f"trigger_channels: {self.trigger_channels}")
-        print(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
-        print(f"fifo_channel_depth: {self.channel_fifo_depth}")
-        print(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
+        :param: printer_func: Function to use to print the description
+        :type printer_func: callable
+        """
+        printer_func(f"trigger_channels: {self.trigger_channels}")
+        printer_func(f"fifo_interface_axi_depth: {self.fifo_interface_memory_depth}")
+        printer_func(f"fifo_channel_depth: {self.channel_fifo_depth}")
+        printer_func(f"maximum_number_of_hardware_repetitions: {self.max_hw_repetitions}")
 
     def init_axi_full_interface(self, base_address: int, axi_depth: int) -> None:
         """Initialize the AXI Full interface for this IP.
@@ -89,7 +98,7 @@ class TriggerGeneratorDriver(_FIREQDriver):
         # write duration HIGH
         self._axi_lite_interface_mmio.write(self._experiment_dur_h * 4, duration >> 32)
 
-        logger.debug(f"trigger, set_experiment_duration, got the following for duration: {duration}")
+        self.log.debug("Set the expreriment duration to %s", duration)
 
         return 0
 
@@ -102,20 +111,20 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :rtype: int
         """
         if value < 1 or value > self.max_hw_repetitions:
-            print(f"number of shots {value} is outside of range 1 to {self.max_hw_repetitions}")
+            self.log.error("number of shots %s is outside of range 1 to %s", value, self.max_hw_repetitions)
             return -3
 
         self._axi_lite_interface_mmio.write(self._shots_num_l * 4, int(value - 1))
 
-        logger.debug(f"trigger, set_number_of_shots, got the following for shots: {value}")
+        self.log.debug("Set the number of hw shots to %s", value)
 
         return 0
 
     def start_experiment(self) -> None:
         """Start the generation of triggers."""
-        self._axi_lite_interface_mmio.write(0, 1 << self._manual_trigger_pos)
+        self._axi_lite_interface_mmio.write(self._ctrl * 4, 1 << self._manual_trigger_pos)
 
-        logger.debug("trigger, started experiment")
+        self.log.debug("Trigger generator started")
 
         return 0
 
@@ -125,71 +134,51 @@ class TriggerGeneratorDriver(_FIREQDriver):
         :return: True if the experiment is finished, False if still running
         :rtype: bool
         """
-        control_register = self._axi_lite_interface_mmio.read(0)
+        control_register = self._axi_lite_interface_mmio.read(self._ctrl * 4)
         return (control_register & 0x40000000) == 0x40000000
 
-    def insert_drive_delay(self, channel: int, index: int, delay: int, generate_trigger: int) -> int:
-        """Insert a delay value in the FIFO of a drive channel at index.
+    def insert_delay(self, trigger_mask: int, ttype: bool, index: int, delay: int) -> int:
+        """Insert a delay in the trigger generator at `index`.
 
-        The generate_trigger input is used to tell the trigger generator if a trigger
-        should be generated at the end of the delay.
+        The ``trigger_mask`` input defines the triggers that will be set once the delay expires.
 
-        :param channel: Drive channel (1 to trigger_channels)
-        :type channel: int
-        :param index: FIFO index (1 is the start)
+        :param trigger_mask: Trigger channels to activate (Fifthen bit mask, e.g. 0b0010 means channel 2)
+        :type trigger_mask: int
+        :param ttype: Trigger type (True for readout, False for drive)
+        :type ttype: bool
+        :param index: FIFO index (1 is the first delay)
         :type index: int
         :param delay: Delay in clock cycles (1 to drive_delay_max)
         :type delay: int
-        :param generate_trigger: Generates a trigger if set to 1
-        :type generate_trigger: int
         :return: Error code (0 on success)
         :rtype: int
         """
-        if channel < 1 or channel > self.trigger_channels:
-            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
+        if trigger_mask < 0 or trigger_mask > pow(2, self.trigger_channels) - 1:
+            self.log.error(f"source {trigger_mask} is outside of range 0 to {pow(2,self.trigger_channels) - 1}")
             return -3
 
-        if index < 1 or index > self.channel_fifo_depth:
-            print(f"index {index} is outside of range 1 to {self.channel_fifo_depth}")
+        if index < 1 or index > self.channel_fifo_depth // 2:
+            self.log.error(f"index {index} is outside of range 1 to {self.channel_fifo_depth // 2}")
             return -3
 
         if delay < 1 or delay > self.drive_delay_max:
-            print(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
+            self.log.error(f"delay {delay} is outside of range 1 to {self.drive_delay_max}")
             return -3
 
-        real_delay = (delay - 1) | (generate_trigger << 31)
-        real_address = (channel - 1) * self.channel_fifo_depth + index - 1
-        self._axi_full_interface_mmio.write(real_address * 4, int(real_delay))
+        source_index = ((index - 1) * 2) + 0
+        delay_index = ((index - 1) * 2) + 1
 
-        logger.debug(
-            "trigger, insert_drive_delay, got the following for channel: %s, index: %s, delay: %s, "
-            "generate_trigger: %s",
-            channel,
+        mask = (int(ttype) << 15) | (trigger_mask & 0x7FFF)
+
+        self._axi_full_interface_mmio.write(delay_index * 4, int(delay) - 1)
+        self._axi_full_interface_mmio.write(source_index * 4, int(mask))
+
+        self.log.debug(
+            "Inserted a delay with trigger_mask: %s, type: %s, index: %s and delay: %s, ",
+            trigger_mask,
+            ttype,
             index,
             delay,
-            generate_trigger,
         )
-
-        return 0
-
-    def set_readout_delay(self, delay: int, channel: int) -> int:
-        """Set the readout delay for a specific channel.
-
-        :param delay: Delay in clock cycles
-        :type delay: int
-        :param channel: Channel number (1 to trigger_channels)
-        :type channel: int
-        :return: Error code (0 on success)
-        :rtype: int
-        """
-        if channel < 1 or channel > self.trigger_channels:
-            print(f"channel {channel} is outside of range 1 to {self.trigger_channels}")
-            return -3
-        # write delay LOW
-        self._axi_lite_interface_mmio.write((self._readout_delay_l + (channel - 1) * 2) * 4, delay & 0xFFFFFFFF)
-        # write delay HIGH
-        self._axi_lite_interface_mmio.write((self._readout_delay_h + (channel - 1) * 2) * 4, delay >> 32)
-
-        logger.debug(f"trigger, set_readout_delay, got the following for channel: {channel}, delay: {delay}")
 
         return 0

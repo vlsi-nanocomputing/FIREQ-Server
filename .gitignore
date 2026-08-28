@@ -30,6 +30,7 @@ env/
 .coverage
 htmlcov/
 coverage.xml
+testing/
 
 # --- Data from Jupyter Notebooks ---
 .ipynb_checkpoints
@@ -52,3 +53,6 @@ coverage.xml
 *.npy
 *.csv
 *.bin
+
+# deprecated stuff
+deprecated/
