@@ -123,7 +123,7 @@ class SweepExperiment:
         )
 
     @staticmethod
-    def _compute_variable_values(var: dict[str, dict]) -> dict[str : np.array]:
+    def _compute_variable_values(var: dict[str, dict]) -> dict[str : np.ndarray]:
         """Compute all the values for the variables.
 
         The field 'mode' must be present and indicates how the values are computed
