@@ -46,6 +46,7 @@ class FIREQServer:
     """TCP server for FIREQ experiments.
 
     Spawns three threads:
+    
     - a client handler thread, which communicates with the client to receive
       commands and send info/configuration
     - an execution thread, which manages the hw and runs commands received
