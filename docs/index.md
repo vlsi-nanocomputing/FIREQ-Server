@@ -8,7 +8,6 @@ For a more detailed explanation, see:
 
 - [Overview](overview.md): high-level role of the server in the FIREQ architecture.
 - [Installation](installation.md): board-side setup and dependency installation.
-- [Server](server.md): deployment, startup prompts, overlay configuration, and runtime workflow.
 - [API](api.md): entry points and server-side execution concepts.
 
 
@@ -17,7 +16,6 @@ For a more detailed explanation, see:
 :caption: Index
 overview
 installation
-server
 api
 ```
 ## Contributing and Support
