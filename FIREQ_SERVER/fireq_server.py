@@ -301,17 +301,17 @@ class FIREQServer:
                 raise
 
     def _close_client(self) -> None:
-        if self._client_connected.is_set():
-            self._client_socket.close()
-            self.log.debug("closing client connection ...")
-        disconnected = self._client_connected.wait(3.0)
-        if not disconnected:
-            self._client_connected.clear()
-            self.log.debug("manually cleared the client connected flag")
-        # empty the buffers
+        if getattr(self, "_client_socket", None):
+            try:
+                self._client_socket.close()
+            except OSError:
+                pass
+
+        # signal to the workers that the client is disconnected
+        self._client_connected.clear()
         self._receive_worker.clear_input_queue()
         self._send_worker.clear_output_queue()
-        self.log.debug("emptied the input and output queues")
+        self.log.debug("closed client connection and cleared queues")
 
     def _perform_handshake(self) -> bool:
         """Perform handshake authentication with the client.

@@ -56,22 +56,20 @@ class SendWorker:
     def clear_output_queue(self) -> None:
         """Empty the output queue."""
         # this is safe because the method owns the put method
-        while True:
-            try:
-                self.queue_out.clear()
-            except Empty:
-                break
+        self.queue_out.clear()
 
-    def _run(self):
+    def _run(self) -> None:
         self._thread_running.set()
         while not self._stop_event.is_set():
             if not self._client_connected.wait(0.5):
                 continue
             try:
                 # pop an item from the queue
-                item = self.queue_out.get()
+                item = self.queue_out.get(timeout=0.5)
                 # send it over the socket
                 self._send_payload(item)
+            except Empty:
+                continue
             except ClientDisconnectedError as e:
                 self.log.info(f"Connection lost: {e}")
                 self._client_connected.clear()

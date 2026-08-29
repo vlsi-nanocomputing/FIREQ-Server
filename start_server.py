@@ -30,7 +30,7 @@ def main() -> None:
     # set logging level
     log_level = input("Input logging level: 'debug', 'info' (press enter for 'info')\n")
     if log_level == "debug":
-        logger = setup_logging(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
     else:
         pass
 
@@ -68,7 +68,7 @@ def main() -> None:
     # run the server
     logger.info(f"Starting server using overlay '{ol_filepath}, on address '{host}:{port}', with token {auth_token}")
     try:
-        server = FIREQServer(ol_filepath, host, port)
+        server = FIREQServer(ol_filepath, host, port, auth_token=auth_token)
     except Exception as e:
         logger.error(f"Failed to initialize server: {e}")
         sys.exit(-1)
