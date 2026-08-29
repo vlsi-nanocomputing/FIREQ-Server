@@ -1,4 +1,6 @@
 # FIREQ Server
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22150509.svg)](https://doi.org/10.5281/zenodo.22150509)](https://doi.org/10.5281/zenodo.22161626)
+[[![GitHub Release](https://img.shields.io/github/v/release/vlsi-nanocomputing/FIREQ-Server)](https://github.com/vlsi-nanocomputing/FIREQ-Server/releases/latest)](https://doi.org/10.5281/zenodo.22161664)
 
 Control stack for FIREQ FPGA experiments. This repository contains the
 low-level PYNQ drivers (`FIREQ_LL_API`), a high-level hardware system model
