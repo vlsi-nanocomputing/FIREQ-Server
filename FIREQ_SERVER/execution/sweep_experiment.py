@@ -118,7 +118,7 @@ class SweepExperiment:
         return sweep_routine, vars_order
 
     @staticmethod
-    def _compute_variable_values(var: dict[str, dict]) -> dict[str : np.ndarray]:
+    def _compute_variable_values(var: dict[str, dict]) -> dict[str, np.ndarray]:
         """Compute all the values for the variables.
 
         The field 'mode' must be present and indicates how the values are computed

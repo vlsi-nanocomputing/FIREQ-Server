@@ -384,7 +384,11 @@ class FIREQServer:
                 return
             exp = SweepExperiment(self, callbacks, variables)
             start_message["variable_order"] = exp.vars_order
-            start_message["variable_values"] = exp.computed_vars
+            # TODO: maybe fix this because now we have to cast to list in order to send it on network
+            var_values = exp.computed_vars
+            for key in var_values:
+                var_values[key] = var_values[key].tolist()
+            start_message["variable_values"] = var_values
 
         self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_header"} | start_message))
 
