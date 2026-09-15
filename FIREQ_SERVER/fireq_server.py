@@ -192,8 +192,6 @@ class FIREQServer:
 
         :param msg: Parsed command dictionary from the client.
         :type msg: dict
-
-        Note: ``abort`` is handled in the receiver loop for immediacy.
         """
         cmd = get_command(msg)
         # session_id = msg.get("session_id", "")

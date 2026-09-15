@@ -225,9 +225,12 @@ class SweepExperiment:
                 )
 
     def run(self) -> int:
-        """Run the sweep experiment by parsing the configuration and executing the recursive sweep routine.
+        """Run the parsed sweep experiment by executing the recursive sweep routine.
 
-        Sweep callbacks is a list of tuples: (callback func, expression, callback cost)
+        The sweep callbacks and the sweep variables are parsed at construction time.
+
+        :return: The total execution time in ns.
+        :rtype: int
         """
         # execute the experiment changing the sweeping variables
         start = time.perf_counter_ns()
