@@ -46,7 +46,7 @@ class FIREQServer:
     """TCP server for FIREQ experiments.
 
     Spawns three threads:
-    
+
     - a client handler thread, which communicates with the client to receive
       commands and send info/configuration
     - an execution thread, which manages the hw and runs commands received
@@ -106,8 +106,8 @@ class FIREQServer:
         self._queue_out = self._send_worker.queue_out
 
         # sockets
-        self._server_socket: socket.socket
-        self._client_socket: socket.socket
+        self._server_socket: socket.socket = None
+        self._client_socket: socket.socket = None
 
     def start(self) -> None:
         """Start the server and block on the main thread.
@@ -192,8 +192,6 @@ class FIREQServer:
 
         :param msg: Parsed command dictionary from the client.
         :type msg: dict
-
-        Note: ``abort`` is handled in the receiver loop for immediacy.
         """
         cmd = get_command(msg)
         # session_id = msg.get("session_id", "")
@@ -208,25 +206,7 @@ class FIREQServer:
                     self.log.warning("Configuration from apply_configuration has sweepable parameters")
 
             elif cmd == "config_and_run":
-                # run an experiment
-                callbacks = self._config_from_message(msg)
-                if callbacks is None:
-                    self.log.warning("Configuration failed to apply, aborting experiment run")
-                    return
-                if len(callbacks) > 0:
-                    variables = get_sweep_variables(msg)
-                    if not variables:
-                        self.log_and_send_warning(
-                            "Message from client tryed to execute a sweep experiment without specifing variables"
-                        )
-                        return
-                    exp = SweepExperiment(self, self._queue_out)
-                    execution_time = exp.run(callbacks, variables)
-                    self._queue_out.put(
-                        FIREQNetworkPacket({"type": "status", "msg": "sweep ended", "time": f"{execution_time} ns"})
-                    )
-                else:
-                    self._run_experiment()
+                self._config_and_run(msg)
 
             elif cmd == "ping":
                 self._queue_out.put(FIREQNetworkPacket({"resp": "pong"}))
@@ -235,20 +215,15 @@ class FIREQServer:
                 self._fireq_soc.reset_all()
                 self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "successfully reset"}))
 
-            # elif cmd == "status":
-            #    self.log.debug("status")
-
-            # deprecated functions:
-            # rf_mapping
-            # calibrate_adc
-            # reset_waves
-            # reset_envelopes
-
             elif cmd == "logout":
                 self._close_client()
 
-            # elif cmd == "reset_all":
-            #    self.log.debug("reset all")
+            elif cmd == "trigger_manually":
+                try:
+                    self._fireq_soc.trigger_ip_manually(msg.get("ip_name", ""))
+                    self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+                except Exception as e:
+                    self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"{e}"}))
 
             else:
                 self.log.debug("received a non-supported command from the client")
@@ -369,12 +344,15 @@ class FIREQServer:
             )
             return None
 
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
         # return the callbacks
         return callbacks
 
     def _run_experiment(self) -> None:
-        # actually run the experiment
-        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment started"}))
+        """Run an experiment and time the execution.
+
+        Will send a message to the client informing it of the status, including the execution times.
+        """
         try:
             start = time.perf_counter_ns()
             self._fireq_soc.run_experiment(self._queue_out)
@@ -383,10 +361,51 @@ class FIREQServer:
             self.log.exception("Exception occurred while running experiment")
             self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": "error while running experiment"}))
             return
+        # send a status message to the client that includes the execution time
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "iteration_ended", "time": f"{end-start} ns"}))
 
-        self._queue_out.put(
-            FIREQNetworkPacket({"type": "status", "msg": "experiment ended", "time": f"{end-start} ns"})
-        )
+    def _config_and_run(self, message: dict) -> None:
+        """
+        Configure from network message and run experiment.
+
+        Will send an experiment header followed by the DMA payloads.
+        The iteration end is indicated by an "iteration_ended" packet followed
+        by another iteration or an experiment footer.
+
+        :param message: network message fetched from the client
+        :type message: dict
+        """
+        start_message = {}
+        callbacks = self._config_from_message(message)
+        start_message["shots"] = self._fireq_soc.shots
+        if callbacks is None:
+            self.log_and_send_warning("Configuration failed to apply, aborting experiment run")
+            return
+        if len(callbacks) > 0:
+            variables = get_sweep_variables(message)
+            if not variables:
+                self.log_and_send_warning(
+                    "Message from client tryed to execute a sweep experiment without specifing variables"
+                )
+                return
+            exp = SweepExperiment(self, callbacks, variables)
+            start_message["variable_order"] = exp.vars_order
+            # TODO: maybe fix this because now we have to cast to list in order to send it on network
+            var_values = exp.computed_vars
+            for key in var_values:
+                var_values[key] = var_values[key].tolist()
+            start_message["variable_values"] = var_values
+
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_header"} | start_message))
+
+        end_message = {}
+        if len(callbacks) > 0:
+            execution_time = exp.run()
+            end_message["sweep_time"] = execution_time
+        else:
+            self._run_experiment()
+
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_footer"} | end_message))
 
     def log_and_send_warning(self, warning: str):
         self.log.warning(warning)

@@ -14,7 +14,7 @@ entry point.
 
 ```text
 .
-├── API.py                - interactive server entry point
+├── start_server.py       - interactive server entry point
 ├── FIREQ_LL_API/         - low-level PYNQ drivers for FIREQ IPs
 ├── FIREQ_SYSTEM/         - tree-structured hardware model + dependency DAG
 ├── FIREQ_SERVER/         - TCP server, network protocol, sweep execution
@@ -37,13 +37,13 @@ entry point.
 | [`FIREQ_LL_API/`](FIREQ_LL_API/README.md) | `FIREQSoC`, `load_fireq`, `GeneratorDriver`, `AcquisitionDriver`, `TriggerGeneratorDriver`, `AXIStreamSwitchDriver`, `FIFOWrapper` | Loads the overlay, parses the `.hwh` connectivity, and provides register/memory-level control of FIREQ IPs in low-level units (clock cycles, samples, normalized frequencies/phases). |
 | [`FIREQ_SYSTEM/`](FIREQ_SYSTEM/README.md) | `FIREQSystemNode`, `AcquisitionNode`, `SignalGeneratorNode`, `TriggerGeneratorNode`, `SwitchNode`, `DMANode`, `FIFONode` | Builds a tree of hardware nodes from the discovered IPs, applies nested configuration dictionaries, resolves inter-node dependencies with a DAG, and streams acquisition data out of the DMAs. |
 | [`FIREQ_SERVER/`](FIREQ_SERVER/README.md) | `FIREQServer`, `ReceiveWorker`, `SendWorker`, `FIREQNetworkPacket`, `SweepExperiment` | Single-client TCP server, framed msgpack protocol, handshake/auth, command dispatch, and sweep execution. |
-| [`API.py`](API.py) | `main()` | Interactive startup that prompts for the overlay path and network parameters, then starts `FIREQServer`. |
+| [`start_server.py`](start_server.py) | `main()` | Interactive startup that prompts for the overlay path and network parameters, then starts `FIREQServer`. |
 | [`test/`](test/) | `pytest` | Legacy tests from an earlier API revision. They are kept in the tree but are not aligned with the current package structure. |
 
 ## Runtime flow
 
 ```text
-API.py
+start_server.py
   └── FIREQServer
         ├── FIREQSystemNode
         │     └── FIREQSoC (FIREQ_LL_API + PYNQ overlay)
@@ -64,13 +64,16 @@ API.py
   carried in the header (`tsize` for DMA payloads).
 - Commands are delivered as header dictionaries containing `cmd`.
 - Responses are header dictionaries with a `type` such as `status`, `warning`,
-  `error`, `dma_package`, or `sweep_experiment_header`.
+  `error`, or `dma_package`. Experiments are bracketed by the `status` messages
+  `experiment_header` and `experiment_footer`, with one `iteration_ended`
+  status per executed point.
 
 | Command | Message fields | Behaviour |
 |---|---|---|
 | `ping` | `cmd` | Replies with `{"resp": "pong"}`. |
 | `apply_configuration` | `system` | Applies a nested system configuration. Warns if it contains sweepable parameters. |
 | `config_and_run` | `system`, optional `variables` | Applies the configuration and runs a single experiment, or a sweep when sweepable callbacks and `variables` are present. |
+| `trigger_manually` | `ip_name` | Triggers the manual trigger of a child IP. Replies `{"type": "status", "msg": "ok"}`, or an `error` when the IP cannot be triggered. |
 | `reset_all` | — | Resets IP memory/registers and system node state. |
 | `logout` | — | Closes the current client connection. |
 
@@ -127,8 +130,7 @@ Envelope samples are passed as complex-valued NumPy arrays.
 
 Sweepable parameters are expressed with a string starting with `#`, for example
 `"$gain": "#gain"`. `config_and_run` then expects a `variables` object
-describing how each sweep variable is generated (`lin`, `const`, or `list`
-mode). See [`FIREQ_SYSTEM/README.md`](FIREQ_SYSTEM/README.md) and
+describing how each sweep variable is generated (`lin` or `list` mode). See [`FIREQ_SYSTEM/README.md`](FIREQ_SYSTEM/README.md) and
 [`FIREQ_SERVER/execution/README.md`](FIREQ_SERVER/execution/README.md) for
 details.
 
@@ -161,19 +163,17 @@ pip install -e .
 ```bash
 sudo -i
 source /etc/profile.d/pynq_venv.sh
-python API.py
+python start_server.py
 ```
 
 Startup prompts ask for:
 
 1. Logging level (`debug` or `info`, default `info`)
-2. Overlay filename relative to `/home/xilinx/` (default `overlay.bit`)
+2. Overlay filename relative to the directory containing `start_server.py`
+   (default `overlay.bit`)
 3. Bind host (default `0.0.0.0`)
 4. Port (default `5000`)
 5. Auth token (default `fireq`)
-
-> **Note:** the current `API.py` reads the token prompt but does not forward it
-> to `FIREQServer`, so the server uses its default token (`fireq`).
 
 Stop with `Ctrl+C` for graceful cleanup.
 

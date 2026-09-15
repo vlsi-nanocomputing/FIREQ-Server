@@ -6,12 +6,9 @@ the FIREQ system. It provides methods to parse sweep configurations, compute var
 
 import logging
 import re
-import copy
-from queue import Queue
+import time
 
 import numpy as np
-from ..network import FIREQNetworkPacket
-import time
 
 
 class SweepExperiment:
@@ -23,23 +20,29 @@ class SweepExperiment:
 
     OPERATORS = "+-"  # TODO: check if is necessary to constrain the operators
 
-    def __init__(self, server, queue_out: Queue, logger: logging.Logger | None = None) -> None:
+    def __init__(self, server, sweep_callbacks: list, variables: list, logger: logging.Logger | None = None) -> None:
         """
         Initialize with the sweeping expressions and variables values.
 
-        :param node: object representing the FIREQ system
-        :type node: FIREQSystemNode
-        :param queue: queue istance
-        :type queue: Queue
+        :param server: object representing the FIREQ server
+        :type server: FIREQServer
+        :param sweep_callbacks: A list of tuples containing the sweep expressions.
+        :type sweep_callbacks: list[tuple[callable, str, int]]
+        :param variables: A list of dictionaries containing the variable parameters for the sweep.
+        :type variables: dict[str: dict]
         """
         # Fireq Node
         self._server = server
-        self._queue_out = queue_out
         self.log = logger or logging.getLogger(__name__)
 
-        # dict with all the computed sweeping variables
-        self.computed_vars = {}
+        # current iteration of variables
         self._current_sweep_point = {}
+
+        # compute variables values
+        self.computed_vars = self._compute_variable_values(variables)
+
+        # parse the configuration
+        self.sweep_routine, self.vars_order = self._parse_callbacks(sweep_callbacks)
 
     def _check_sweep_expression(self, expr: str) -> None:
         """Check the sweep expressions for validity.
@@ -75,7 +78,9 @@ class SweepExperiment:
         return tuple(re.findall(r"[a-zA-Z_]\w*", expr))
 
     def _parse_callbacks(self, callbacks: list) -> tuple[list[tuple[callable, str, tuple[str]]], list[str]]:
-        """Parse the sweep configuration and fill sweep_cost dict and sweep_routine set.
+        """Parse the sweep configuration and compute the sweep_routine and vars_order.
+
+        The vars_order is ordered from outer to inner loop (slow to fast change).
 
         :param callbacks: configuration parameters for the experiment
         :type callbacks: dict
@@ -112,29 +117,18 @@ class SweepExperiment:
 
         return sweep_routine, vars_order
 
-    def _put_sweep_info_in_network(self, vars_order: list[str]) -> None:
-        """Put the header on the queue with the variables order.
-
-        :param vars_order: list of variables ordered by total cost
-        :type vars_order: list[str]
-        """
-        self._queue_out.put(
-            FIREQNetworkPacket({"type": "sweep_experiment_header", "variables_order": copy.deepcopy(vars_order)})
-        )
-
     @staticmethod
-    def _compute_variable_values(var: dict[str, dict]) -> dict[str : np.ndarray]:
+    def _compute_variable_values(var: dict[str, dict]) -> dict[str, np.ndarray]:
         """Compute all the values for the variables.
 
         The field 'mode' must be present and indicates how the values are computed
         - 'lin'   mode: linear spacing -> require fields 'start' (first element), 'stop' (last element),
                                           'num' (number of elements)
-        - 'const' mode: constant value -> require field 'value' (constant and unique value)
         - 'list'  list: list of values -> reuire field 'values' (list of elements)
 
-        :param var: dict with variable and correspondent description
+        :param var: dict mapping variable name with its defintion
         :type var: dict[str: dict]
-        :return: dict with sweeping values
+        :return: dict mapping variable name with its values
         :rtype: dict[str: np.array]
         """
         return_dict = {}
@@ -160,15 +154,6 @@ class SweepExperiment:
                         f"For 'lin' mode the keys 'start', 'stop' and 'num' must be present for '{var_name}' \
                                    variable."
                     ) from e
-                except Exception as e:
-                    raise TypeError(f"Error during computing sweeping values for '{var_name}' variable: {e}") from e
-
-            elif mode == "const":
-                try:
-                    return_dict[var_name] = np.array([var_description["value"]])
-
-                except KeyError as e:
-                    raise KeyError(f"For 'const' mode the key 'value' must be present for '{var_name}' variable") from e
                 except Exception as e:
                     raise TypeError(f"Error during computing sweeping values for '{var_name}' variable: {e}") from e
 
@@ -239,30 +224,19 @@ class SweepExperiment:
                     accounted_callbacks=accounted_callbacks | callbacks_executing,
                 )
 
-    def run(self, sweep_callbacks: list, variables: list) -> int:
-        """Run the sweep experiment by parsing the configuration and executing the recursive sweep routine.
+    def run(self) -> int:
+        """Run the parsed sweep experiment by executing the recursive sweep routine.
 
-        Sweep callbacks is a list of tuples: (callback func, expression, callback cost)
+        The sweep callbacks and the sweep variables are parsed at construction time.
 
-        :param sweep_callbacks: A list of tuples containing the sweep expressions.
-        :type sweep_callbacks: list[tuple[callable, str, int]]
-        :param variables: A list of dictionaries containing the variable parameters for the sweep.
-        :type variables: dict[str: dict]
+        :return: The total execution time in ns.
+        :rtype: int
         """
-        # compute variables values
-        self.computed_vars = self._compute_variable_values(variables)
-
-        # parse the configuration
-        sweep_routine, vars_order = self._parse_callbacks(sweep_callbacks)
-
-        # create and the header on the queue
-        self._put_sweep_info_in_network(vars_order)
-
         # execute the experiment changing the sweeping variables
         start = time.perf_counter_ns()
         self._nested_loop_recursive(
-            sweep_routine,
-            vars_order,
+            self.sweep_routine,
+            self.vars_order,
         )
         stop = time.perf_counter_ns()
         return stop - start

@@ -329,15 +329,20 @@ class FIREQSystemNode(_GenericNode):
     # Async commands
     # ------------------------------------------------------------------
 
-    def trigger_manually(self, generator_node_name: str) -> None:
+    def trigger_ip_manually(self, ip_name: str) -> None:
         """
-        Trigger a generator manually.
+        Trigger a child IP manually.
 
-        :param generator_node_name: Name of the generator that is to be triggered
-        :type generator_node_name: str
+        Will call the manual_trigger method on the IP or raise an error if not found.
+
+        :param ip_name: Name of the child IP to trigger
+        :type ip_name: str
         """
-        gen = self.get_child(generator_node_name)
-        gen.manual_trigger()
+        ip = self.get_child(ip_name)
+        try:
+            ip.manual_trigger()
+        except AttributeError:
+            raise ValueError(f"IP {ip_name} not found or cannot be triggered manually") from None
 
     def set_dma_payload_interface_class(self, interface_class: object) -> None:
         """

@@ -33,7 +33,7 @@ FIREQ_SYSTEM/
 
 | File | Public API | Responsibility |
 |---|---|---|
-| `fireq_system_node.py` | `FIREQSystemNode` | Root node. Loads the overlay via `FIREQSoC`, instantiates one node per discovered IP, resolves cross-node dependencies, computes the number of hardware shots per software shot, and runs the experiment loop (trigger generator + DMA streaming). |
+| `fireq_system_node.py` | `FIREQSystemNode` | Root node. Loads the overlay via `FIREQSoC`, instantiates one node per discovered IP, resolves cross-node dependencies, computes the number of hardware shots per software shot, and runs the experiment loop (trigger generator + DMA streaming). Also exposes the asynchronous child-IP commands (`trigger_ip_manually`, `set_dma_payload_interface_class`). |
 | `signal_generator_node.py` | `SignalGeneratorNode`, `_GenericEnvelope`, `_Pulse`, `_VZGate`, `_RectangularEnvelope` | Wraps the generator driver; manages envelope memory allocation and WDW slots; exposes drive/readout frequency, phase and trigger channels; builds the drive order in the memory-mapped FIFO; manual triggering. |
 | `acquisition_node.py` | `AcquisitionNode` | Wraps the acquisition driver; sets duration, output mode, demodulation frequency/phase, trigger channel, time of flight; publishes the expected payload for each output interface (used by FIFO/DMA nodes). |
 | `trigger_generator_node.py` | `TriggerGeneratorNode`, `_DelayItem` | Wraps the trigger generator driver; sets the experiment duration, the hardware shot count, and the per-delay schedule; starts the experiment and exposes completion status. |
@@ -133,6 +133,15 @@ shots:
 The payload classes are pluggable: `set_dma_payload_interface_class` replaces
 the class used to wrap DMA data, which is how `FIREQ_SERVER` injects its
 network-serializable payload.
+
+## Async commands
+
+`trigger_ip_manually(ip_name)` calls `manual_trigger()` on the named child IP
+(a signal generator or an acquisition node), letting a client fire a single
+hardware trigger outside of a configured experiment. It raises `ValueError`
+when the IP exists but does not expose a manual trigger, and `KeyError` when no
+child with that name exists. `FIREQ_SERVER` exposes it to clients as the
+`trigger_manually` command.
 
 ## Dependency DAG
 
