@@ -106,8 +106,8 @@ class FIREQServer:
         self._queue_out = self._send_worker.queue_out
 
         # sockets
-        self._server_socket: socket.socket
-        self._client_socket: socket.socket
+        self._server_socket: socket.socket = None
+        self._client_socket: socket.socket = None
 
     def start(self) -> None:
         """Start the server and block on the main thread.
@@ -219,6 +219,13 @@ class FIREQServer:
 
             elif cmd == "logout":
                 self._close_client()
+
+            elif cmd == "trigger_manually":
+                try:
+                    self._fireq_soc.trigger_ip_manually(msg.get("ip_name", ""))
+                    self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+                except Exception as e:
+                    self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"{e}"}))
 
             else:
                 self.log.debug("received a non-supported command from the client")
@@ -339,6 +346,7 @@ class FIREQServer:
             )
             return None
 
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
         # return the callbacks
         return callbacks
 
