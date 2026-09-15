@@ -55,7 +55,7 @@ python start_server.py
 Upon launch, `start_server.py` executes an interactive prompt setup:
 
 - **Logging level**: Type `debug` or press `Enter` for default `info`.
-- **Overlay filename**: Enter the bitstream filename relative to `/home/xilinx/` (press `Enter` for default `overlay.bit`). The matching `.hwh` hardware handoff file must reside in the same directory.
+- **Overlay filename**: Enter the bitstream filename relative to the directory containing `start_server.py` (the repository root; press `Enter` for default `overlay.bit`). The matching `.hwh` hardware handoff file must reside in the same directory.
 - **Server host**: Define the listening interface (press `Enter` for `0.0.0.0` to bind all network interfaces).
 - **Server port**: Define the TCP port (press `Enter` for `5000`).
 - **Auth token**: Define the secret security token (press `Enter` for default `"fireq"`).

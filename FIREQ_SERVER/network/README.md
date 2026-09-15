@@ -36,13 +36,14 @@ Each message has two parts:
 The whole packet is: `4-byte big-endian header length` + `header bytes` +
 (optional) `data bytes`.
 
-Response header types include `status`, `warning`, `error`, `handshake`,
-`sweep_experiment_header` and `dma_package`.
+Response header types include `status`, `warning`, `error`, `handshake` and
+`dma_package`. See *Experiment protocol* below for the `status` messages that
+bracket an experiment run.
 
 ### Serialization
 
 ```python
-packet = FIREQNetworkPacket({"type": "status", "msg": "experiment started"})
+packet = FIREQNetworkPacket({"type": "status", "msg": "experiment_header", "shots": 100})
 buffers = packet.to_buffers()      # (4-byte length, header bytes[, data])
 ```
 
@@ -51,6 +52,23 @@ DMA payload injected into the system node by `FIREQServer`. Its `to_buffers()`
 emits a `dma_package` header with `source`, `shots`, `format` (dtype spec) and
 `tsize`, followed by the raw acquisition bytes — the buffer list is ready for
 `sendmsg()`.
+
+### Experiment protocol
+
+Every `config_and_run` — single experiment or sweep — produces the same
+sequence of packets:
+
+- `{"type": "status", "msg": "ok"}` — the configuration was applied.
+- `{"type": "status", "msg": "experiment_header", ...}` — `shots` is always
+  present; sweeps add `variable_order` (variables ordered from the outermost to
+  the innermost loop) and `variable_values` (mapping of variable name to a
+  plain list of values, converted from NumPy arrays so that the header stays
+  msgpack-encodable).
+- zero or more `dma_package` messages per iteration.
+- `{"type": "status", "msg": "iteration_ended", "time": "<ns> ns"}` — one per
+  executed point.
+- `{"type": "status", "msg": "experiment_footer", "sweep_time": <ns>}` — closes
+  the experiment; `sweep_time` is only present for sweeps.
 
 ## Worker threads
 

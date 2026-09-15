@@ -5,7 +5,7 @@
 [project]
 # Project metadata (used by packaging/build tools and some IDEs)
 name = "fireq-server"
-version = "0.1.0"
+version = "0.1.1"
 requires-python = "==3.10.*"
 
 # Dependencies
