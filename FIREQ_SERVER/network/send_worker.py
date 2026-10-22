@@ -19,18 +19,22 @@ class SendWorker:
     Then, it will start popping items from the queue_out queue and sending them to the client socket.
     """
 
-    def __init__(self, client_connected: Event, logger: logging.Logger = None) -> None:
+    def __init__(
+        self, client_connected: Event, logger: logging.Logger = None, max_queue_bytes: int = 1024 * 1024 * 1024
+    ) -> None:
         """Initialize the send worker.
 
         :param client_connected: Event that is set when a client is connected.
         :type client_connected: Event
         :param logger: Optional logger instance.
         :type logger: logging.Logger | None
+        :param max_queue_bytes: Memory limit of the output queue, in bytes.
+        :type max_queue_bytes: int
         """
         # output queue
-        self.queue_out = MemoryBoundedQueue()
+        self.queue_out = MemoryBoundedQueue(max_memory_bytes=max_queue_bytes)
         # public attribute to set the client socket
-        self.client_socket = socket.socket()
+        self.client_socket: socket.socket | None = None
         # input mutable objects and events
         self._client_connected = client_connected
         self.log = logger or logging.getLogger(__name__)
@@ -63,16 +67,19 @@ class SendWorker:
         while not self._stop_event.is_set():
             if not self._client_connected.wait(0.5):
                 continue
+            # errors on a socket that has already been replaced must not disconnect the new client
+            sock = self.client_socket
             try:
                 # pop an item from the queue
                 item = self.queue_out.get(timeout=0.5)
                 # send it over the socket
-                self._send_payload(item)
+                self._send_payload(sock, item)
             except Empty:
                 continue
             except ClientDisconnectedError as e:
-                self.log.info(f"Connection lost: {e}")
-                self._client_connected.clear()
+                if sock is self.client_socket:
+                    self.log.info(f"Connection lost: {e}")
+                    self._client_connected.clear()
                 continue
             except Exception as e:
                 self.log.error(f"Unexpected error in send worker: {e}")
@@ -81,25 +88,41 @@ class SendWorker:
         self.log.info("Detected stop flag or unexpected error, exiting...")
         self._cleanup_and_exit()
 
-    def _send_payload(self, item: object) -> bytes:
+    def _send_payload(self, sock: socket.socket, item: object) -> None:
         """Send a queue item over the network.
 
         The input item should implement the to_buffers() method,
         the result of which is directly sent over the network without
         any other checks.
 
+        :param sock: Client socket to send on.
+        :type sock: socket.socket
         :param item: Data object implementing the to_buffers() method.
         :type item: object
-        :return: Received bytes.
-        :rtype: bytes
         """
-        while not self._stop_event.is_set():
+        self._sendmsg_all(sock, item.to_buffers())
+
+    def _sendmsg_all(self, sock: socket.socket, buffers: tuple) -> None:
+        """Send all the buffers over the socket, handling partial sends.
+
+        sendmsg() may send only part of the data (e.g. when the socket has a timeout), so the
+        buffers are advanced by the number of bytes actually sent until everything is sent.
+        A timeout means that nothing was sent, so the remaining data is retried.
+
+        :param sock: Client socket to send on.
+        :type sock: socket.socket
+        :param buffers: sequence of bytes-like objects
+        :type buffers: tuple
+        :raises ClientDisconnectedError: if the connection is lost
+        """
+        pending = [memoryview(buf).cast("B") for buf in buffers if len(buf) > 0]
+        while pending and not self._stop_event.is_set():
             try:
-                serialized = item.to_buffers()
-                self.client_socket.sendmsg(serialized)
-                break
+                sent = sock.sendmsg(pending)
             except TimeoutError:
                 # might change it later to add a maximum number of timeouts
+                if sock is not self.client_socket or not self._client_connected.is_set():
+                    raise ClientDisconnectedError("Client connection closed by the server") from None
                 continue
             except (ConnectionResetError, ConnectionAbortedError) as e:
                 # These indicate the connection is gone – no recovery possible.
@@ -111,6 +134,12 @@ class SendWorker:
                 # Catch‑all for other operating‑system errors (e.g., EAGAIN, EWOULDBLOCK
                 # in non‑blocking mode).  If they arise, the connection is likely broken.
                 raise ClientDisconnectedError(f"Unexpected OS error: {e}") from e
+            # drop the fully sent buffers and advance the partially sent one
+            while pending and sent >= len(pending[0]):
+                sent -= len(pending[0])
+                pending.pop(0)
+            if sent:
+                pending[0] = pending[0][sent:]
 
     def _cleanup_and_exit(self) -> None:
         """Clean-up and exit the thread safely."""

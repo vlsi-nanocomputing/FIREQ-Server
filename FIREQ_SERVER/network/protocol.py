@@ -32,6 +32,7 @@ class FIREQNetworkPacket:
     data: bytes | None = None
 
     def to_buffers(self) -> tuple:
+        """Return a sequence of bytes-like objects ready for sendmsg(): header size, header and optional data."""
         nheader = copy.deepcopy(self.header)
         if self.data:
             nheader["tsize"] = len(self.data)
@@ -82,8 +83,10 @@ def unpack_header(serial: bytes) -> dict:
 
 
 def get_command(message: dict) -> str:
+    """Get the command name of a client message ("" if missing)."""
     return message.get("cmd", "")
 
 
 def get_sweep_variables(message: dict) -> dict:
+    """Get the sweep variables definition of a client message ({} if missing)."""
     return message.get("variables", {})

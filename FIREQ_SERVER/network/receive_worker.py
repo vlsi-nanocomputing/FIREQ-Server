@@ -1,6 +1,7 @@
 """Handles the incoming packets, owns the client sock.recv() method, puts packets in the input queue."""
 
 import logging
+import socket
 from queue import Empty, Queue
 from threading import Event, Thread
 
@@ -19,14 +20,19 @@ class ReceiveWorker:
     Will clear the client connected event if the connection is lost.
     """
 
-    def __init__(self, client_connected: Event, logger: logging.Logger = None) -> None:
+    def __init__(
+        self, client_connected: Event, logger: logging.Logger = None, max_payload_bytes: int = 10 * 1024 * 1024
+    ) -> None:
         """Initialize the receive worker.
 
         :param client_connected: Event that is set when a client is connected.
         :type client_connected: Event
         :param logger: Optional logger instance.
         :type logger: logging.Logger | None
+        :param max_payload_bytes: Maximum accepted size of a packet header and of its trailing data, in bytes.
+        :type max_payload_bytes: int
         """
+        self._max_payload_bytes = max_payload_bytes
         # input queue
         self.queue_in = Queue(maxsize=10)
         # public attribute to set the client socket
@@ -73,56 +79,79 @@ class ReceiveWorker:
         while not self._stop_event.is_set():
             if not self._client_connected.wait(0.5):
                 continue
+            # errors on a socket that has already been replaced must not disconnect the new client
+            sock = self.client_socket
             try:
                 # receive a message
-                msg = self._receive_message()
+                msg = self._receive_message(sock)
                 # parse the payload and place it in queue
                 self.queue_in.put(msg)
             except InvalidPayloadError as e:
                 self.log.warning(f"Invalid payload received: {e}")
                 continue
             except ClientDisconnectedError as e:
-                self.log.info(f"Connection lost: {e}")
-                self._client_connected.clear()
+                if sock is self.client_socket:
+                    self.log.info(f"Connection lost: {e}")
+                    self._client_connected.clear()
                 continue
             except IncompleteTransferError as e:
                 # this only happens when the worker is stopped
                 self.log.warning(f"Incomplete transfer received: {e}")
                 continue
-            except Exception as e:
-                self.log.error(f"Unexpected error in receive worker: {e}")
-                break
+            except Exception:
+                # the stream position is unknown: drop the client but keep the worker alive for the next one
+                self.log.exception("Unexpected error in receive worker, dropping the client connection")
+                if sock is self.client_socket:
+                    self._client_connected.clear()
+                continue
         # exit the thread safely
-        self.log.info("Detected stop flag or unexpected error, exiting...")
+        self.log.info("Detected stop flag, exiting...")
         self._cleanup_and_exit()
 
-    def _receive_message(self) -> FIREQNetworkPacket:
+    def _receive_message(self, sock: socket.socket) -> FIREQNetworkPacket:
         """Receive a message from the client socket.
 
+        :param sock: Client socket to receive from.
+        :type sock: socket.socket
         :return: A data packet.
         :rtype: FIREQNetworkPacket
+        :raises InvalidPayloadError: if the header is not a valid msgpack dict (the stream stays aligned)
+        :raises ClientDisconnectedError: if the connection is lost or a size exceeds the limit
+            (the stream cannot be realigned, so the client must be dropped)
         """
         # first, receive the length of the message
-        length_bytes = self._recv_exact(4)
+        length_bytes = self._recv_exact(sock, 4)
         length = int.from_bytes(length_bytes, "big")
+        if length > self._max_payload_bytes:
+            raise ClientDisconnectedError(f"Header size {length} exceeds the limit of {self._max_payload_bytes} bytes")
 
         # now, receive the header
-        payload = self._recv_exact(length)
-        msg = FIREQNetworkPacket(header=unpack_header(payload))
+        payload = self._recv_exact(sock, length)
+        try:
+            header = unpack_header(payload)
+        except Exception as e:
+            raise InvalidPayloadError(f"header is not valid msgpack: {e}") from e
+        if not isinstance(header, dict):
+            raise InvalidPayloadError(f"header must be a dict, got {type(header).__name__}")
+        msg = FIREQNetworkPacket(header=header)
 
         # see if there is data
         dlength = msg.header.get("tsize", 0)
+        if not isinstance(dlength, int) or dlength < 0 or dlength > self._max_payload_bytes:
+            raise ClientDisconnectedError(f"Invalid trailing data size {dlength!r}")
         if dlength > 0:
-            msg.data = self._recv_exact(dlength)
+            msg.data = self._recv_exact(sock, dlength)
 
         return msg
 
-    def _recv_exact(self, n: int) -> bytes:
+    def _recv_exact(self, sock: socket.socket, n: int) -> bytes:
         """Receive exactly n bytes from the socket.
 
-        Raises ClientDisconnectedError if the connection is lost.
-        Propagates socket.timeout if a read timeout expires (you can retry).
+        Raises ClientDisconnectedError if the connection is lost or the socket has been replaced.
+        Read timeouts are retried until the stop event is set.
 
+        :param sock: Client socket to receive from.
+        :type sock: socket.socket
         :param n: Number of bytes to receive.
         :type n: int
         :return: Received bytes.
@@ -131,8 +160,10 @@ class ReceiveWorker:
         data = b""
         while len(data) < n and not self._stop_event.is_set():
             try:
-                chunk = self.client_socket.recv(n - len(data))
+                chunk = sock.recv(n - len(data))
             except TimeoutError:
+                if sock is not self.client_socket or not self._client_connected.is_set():
+                    raise ClientDisconnectedError("Client connection closed by the server") from None
                 continue
             except (ConnectionResetError, ConnectionAbortedError, OSError) as e:
                 raise ClientDisconnectedError(f"Connection lost: {e}") from e
