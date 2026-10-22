@@ -41,36 +41,41 @@ SendWorker     ◄─ queue_out ── main thread (FIREQServer) / DMA payloads
    `NetworkDMAPayload`, and constructs the `ReceiveWorker`/`SendWorker` pair.
 2. `start()` launches the two worker threads and enters the main loop on the
    calling thread.
-3. The main loop accepts a client, assigns the socket to both workers, and
-   performs the token handshake (3 s timeout).
+3. The main loop accepts a client on a listening socket that is bound once and
+   reused for every client. It assigns the socket to both workers and performs
+   the token handshake: the client must answer within 3 s.
 4. While connected, the main thread pops command messages from `queue_in` and
    dispatches them; responses and streamed DMA payloads go into `queue_out`.
-5. `stop()` sets the stop event, closes both sockets and joins the workers.
+5. When the client logs out or disconnects, the server closes the client socket
+   and clears both queues, so no stale packet reaches the next client. It then
+   goes back to accepting.
+6. `stop()` sets the stop event, closes both sockets and joins the workers.
 
 ## Commands
 
 | Command | Message fields | Behaviour |
 |---|---|---|
 | `ping` | `cmd` | Replies `{"resp": "pong"}`. |
-| `apply_configuration` | `system` | Applies the nested system configuration to `FIREQSystemNode`. Warns if the configuration contains sweepable parameters. |
+| `apply_configuration` | `system` | Applies the nested system configuration to `FIREQSystemNode`. Replies `{"type": "status", "msg": "ok"}`, followed by a `warning` if the configuration contains sweepable parameters (these are not applied). |
 | `config_and_run` | `system`, optional `variables` | Applies the configuration; runs a single experiment, or a sweep when sweepable callbacks are present and a `variables` object is given. |
 | `trigger_manually` | `ip_name` | Triggers the manual trigger of a child IP. Replies `{"type": "status", "msg": "ok"}`, or an `error` when the IP is unknown or cannot be triggered. |
 | `reset_all` | — | Resets IP memories/registers and the system node state. |
 | `logout` | — | Closes the current client connection. |
 
-Unknown commands get an `{"type": "error", ...}` response; a `system` field
-missing from a configuration message or a failed configuration produce an
-error response as well. `trigger_manually` answers with an `error` when the
-requested IP is unknown or does not expose a manual trigger.
+Unknown commands get an `{"type": "error", ...}` response. A `system` field
+missing from a configuration message, a failed configuration, and any
+unexpected exception while executing a command produce an error response as
+well, so every command gets an answer. `trigger_manually` answers with an
+`error` when the requested IP is unknown or does not expose a manual trigger.
 
 ## Handshake
 
 1. Server sends `{"type": "handshake"}`.
 2. Client replies with
    `{"type": "handshake_ack", "token": "<token>", "client_name": "<name>"}`.
-3. The server validates the token against `auth_token`; on mismatch, timeout
-   or any other failure the connection is closed and the server goes back to
-   accepting.
+3. The server validates the token against `auth_token`. On mismatch, on a
+   missing reply within `HANDSHAKE_TIMEOUT_SECONDS` (3 s) or on any other
+   failure, the connection is closed and the server goes back to accepting.
 
 ## Experiment protocol
 
@@ -82,10 +87,27 @@ experiment or a sweep:
 <- {"type": "status", "msg": "experiment_header"} + "shots" (always present)
                                                   + "variable_order" / "variable_values" (sweeps)
 <- {"type": "dma_package", ...}                   zero or more per iteration
-<- {"type": "status", "msg": "iteration_ended", "time": "<ns> ns"}
+<- {"type": "status", "msg": "iteration_ended", "time": <ns, int>}
 ...                                               one iteration per sweep point
-<- {"type": "status", "msg": "experiment_footer"} + "sweep_time" (sweeps)
+<- {"type": "status", "msg": "experiment_footer", "run_time": <ns, int>, "aborted": <bool>}
 ```
+
+Once the `experiment_header` has been sent, the `experiment_footer` is always
+sent:
+
+- If a run fails, an `{"type": "error", ...}` packet is sent first and the
+  footer has `"aborted": true`. A hardware error stops the sweep; it does not
+  continue with the next point.
+- A sweep is also aborted (`"aborted": true`, no error packet) when the server
+  stops or the client disconnects.
+
+Errors that are detected before the run produce an `error` packet and no
+header:
+
+- an invalid configuration;
+- sweepable parameters without `variables`;
+- an invalid sweep definition, such as an expression that uses an undefined
+  variable.
 
 `_config_and_run` owns the whole sequence: it applies the configuration, emits
 the `experiment_header`, creates and runs the `SweepExperiment` when sweepable

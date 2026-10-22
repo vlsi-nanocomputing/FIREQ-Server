@@ -5,10 +5,8 @@ from __future__ import annotations
 import copy
 import logging
 import queue
-import struct
 from dataclasses import dataclass
 
-import msgpack
 import numpy as np
 from pynq import allocate
 from pynq.lib import DMA
@@ -68,6 +66,18 @@ class DMANode(_GenericNode):
         # class that holds the data of the dma
         self.dma_payload_interface_class = DMAPayload
 
+    def _reset_all(self) -> None:
+        """Reset the transfer state of the node."""
+        self.reset_transfer_state()
+
+    def reset_transfer_state(self) -> None:
+        """Mark the node as not transferring, e.g. after a failed experiment.
+
+        This only resets the software state of the node, not the DMA hardware.
+        """
+        self._current_payload_index = None
+        self._transferring = False
+
     def _build_dependencies(self) -> None:
         """Build the dependencies for this node.
 
@@ -97,14 +107,15 @@ class DMANode(_GenericNode):
         """
         if self._buffer is None:
             if not self._max_payload_size:
-                raise RuntimeError()
+                self.log.error("Maximum payload size unknown for DMA node %s", self.name)
+                raise RuntimeError(f"Maximum payload size unknown for DMA node {self.name}, cannot allocate buffer")
             self._buffer = allocate(shape=(self._max_payload_size["value"],), dtype=np.uint8)
         if self._transferring:
             self.log.error("DMA already transferring, cannot initialize")
             raise RuntimeError("DMA already transferring, cannot initialize")
         if not self._input_payload:
             self.log.warning("No payload to transfer for DMA node %s", self.name)
-            raise RuntimeError("No payload to transfer for DMA node %s", self.name)
+            raise RuntimeError(f"No payload to transfer for DMA node {self.name}")
         # further checks and set the current payload
         if self._is_switch_input:
             for i, payload in enumerate(self._input_payload):
@@ -116,7 +127,7 @@ class DMANode(_GenericNode):
             else:
                 # loop exhausted without break -> no valid payload found
                 self.log.warning("No payload to transfer for DMA node %s", self.name)
-                raise RuntimeError("No payload to transfer for DMA node %s", self.name)
+                raise RuntimeError(f"No payload to transfer for DMA node {self.name}")
         self._transferring = True
         # start the transfer
         self._ll_handler.recvchannel.transfer(self._buffer)
@@ -153,6 +164,8 @@ class DMANode(_GenericNode):
             # check for errors
             if self._ll_handler.recvchannel.error:
                 self.log.error("DMA transfer error for node %s", self.name)
+                # reset the transfer state, otherwise every following init_dma would fail
+                self.reset_transfer_state()
                 return False
             # wait for the transfer to complete and put the data in the queue
             self._ll_handler.recvchannel.wait()
@@ -180,6 +193,5 @@ class DMANode(_GenericNode):
                 break
             self._ll_handler.recvchannel.transfer(self._buffer)
         # end of transfer
-        self._current_payload_index = None
-        self._transferring = False
+        self.reset_transfer_state()
         return True
