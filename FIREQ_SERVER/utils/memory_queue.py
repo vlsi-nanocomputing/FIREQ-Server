@@ -7,6 +7,7 @@ designed for streaming FPGA data where chunks vary greatly in size.
 import sys
 import threading
 import time
+from collections import deque
 from queue import Empty, Full
 
 import numpy as np
@@ -27,7 +28,7 @@ class MemoryBoundedQueue:
 
         :param max_memory_bytes: Maximum total memory in bytes (default: 1 GB).
         """
-        self._queue: list[tuple[object, int]] = []  # (item, size_bytes)
+        self._queue: deque[tuple[object, int]] = deque()  # (item, size_bytes)
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
         self._not_full = threading.Condition(self._lock)
@@ -39,6 +40,7 @@ class MemoryBoundedQueue:
         """Put item into queue, blocking if memory limit reached.
 
         Items are added to the end of the queue (FIFO order preserved).
+        An item larger than the memory limit is accepted only when the queue is empty.
 
         :param item: Item to enqueue.
         :param timeout: Max seconds to wait (None = wait forever).
@@ -48,11 +50,11 @@ class MemoryBoundedQueue:
 
         with self._not_full:
             if timeout is None:
-                while self._current_bytes + item_bytes > self._max_bytes and not self._closed:
+                while self._queue and self._current_bytes + item_bytes > self._max_bytes and not self._closed:
                     self._not_full.wait()
             else:
                 end_time = time.monotonic() + timeout
-                while self._current_bytes + item_bytes > self._max_bytes and not self._closed:
+                while self._queue and self._current_bytes + item_bytes > self._max_bytes and not self._closed:
                     remaining = end_time - time.monotonic()
                     if remaining <= 0:
                         raise Full("Memory limit reached")
@@ -89,7 +91,7 @@ class MemoryBoundedQueue:
             if not self._queue:
                 raise Empty()
 
-            item, item_bytes = self._queue.pop(0)
+            item, item_bytes = self._queue.popleft()
             self._current_bytes -= item_bytes
             self._not_full.notify()
             return item
@@ -113,6 +115,7 @@ class MemoryBoundedQueue:
 
         Recursively calculates size for nested structures.
         For numpy arrays, uses nbytes which is the actual data size.
+        Packet objects (FIREQNetworkPacket, DMAPayload) are sized by their "header" and "data" attributes.
         """
         if isinstance(item, dict):
             total = sys.getsizeof(item)
@@ -127,8 +130,16 @@ class MemoryBoundedQueue:
             return sys.getsizeof(item) + sum(self._estimate_size(x) for x in item)
         elif isinstance(item, str):
             return sys.getsizeof(item)
-        elif isinstance(item, bytes):
+        elif isinstance(item, (bytes, bytearray, memoryview)):
             return len(item) + sys.getsizeof(item)
+        elif hasattr(item, "data") or hasattr(item, "header"):
+            # network packets: count the payload, otherwise only the object wrapper would be counted
+            total = sys.getsizeof(item)
+            for attr in ("header", "data"):
+                value = getattr(item, attr, None)
+                if value is not None:
+                    total += self._estimate_size(value)
+            return total
         else:
             return sys.getsizeof(item)
 
