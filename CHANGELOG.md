@@ -113,6 +113,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `trigger_ip_manually` raised `KeyError` for unknown IPs instead of the
   documented `ValueError`, and it ignored the trigger's error code.
 - `ZeroDivisionError` in the FIFO node for an empty input payload.
+- A pulse gain of ±1.0 was written as 0, which produced a silent pulse. Full scale now maps to
+  the maximum gain code.
+- The interpolation increment lost its fractional part, so a stretched envelope stayed on
+  its first sample. A duration of 1 sample raised `ZeroDivisionError`.
+- Envelope I/Q packing corrupted the I half when Q was negative.
+- Envelope samples are now scaled from ±1 to the signed 16-bit range before being written.
+  Previously they were truncated to 0/±1. Samples outside [-1, 1] are rejected.
+- The debug MMIO wrapper closed its log file after the first write, ignored writes when
+  reading back, logged the same address for every word of a block write, and had no
+  `length`.
 - Lint: unused variables and imports, missing annotations and docstrings.
 - Stale documentation referring to `API.py`, which was renamed to
   `start_server.py`.

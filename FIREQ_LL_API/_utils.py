@@ -142,6 +142,7 @@ class _DebugMMIO:
         self._debug_level = debug_level
         self._memory = {}
         self.base_addr = self._replaces.base_addr
+        self.length = self._replaces.length
 
     def set_logger(self, new_logger: logging.Logger) -> None:
         """Set the logger for this object.
@@ -188,19 +189,26 @@ class _DebugMMIO:
         if address % 4 != 0:
             raise ValueError("MMIO error: write address is not word aligned")
 
-        with self._file_handler:
-            if isinstance(data, int):
-                self._file_handler.write(f"write address {hex(address)} write data {hex(data)} {data}\n")
-            elif isinstance(data, bytes):
-                length = len(data)
-                num_words = length >> 2
-                if length % 4:
-                    raise MemoryError("Unaligned write: data length must be multiple of 4.")
-                buf = np.frombuffer(data, np.uint32, num_words, 0)
-                for i in range(len(buf)):
-                    self._file_handler.write(f"write address {hex(address)} write data {hex(buf[i])} {buf[i]}\n")
-            else:
-                raise ValueError("Data type must be int or bytes.")
+        # the file stays open for the whole debug session; the written words are kept so that reads
+        # (and read-modify-write sequences) see them
+        if isinstance(data, (int, np.integer)):
+            word = int(data) & 0xFFFFFFFF
+            self._memory[address] = word
+            self._file_handler.write(f"write address {hex(address)} write data {hex(word)} {word}\n")
+        elif isinstance(data, bytes):
+            length = len(data)
+            num_words = length >> 2
+            if length % 4:
+                raise MemoryError("Unaligned write: data length must be multiple of 4.")
+            buf = np.frombuffer(data, np.uint32, num_words, 0)
+            for i in range(len(buf)):
+                word_address = address + 4 * i
+                word = int(buf[i])
+                self._memory[word_address] = word
+                self._file_handler.write(f"write address {hex(word_address)} write data {hex(word)} {word}\n")
+        else:
+            raise ValueError("Data type must be int or bytes.")
+        self._file_handler.flush()
 
 
 def _set_bit(value: int, pos: int, setvalue: int) -> int:
