@@ -74,6 +74,8 @@ start_server.py
 | `apply_configuration` | `system` | Applies a nested system configuration. Warns if it contains sweepable parameters. |
 | `config_and_run` | `system`, optional `variables` | Applies the configuration and runs a single experiment, or a sweep when sweepable callbacks and `variables` are present. |
 | `trigger_manually` | `ip_name` | Triggers the manual trigger of a child IP. Replies `{"type": "status", "msg": "ok"}`, or an `error` when the IP cannot be triggered. |
+| `mts_sync` | — | Synchronizes the DAC tiles (multi-tile sync). Replies `status ok` or `error`. |
+| `set_nyquist` | `tile`, `block_id`, `zone` | Sets the Nyquist zone (1 or 2) of a DAC (tiles 228-231) or ADC (tiles 224-227) block. Replies `status ok` or `error`. |
 | `reset_all` | — | Resets IP memory/registers and system node state. |
 | `logout` | — | Closes the current client connection. |
 

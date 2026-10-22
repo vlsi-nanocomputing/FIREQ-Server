@@ -217,6 +217,14 @@ class FIREQServer:
             elif cmd == "logout":
                 self._close_client()
 
+            elif cmd == "mts_sync":
+                self._fireq_soc.synchronize_dac_tiles()
+                self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+
+            elif cmd == "set_nyquist":
+                self._fireq_soc.set_nyquist_zone(msg.get("tile"), msg.get("block_id"), msg.get("zone"))
+                self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+
             elif cmd == "trigger_manually":
                 try:
                     self._fireq_soc.trigger_ip_manually(msg.get("ip_name", ""))

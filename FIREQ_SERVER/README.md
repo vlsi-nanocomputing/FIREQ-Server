@@ -59,6 +59,8 @@ SendWorker     ◄─ queue_out ── main thread (FIREQServer) / DMA payloads
 | `apply_configuration` | `system` | Applies the nested system configuration to `FIREQSystemNode`. Replies `{"type": "status", "msg": "ok"}`, followed by a `warning` if the configuration contains sweepable parameters (these are not applied). |
 | `config_and_run` | `system`, optional `variables` | Applies the configuration; runs a single experiment, or a sweep when sweepable callbacks are present and a `variables` object is given. |
 | `trigger_manually` | `ip_name` | Triggers the manual trigger of a child IP. Replies `{"type": "status", "msg": "ok"}`, or an `error` when the IP is unknown or cannot be triggered. |
+| `mts_sync` | — | Runs multi-tile synchronization on the active DAC tiles. Replies `{"type": "status", "msg": "ok"}`, or an `error` if the design has no RF-DC or no DAC tile with an enabled PLL. |
+| `set_nyquist` | `tile`, `block_id`, `zone` (ints) | Sets the Nyquist zone (1 or 2) of a converter block. Tiles use the Xilinx numbering: 224-227 for ADCs, 228-231 for DACs. Replies `{"type": "status", "msg": "ok"}`, or an `error` for an inactive block or invalid values. |
 | `reset_all` | — | Resets IP memories/registers and the system node state. |
 | `logout` | — | Closes the current client connection. |
 

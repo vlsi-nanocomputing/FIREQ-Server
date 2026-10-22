@@ -387,6 +387,56 @@ class FIREQSystemNode(_GenericNode):
         if ret not in (0, None):
             raise RuntimeError(f"Manual trigger of IP {ip_name} failed with error code {ret}")
 
+    def synchronize_dac_tiles(self) -> None:
+        """Run multi-tile synchronization (MTS) on the active DAC tiles.
+
+        The tile with the enabled PLL is used as the reference tile.
+
+        :raises RuntimeError: If the design has no RF-DC or no DAC tile with an enabled PLL
+        """
+        soc = self._fireq_soc
+        if soc.rfdc is None:
+            raise RuntimeError("No RF-DC found in the design, cannot synchronize the DAC tiles")
+        if soc._mts_dac_master is None:
+            raise RuntimeError("No DAC tile with an enabled PLL found, cannot synchronize the DAC tiles")
+        soc.syncronize_mts_groups()
+        self.log.info(
+            "DAC tiles synchronized (tile mask %s, reference tile %s)", soc._mts_dac_mask, soc._mts_dac_master
+        )
+
+    def set_nyquist_zone(self, tile: int, block_id: int, zone: int) -> None:
+        """Set the Nyquist zone of a DAC or ADC block.
+
+        :param tile: Converter tile number as in the Xilinx numbering: 224-227 for ADCs, 228-231 for DACs
+        :type tile: int
+        :param block_id: Converter block number inside the tile, starts at 0
+        :type block_id: int
+        :param zone: Nyquist zone, 1 (odd) or 2 (even)
+        :type zone: int
+        :raises ValueError: If an argument is not an integer, the zone is not 1 or 2, or the block is not active
+        :raises RuntimeError: If the design has no RF-DC
+        """
+        for arg_name, value in (("tile", tile), ("block_id", block_id), ("zone", zone)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{arg_name} must be an integer, got {value!r}")
+        if zone not in (1, 2):
+            raise ValueError(f"Nyquist zone must be 1 or 2, got {zone}")
+        soc = self._fireq_soc
+        if soc.rfdc is None:
+            raise RuntimeError("No RF-DC found in the design, cannot set the Nyquist zone")
+        # the low-level driver fails silently on unknown blocks, so check them here
+        if tile >= 228:
+            converter, tile_base, active = "DAC", 228, soc.active_dacs
+        elif tile >= 224:
+            converter, tile_base, active = "ADC", 224, soc.active_adcs
+        else:
+            raise ValueError(f"Invalid tile {tile}: ADC tiles are 224-227, DAC tiles are 228-231")
+        if (tile - tile_base, block_id) not in active:
+            available = [(t + tile_base, b) for t, b in active]
+            raise ValueError(f"{converter} tile {tile} block {block_id} is not active, active blocks: {available}")
+        soc.set_nyquist_zone(tile, block_id, zone)
+        self.log.info("Nyquist zone of %s tile %s block %s set to %s", converter, tile, block_id, zone)
+
     def set_dma_payload_interface_class(self, interface_class: object) -> None:
         """
         Set the interface class for all DMA nodes in the design.
