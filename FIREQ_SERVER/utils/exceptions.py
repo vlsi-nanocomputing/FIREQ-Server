@@ -384,6 +384,12 @@ class InvalidPayloadError(Exception):
     pass
 
 
+class SweepAbortedError(Exception):
+    """Raised when a running sweep is aborted (server stopping or client disconnected)."""
+
+    pass
+
+
 __all__ = [
     "FireqHardwareError",
     "DriverError",
@@ -400,4 +406,5 @@ __all__ = [
     "ClientDisconnectedError",
     "IncompleteTransferError",
     "InvalidPayloadError",
+    "SweepAbortedError",
 ]

@@ -4,35 +4,67 @@ This module implements the SweepExperiment class, which is responsible for execu
 the FIREQ system. It provides methods to parse sweep configurations, compute variable values, and execute the experiment
 """
 
+from __future__ import annotations
+
+import ast
 import logging
-import re
 import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..utils import SweepAbortedError
+
+if TYPE_CHECKING:
+    from ..fireq_server import FIREQServer
+
+
+# AST nodes allowed in a sweep expression: numbers (int or float), variables, unary and binary + and -.
+# Anything else (calls, attribute access, subscripts, other operators) is rejected.
+_ALLOWED_EXPRESSION_NODES = (
+    ast.Expression,
+    ast.BinOp,
+    ast.UnaryOp,
+    ast.Add,
+    ast.Sub,
+    ast.UAdd,
+    ast.USub,
+    ast.Name,
+    ast.Load,
+    ast.Constant,
+)
+
 
 class SweepExperiment:
-    """Execute multi-sweep points using high-level callbacks.
+    """Execute multi-sweep points using high-level callbacks."""
 
-    :param OPERATORS: string containings the operator characters available
-    :type OPERATORS: str
-    """
-
-    OPERATORS = "+-"  # TODO: check if is necessary to constrain the operators
-
-    def __init__(self, server, sweep_callbacks: list, variables: list, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        server: FIREQServer,
+        sweep_callbacks: list,
+        variables: dict,
+        should_abort: Callable[[], bool] | None = None,
+        logger: logging.Logger | None = None,
+    ) -> None:
         """
         Initialize with the sweeping expressions and variables values.
+
+        Raises if an expression is invalid or references a variable that is not defined.
 
         :param server: object representing the FIREQ server
         :type server: FIREQServer
         :param sweep_callbacks: A list of tuples containing the sweep expressions.
         :type sweep_callbacks: list[tuple[callable, str, int]]
-        :param variables: A list of dictionaries containing the variable parameters for the sweep.
-        :type variables: dict[str: dict]
+        :param variables: A dictionary mapping each variable name to its definition.
+        :type variables: dict[str, dict]
+        :param should_abort: Optional callable checked right before running each sweep point; when it returns True
+            the sweep stops by raising SweepAbortedError.
+        :type should_abort: Callable[[], bool] | None
         """
         # Fireq Node
         self._server = server
+        self._should_abort = should_abort or (lambda: False)
         self.log = logger or logging.getLogger(__name__)
 
         # current iteration of variables
@@ -44,38 +76,52 @@ class SweepExperiment:
         # parse the configuration
         self.sweep_routine, self.vars_order = self._parse_callbacks(sweep_callbacks)
 
-    def _check_sweep_expression(self, expr: str) -> None:
-        """Check the sweep expressions for validity.
+        # every variable used in an expression must be defined, check now instead of failing mid-sweep
+        undefined = [var for var in self.vars_order if var not in self.computed_vars]
+        if undefined:
+            raise KeyError(f"Sweep expressions use undefined variables: {undefined}")
 
-        Raise ValueError if the expression does not pass the check.
-        The first character of the expression must be '#' and the rest of the expression must
-        contain only valid operators.
+    @staticmethod
+    def _check_sweep_expression(expr: str) -> ast.Expression:
+        """Check the sweep expression for validity and parse it.
+
+        The first character of the expression must be '#'. The rest may only contain numbers
+        (int or float, e.g. 0.5 or 1e9), variable names, the + and - operators and parentheses.
 
         :param expr: expression to check
         :type expr: str
+        :return: the parsed expression, without the leading '#'
+        :rtype: ast.Expression
+        :raises ValueError: if the expression is not valid
         """
         if not expr.startswith("#"):
             raise ValueError(f"Invalid sweep expression: {expr}. Must start with '#'.")
-
-        # check if the expression contains only valid operators (TODO: can be removed and method can be static)
-        for char in expr[1:]:
-            if not char.isalnum() and char not in {"_", " ", "(", ")"}:
-                # check only special char
-                if char not in self.OPERATORS:
-                    raise ValueError(f"Invalid operator used for the expression: '{char}'")
+        try:
+            tree = ast.parse(expr[1:].strip(), mode="eval")
+        except SyntaxError as e:
+            raise ValueError(f"Invalid sweep expression '{expr}': {e.msg}") from e
+        for node in ast.walk(tree):
+            if not isinstance(node, _ALLOWED_EXPRESSION_NODES):
+                raise ValueError(
+                    f"Invalid sweep expression '{expr}': {type(node).__name__} is not allowed, "
+                    "only numbers, variables, + and - can be used"
+                )
+            if isinstance(node, ast.Constant) and (
+                isinstance(node.value, bool) or not isinstance(node.value, (int, float))
+            ):
+                raise ValueError(f"Invalid sweep expression '{expr}': constant {node.value!r} is not a real number")
+        return tree
 
     @staticmethod
-    def _get_vars(expr: str) -> tuple[str]:
-        """Extract the involved varibles from expression.
+    def _get_vars(tree: ast.Expression) -> tuple[str]:
+        """Extract the involved variables from a parsed expression.
 
-        The expression shuold not cointain the first char '#'
-
-        :param expr: expression
-        :type str
-        :return tuple with the involved variables
-        :rtype tuple[str]
+        :param tree: expression parsed by _check_sweep_expression
+        :type tree: ast.Expression
+        :return: the involved variables, without duplicates, in order of appearance
+        :rtype: tuple[str]
         """
-        return tuple(re.findall(r"[a-zA-Z_]\w*", expr))
+        return tuple(dict.fromkeys(node.id for node in ast.walk(tree) if isinstance(node, ast.Name)))
 
     def _parse_callbacks(self, callbacks: list) -> tuple[list[tuple[callable, str, tuple[str]]], list[str]]:
         """Parse the sweep configuration and compute the sweep_routine and vars_order.
@@ -95,11 +141,11 @@ class SweepExperiment:
         # identify the sweeping expressions compute cost and fill the expr_routine dict
         for callback, expr, cost in callbacks:
 
-            # check expression validity
-            self._check_sweep_expression(expr)
+            # check expression validity and parse it
+            tree = self._check_sweep_expression(expr)
 
             # get the variables from the expression
-            variables = self._get_vars(expr[1:])  # remove the '#' character and get the variables
+            variables = self._get_vars(tree)
 
             # update sweep_cost dict
             for var in variables:
@@ -109,7 +155,7 @@ class SweepExperiment:
                     sweep_costs[var] += cost
 
             # update sweep_routine
-            sweep_routine.append((callback, compile(expr[1:], "compiled_expression", "eval"), variables))
+            sweep_routine.append((callback, compile(tree, "compiled_expression", "eval"), variables))
 
         # order the varibles based on their costs
         vars_order = sorted(sweep_costs, key=lambda x: sweep_costs[x], reverse=True)
@@ -135,10 +181,6 @@ class SweepExperiment:
 
         # iterate through variables
         for var_name, var_description in var.items():
-            # check that the variable is not in the dict already
-            if return_dict.get(var_name) is not None:
-                raise KeyError(f"Variable '{var_name}' has already been defined earlier.")
-
             # get variable "mode" field, check if it exists
             mode = var_description.get("mode")
 
@@ -179,14 +221,15 @@ class SweepExperiment:
     ) -> None:
         """Iterate recursivelly through variables executing callbacks and finally run the experiment.
 
-        :param dict_vars: dict with the value associated to each varible for the current step
-        :type dict_vars: dict
-        :param sweep_routine: sweep_routine dict for the current step
-        :type sweep_routine: set
+        :param sweep_routine: callbacks with their compiled expressions and variable dependencies
+        :type sweep_routine: list
         :param vars_order: variables ordered by total cost
         :type vars_order: list
-        :param iterating_vars: list of iterating variables for the current step
-        :type iterating_vars: list
+        :param depth: index in vars_order of the variable iterated by this call
+        :type depth: int
+        :param accounted_callbacks: indices of the callbacks already executed by outer loops
+        :type accounted_callbacks: set
+        :raises SweepAbortedError: if the abort callable returns True before running a sweep point
         """
         if accounted_callbacks is None:
             accounted_callbacks = set()
@@ -211,10 +254,18 @@ class SweepExperiment:
             self._current_sweep_point[iterating_var] = value
             # execute the callbacks
             for ll_callback, compiled_eval in callbacks:
-                ll_callback(eval(compiled_eval, {}, self._current_sweep_point))
+                ret = ll_callback(eval(compiled_eval, {"__builtins__": {}}, self._current_sweep_point))
+                if ret != 0:
+                    raise RuntimeError(
+                        f"Sweep callback {ll_callback.__name__} failed with error code {ret} "
+                        f"at sweep point {self._current_sweep_point}"
+                    )
             # recursively call the function to iterate over the next variable or call the function to run
             # the experiement this is the inner most loop
             if depth == len(vars_order) - 1:
+                # checked once per sweep point, right before the run
+                if self._should_abort():
+                    raise SweepAbortedError("Sweep aborted")
                 self._server._run_experiment()
             else:
                 self._nested_loop_recursive(
@@ -231,6 +282,7 @@ class SweepExperiment:
 
         :return: The total execution time in ns.
         :rtype: int
+        :raises SweepAbortedError: if the sweep is aborted through the abort callable
         """
         # execute the experiment changing the sweeping variables
         start = time.perf_counter_ns()
