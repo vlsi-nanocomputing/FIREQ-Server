@@ -26,7 +26,6 @@ entry point.
 ├── sync_board.sh         - rsync deployment helper
 ├── CONTRIBUTING.md       - contribution and style guidelines
 ├── CODEOWNERS            - code ownership for the CI
-├── .gitlab-ci.yml        - CI pipeline
 └── .pre-commit-config.yaml - pre-commit hooks
 ```
 
