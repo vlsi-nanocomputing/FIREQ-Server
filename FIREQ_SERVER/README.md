@@ -86,8 +86,7 @@ experiment or a sweep:
 
 ```text
 <- {"type": "status", "msg": "ok"}                configuration applied
-<- {"type": "status", "msg": "experiment_header"} + "shots" (always present)
-                                                  + "variable_order" / "variable_values" (sweeps)
+<- {"type": "status", "msg": "experiment_header"} + "variable_order" / "variable_values" (sweeps)
 <- {"type": "dma_package", ...}                   zero or more per iteration
 <- {"type": "status", "msg": "iteration_ended", "time": <ns, int>}
 ...                                               one iteration per sweep point

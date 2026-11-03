@@ -412,7 +412,9 @@ class FIREQServer:
             self.log.warning("Configuration failed to apply, aborting experiment run")
             return
 
-        start_message = {"shots": self._fireq_soc.shots}
+        # no shot count here: a swept $shots is only applied by the sweep callbacks, so the system value
+        # would be stale; every dma_package carries the shots it actually holds
+        start_message = {}
         exp = None
         if callbacks:
             variables = get_sweep_variables(message)

@@ -50,7 +50,7 @@ bracket an experiment run.
 ### Serialization
 
 ```python
-packet = FIREQNetworkPacket({"type": "status", "msg": "experiment_header", "shots": 100})
+packet = FIREQNetworkPacket({"type": "status", "msg": "experiment_header"})
 buffers = packet.to_buffers()      # (4-byte length, header bytes[, data])
 ```
 
@@ -66,8 +66,9 @@ Every `config_and_run` — single experiment or sweep — produces the same
 sequence of packets:
 
 - `{"type": "status", "msg": "ok"}` — the configuration was applied.
-- `{"type": "status", "msg": "experiment_header", ...}` — `shots` is always
-  present; sweeps add `variable_order` (variables ordered from the outermost to
+- `{"type": "status", "msg": "experiment_header", ...}` — it carries no shot
+  count, because a swept `$shots` changes per point: each `dma_package` reports
+  the shots it holds. Sweeps add `variable_order` (variables ordered from the outermost to
   the innermost loop) and `variable_values` (mapping of variable name to a
   plain list of values, converted from NumPy arrays so that the header stays
   msgpack-encodable).

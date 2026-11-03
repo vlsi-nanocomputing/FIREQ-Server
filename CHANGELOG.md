@@ -21,8 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manual trigger.
 - `{"type": "status", "msg": "ok"}` acknowledgement once a configuration has been
   applied.
-- Explicit experiment framing: sweeps now report their shot count, variable
-  order and variable values up front in the `experiment_header`. Every run
+- Explicit experiment framing: sweeps now report their variable order and
+  variable values up front in the `experiment_header`. Every run
   reports its total time (`run_time`) and an `aborted` flag at the end, in the
   `experiment_footer`.
 - `SweepExperiment` takes an optional `should_abort` callable. The server uses
