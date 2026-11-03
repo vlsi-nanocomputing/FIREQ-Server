@@ -1,4 +1,4 @@
-"""Handles the incoming packets, owns the client sock.recv() method, puts packets in the input queue."""
+"""Handles the incoming packets, owns the recv() calls on the client socket, puts packets in the input queue."""
 
 import logging
 import socket
@@ -80,17 +80,17 @@ class ReceiveWorker:
             if not self._client_connected.wait(0.5):
                 continue
             # errors on a socket that has already been replaced must not disconnect the new client
-            sock = self.client_socket
+            client_socket = self.client_socket
             try:
                 # receive a message
-                msg = self._receive_message(sock)
+                msg = self._receive_message(client_socket)
                 # parse the payload and place it in queue
                 self.queue_in.put(msg)
             except InvalidPayloadError as e:
                 self.log.warning(f"Invalid payload received: {e}")
                 continue
             except ClientDisconnectedError as e:
-                if sock is self.client_socket:
+                if client_socket is self.client_socket:
                     self.log.info(f"Connection lost: {e}")
                     self._client_connected.clear()
                 continue
@@ -101,18 +101,18 @@ class ReceiveWorker:
             except Exception:
                 # the stream position is unknown: drop the client but keep the worker alive for the next one
                 self.log.exception("Unexpected error in receive worker, dropping the client connection")
-                if sock is self.client_socket:
+                if client_socket is self.client_socket:
                     self._client_connected.clear()
                 continue
         # exit the thread safely
         self.log.info("Detected stop flag, exiting...")
         self._cleanup_and_exit()
 
-    def _receive_message(self, sock: socket.socket) -> FIREQNetworkPacket:
+    def _receive_message(self, client_socket: socket.socket) -> FIREQNetworkPacket:
         """Receive a message from the client socket.
 
-        :param sock: Client socket to receive from.
-        :type sock: socket.socket
+        :param client_socket: Client socket to receive from.
+        :type client_socket: socket.socket
         :return: A data packet.
         :rtype: FIREQNetworkPacket
         :raises InvalidPayloadError: if the header is not a valid msgpack dict (the stream stays aligned)
@@ -120,13 +120,13 @@ class ReceiveWorker:
             (the stream cannot be realigned, so the client must be dropped)
         """
         # first, receive the length of the message
-        length_bytes = self._recv_exact(sock, 4)
+        length_bytes = self._recv_exact(client_socket, 4)
         length = int.from_bytes(length_bytes, "big")
         if length > self._max_payload_bytes:
             raise ClientDisconnectedError(f"Header size {length} exceeds the limit of {self._max_payload_bytes} bytes")
 
         # now, receive the header
-        payload = self._recv_exact(sock, length)
+        payload = self._recv_exact(client_socket, length)
         try:
             header = unpack_header(payload)
         except Exception as e:
@@ -140,18 +140,18 @@ class ReceiveWorker:
         if not isinstance(dlength, int) or dlength < 0 or dlength > self._max_payload_bytes:
             raise ClientDisconnectedError(f"Invalid trailing data size {dlength!r}")
         if dlength > 0:
-            msg.data = self._recv_exact(sock, dlength)
+            msg.data = self._recv_exact(client_socket, dlength)
 
         return msg
 
-    def _recv_exact(self, sock: socket.socket, n: int) -> bytes:
+    def _recv_exact(self, client_socket: socket.socket, n: int) -> bytes:
         """Receive exactly n bytes from the socket.
 
         Raises ClientDisconnectedError if the connection is lost or the socket has been replaced.
         Read timeouts are retried until the stop event is set.
 
-        :param sock: Client socket to receive from.
-        :type sock: socket.socket
+        :param client_socket: Client socket to receive from.
+        :type client_socket: socket.socket
         :param n: Number of bytes to receive.
         :type n: int
         :return: Received bytes.
@@ -160,9 +160,9 @@ class ReceiveWorker:
         data = b""
         while len(data) < n and not self._stop_event.is_set():
             try:
-                chunk = sock.recv(n - len(data))
+                chunk = client_socket.recv(n - len(data))
             except TimeoutError:
-                if sock is not self.client_socket or not self._client_connected.is_set():
+                if client_socket is not self.client_socket or not self._client_connected.is_set():
                     raise ClientDisconnectedError("Client connection closed by the server") from None
                 continue
             except (ConnectionResetError, ConnectionAbortedError, OSError) as e:

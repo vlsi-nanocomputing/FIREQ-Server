@@ -1,4 +1,4 @@
-"""Handles the outgoing queue, sends serialized responses to the client socket, owns the sock.send_all() method.
+"""Handles the outgoing queue, sends serialized responses to the client socket, owns the sendmsg() calls on it.
 
 The only rule on the queue objects is that they must have a "to_buffers" method that returns a sequence of
 bytes-like objects ready for sendmsg(). The protocol is defined in the to_buffers method of the object.
@@ -68,16 +68,16 @@ class SendWorker:
             if not self._client_connected.wait(0.5):
                 continue
             # errors on a socket that has already been replaced must not disconnect the new client
-            sock = self.client_socket
+            client_socket = self.client_socket
             try:
                 # pop an item from the queue
                 item = self.queue_out.get(timeout=0.5)
                 # send it over the socket
-                self._send_payload(sock, item)
+                self._send_payload(client_socket, item)
             except Empty:
                 continue
             except ClientDisconnectedError as e:
-                if sock is self.client_socket:
+                if client_socket is self.client_socket:
                     self.log.info(f"Connection lost: {e}")
                     self._client_connected.clear()
                 continue
@@ -88,29 +88,29 @@ class SendWorker:
         self.log.info("Detected stop flag or unexpected error, exiting...")
         self._cleanup_and_exit()
 
-    def _send_payload(self, sock: socket.socket, item: object) -> None:
+    def _send_payload(self, client_socket: socket.socket, item: object) -> None:
         """Send a queue item over the network.
 
         The input item should implement the to_buffers() method,
         the result of which is directly sent over the network without
         any other checks.
 
-        :param sock: Client socket to send on.
-        :type sock: socket.socket
+        :param client_socket: Client socket to send on.
+        :type client_socket: socket.socket
         :param item: Data object implementing the to_buffers() method.
         :type item: object
         """
-        self._sendmsg_all(sock, item.to_buffers())
+        self._sendmsg_all(client_socket, item.to_buffers())
 
-    def _sendmsg_all(self, sock: socket.socket, buffers: tuple) -> None:
+    def _sendmsg_all(self, client_socket: socket.socket, buffers: tuple) -> None:
         """Send all the buffers over the socket, handling partial sends.
 
         sendmsg() may send only part of the data (e.g. when the socket has a timeout), so the
         buffers are advanced by the number of bytes actually sent until everything is sent.
         A timeout means that nothing was sent, so the remaining data is retried.
 
-        :param sock: Client socket to send on.
-        :type sock: socket.socket
+        :param client_socket: Client socket to send on.
+        :type client_socket: socket.socket
         :param buffers: sequence of bytes-like objects
         :type buffers: tuple
         :raises ClientDisconnectedError: if the connection is lost
@@ -118,10 +118,10 @@ class SendWorker:
         pending = [memoryview(buf).cast("B") for buf in buffers if len(buf) > 0]
         while pending and not self._stop_event.is_set():
             try:
-                sent = sock.sendmsg(pending)
+                sent = client_socket.sendmsg(pending)
             except TimeoutError:
                 # might change it later to add a maximum number of timeouts
-                if sock is not self.client_socket or not self._client_connected.is_set():
+                if client_socket is not self.client_socket or not self._client_connected.is_set():
                     raise ClientDisconnectedError("Client connection closed by the server") from None
                 continue
             except (ConnectionResetError, ConnectionAbortedError) as e:
