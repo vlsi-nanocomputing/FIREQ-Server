@@ -96,8 +96,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MemoryBoundedQueue` counted network packets as about 50 bytes, ignoring
   their payload, so the 1 GB bound had no effect.
 - An item larger than the queue limit blocked `put()` forever.
-- A sweep could hang forever after the client disconnected, because the
-  bounded output queue was never drained.
+- A run could hang forever after the client disconnected: nobody drained the
+  output queue, so the DMA transfer blocked in `put()` once it was full and the
+  server never accepted another client. Packets are now dropped while no client
+  is connected, and a blocked `put()` gives up within 0.5 s.
+- A packet queued for a new client, e.g. its handshake, could be sent on the
+  previous client's closed socket and lost, so the new client timed out. Packets
+  are now tagged with the session they were queued in and sent on that
+  session's socket.
+- A message from a previous client could reach the main thread after the input
+  queue had been cleared, e.g. as the next client's handshake answer. Messages
+  are now tagged with their socket and dropped if it has been replaced.
 - A sweep expression that used an undefined variable failed after the
   `experiment_header` had been sent; it is now rejected up front.
 - A sweep whose expressions reference no variable (e.g. `#0.5`) raised

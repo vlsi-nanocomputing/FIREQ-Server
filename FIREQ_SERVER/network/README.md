@@ -20,8 +20,8 @@ FIREQ_SERVER/network/
 | File | Public API | Responsibility |
 |---|---|---|
 | `protocol.py` | `FIREQNetworkPacket`, `NetworkDMAPayload`, `unpack_header`, `get_command`, `get_sweep_variables` | Wire format: a msgpack-packed header dictionary preceded by a 4-byte big-endian length, with an optional binary payload whose size is announced in the header (`tsize`). Also `NetworkDMAPayload`, the network-serializable DMA payload used during experiments. |
-| `receive_worker.py` | `ReceiveWorker` | Background thread that waits for the `client_connected` event, then reads framed messages from the client socket and puts them in `queue_in` (a bounded `Queue`). Clears the `client_connected` event on connection loss. |
-| `send_worker.py` | `SendWorker` | Background thread that pops objects from `queue_out` (a `MemoryBoundedQueue`) and sends them with `socket.sendmsg()`, handling partial sends. Any item with a `to_buffers()` method is accepted. |
+| `receive_worker.py` | `ReceiveWorker` | Background thread that waits for the `client_connected` event, then reads framed messages from the client socket and puts them in `queue_in` (a bounded `Queue`), tagged with the socket they came from. The main thread reads them with `get()`. Clears the `client_connected` event on connection loss. |
+| `send_worker.py` | `SendWorker` | Background thread that pops objects from `queue_out` (a `MemoryBoundedQueue`) and sends them with `socket.sendmsg()`, handling partial sends. Any item with a `to_buffers()` method is accepted. Each client gets a session with `start_session()`. |
 
 ## Wire protocol
 
@@ -100,6 +100,16 @@ Both workers are daemon threads started by `FIREQServer`:
 - Each worker captures the socket it is using. An error on a socket that the
   server has already replaced is ignored, so it cannot disconnect the next
   client.
+- Packets never cross from one client to the next:
+  - The server calls `SendWorker.start_session(client_socket)` before setting
+    `client_connected`. Every packet put in `queue_out` is tagged with the
+    current session, and the sender only sends a packet on the socket of the
+    session it was queued in; packets of a previous session are dropped.
+  - `ReceiveWorker.get()` drops messages read from a socket that has since been
+    replaced, e.g. one put in `queue_in` right after it was cleared.
+- While no client is connected (or the worker is stopping), `queue_out` drops
+  the packets put in it, and a `put()` waiting for space gives up. A run whose
+  client disconnected therefore never blocks on a full queue that nobody drains.
 - An unexpected error in the receive worker drops the client but keeps the
   thread alive for the next connection.
 

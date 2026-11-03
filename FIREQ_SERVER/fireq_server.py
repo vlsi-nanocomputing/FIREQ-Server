@@ -91,8 +91,7 @@ class FIREQServer:
         self._receive_worker = ReceiveWorker(self._client_connected, max_payload_bytes=MAX_PAYLOAD_BYTES)
         self._send_worker = SendWorker(self._client_connected, max_queue_bytes=QUEUE_MAX_MEMORY_BYTES)
 
-        # Getting the two network packet queues
-        self._queue_in = self._receive_worker.queue_in
+        # Getting the output network packet queue, incoming packets are read with self._receive_worker.get()
         self._queue_out = self._send_worker.queue_out
 
         # sockets
@@ -148,7 +147,8 @@ class FIREQServer:
             # assign client socket and inform threads
             self._client_socket.settimeout(SOCKET_TIMEOUT_SECONDS)
             self._receive_worker.client_socket = self._client_socket
-            self._send_worker.client_socket = self._client_socket
+            # before setting the event: packets queued while no client is connected are dropped
+            self._send_worker.start_session(self._client_socket)
             self._client_connected.set()
 
             # perform the handshake
@@ -175,7 +175,7 @@ class FIREQServer:
         while not self._stop_event.is_set() and self._client_connected.is_set():
             # receive message from the input queue
             try:
-                msg = self._queue_in.get(timeout=1.0)
+                msg = self._receive_worker.get(timeout=1.0)
             except Empty:
                 continue
 
@@ -323,7 +323,7 @@ class FIREQServer:
                 self.log.warning("Handshake timed out")
                 return False
             try:
-                response = self._queue_in.get(timeout=min(0.5, remaining))
+                response = self._receive_worker.get(timeout=min(0.5, remaining))
             except Empty:
                 continue
 

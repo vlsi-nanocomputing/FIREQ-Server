@@ -42,13 +42,16 @@ SendWorker     ◄─ queue_out ── main thread (FIREQServer) / DMA payloads
 2. `start()` launches the two worker threads and enters the main loop on the
    calling thread.
 3. The main loop accepts a client on a listening socket that is bound once and
-   reused for every client. It assigns the socket to both workers and performs
-   the token handshake: the client must answer within 3 s.
+   reused for every client. It assigns the socket to both workers (a new output
+   queue session for the send worker) and performs the token handshake: the
+   client must answer within 3 s.
 4. While connected, the main thread pops command messages from `queue_in` and
    dispatches them; responses and streamed DMA payloads go into `queue_out`.
 5. When the client logs out or disconnects, the server closes the client socket
    and clears both queues, so no stale packet reaches the next client. It then
-   goes back to accepting.
+   goes back to accepting. From the disconnect on, the packets of a running
+   experiment are dropped instead of filling the output queue, so the run
+   cannot block, and a sweep is aborted at its next point.
 6. `stop()` sets the stop event, closes both sockets and joins the workers.
 
 ## Commands

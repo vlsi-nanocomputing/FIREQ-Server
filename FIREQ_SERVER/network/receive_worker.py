@@ -2,6 +2,7 @@
 
 import logging
 import socket
+import time
 from queue import Empty, Queue
 from threading import Event, Thread
 
@@ -16,6 +17,7 @@ class ReceiveWorker:
     pull messages from the socket.
 
     The socket must be set by the main thread before setting the client connected event.
+    Messages must be read with :meth:`get`, which drops those read from a socket that has since been replaced.
 
     Will clear the client connected event if the connection is lost.
     """
@@ -33,8 +35,8 @@ class ReceiveWorker:
         :type max_payload_bytes: int
         """
         self._max_payload_bytes = max_payload_bytes
-        # input queue
-        self.queue_in = Queue(maxsize=10)
+        # input queue of (client socket, message) pairs, the socket tells which client sent the message
+        self.queue_in: Queue[tuple[socket.socket, FIREQNetworkPacket]] = Queue(maxsize=10)
         # public attribute to set the client socket
         self.client_socket = None
         # input mutable objects and events
@@ -58,6 +60,25 @@ class ReceiveWorker:
         self._thread.join(timeout=2.0)
         if self._thread.is_alive():
             self.log.warning("Thread did not exit cleanly")
+
+    def get(self, timeout: float) -> FIREQNetworkPacket:
+        """Pop the next message of the current client from the input queue.
+
+        Messages read from a socket that has been replaced are dropped: one may still be put in the queue
+        after it has been cleared, while the worker was blocked on a full queue.
+
+        :param timeout: Max seconds to wait.
+        :type timeout: float
+        :return: The message.
+        :rtype: FIREQNetworkPacket
+        :raises Empty: if no message of the current client arrives within the timeout.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            client_socket, msg = self.queue_in.get(timeout=max(0.0, deadline - time.monotonic()))
+            if client_socket is self.client_socket:
+                return msg
+            self.log.debug("Dropped a message received from a previous client")
 
     def clear_input_queue(self) -> None:
         """Empty the input queue."""
@@ -84,8 +105,8 @@ class ReceiveWorker:
             try:
                 # receive a message
                 msg = self._receive_message(client_socket)
-                # parse the payload and place it in queue
-                self.queue_in.put(msg)
+                # place it in queue, tagged with its socket so a message of a previous client can be dropped
+                self.queue_in.put((client_socket, msg))
             except InvalidPayloadError as e:
                 self.log.warning(f"Invalid payload received: {e}")
                 continue
