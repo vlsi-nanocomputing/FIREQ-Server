@@ -100,6 +100,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bounded output queue was never drained.
 - A sweep expression that used an undefined variable failed after the
   `experiment_header` had been sent; it is now rejected up front.
+- A sweep whose expressions reference no variable (e.g. `#0.5`) raised
+  `IndexError` after the `experiment_header` had been sent. It is now rejected
+  up front, as is a swept variable with no values.
 - Sweep callbacks that returned an error code were silently ignored.
 - `apply_configuration` raised `TypeError` (`len(None)`) when the configuration
   failed.

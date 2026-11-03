@@ -50,7 +50,8 @@ class SweepExperiment:
         """
         Initialize with the sweeping expressions and variables values.
 
-        Raises if an expression is invalid or references a variable that is not defined.
+        Raises if an expression is invalid, if no expression references a variable, or if a referenced
+        variable is not defined or has no values.
 
         :param server: object representing the FIREQ server
         :type server: FIREQServer
@@ -75,11 +76,18 @@ class SweepExperiment:
 
         # parse the configuration
         self.sweep_routine, self.vars_order = self._parse_callbacks(sweep_callbacks)
+        # expressions made only of constants (e.g. '#0.5') leave nothing to iterate over
+        if not self.vars_order:
+            raise ValueError("Sweep expressions must reference at least one variable")
 
         # every variable used in an expression must be defined, check now instead of failing mid-sweep
         undefined = [var for var in self.vars_order if var not in self.computed_vars]
         if undefined:
             raise KeyError(f"Sweep expressions use undefined variables: {undefined}")
+        # a variable without values would produce a header and a footer with no iterations in between
+        empty = [var for var in self.vars_order if self.computed_vars[var].size == 0]
+        if empty:
+            raise ValueError(f"Sweep variables have no values: {empty}")
 
     @staticmethod
     def _check_sweep_expression(expr: str) -> ast.Expression:
