@@ -101,7 +101,7 @@ class FIFONode(_GenericNode):
         :rtype: bool
         """
         # check if the dict is empty and that the payload is in the correct interface
-        if self._input_payload:
+        if self._input_payload and self._input_payload["size"] > 0:
             self.max_hw_shots["value"] = self._size // self._input_payload["size"]
             self.log.debug("Recomputed max hw shots to %s for FIFO node %s", self.max_hw_shots["value"], self.name)
         else:
@@ -117,7 +117,7 @@ class FIFONode(_GenericNode):
         """
         # compute the payload
         self.payload.clear()
-        if self._input_payload and self._hw_shots["value"]:
+        if self._input_payload and self._hw_shots.get("value"):
             self.payload["size"] = self._hw_shots["value"] * self._input_payload["size"]
             self.payload["source"] = self._input_payload["source"]
             self.payload["format"] = self._input_payload["format"]

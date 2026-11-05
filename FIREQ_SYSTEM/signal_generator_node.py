@@ -83,18 +83,27 @@ class _GenericEnvelope(_GenericNode):
     def write_samples(self, samples: np.ndarray) -> int:
         """Write the envelope samples to generator memory.
 
+        The real and imaginary parts are scaled to the signed range of the generator sample size.
+
         :param samples: Array of complex samples of the envelope, normalized to 1
-            (values between -1 and 1)
+            (real and imaginary parts between -1 and 1)
         :type samples: np.ndarray
         :return: Error code (0 on success)
         :rtype: int
         """
+        samples = np.asarray(samples, dtype=complex)
+        if np.any(np.abs(samples.real) > 1) or np.any(np.abs(samples.imag) > 1):
+            self.log.error("envelope %s has samples outside of [-1, 1]", self.name)
+            return -3
+        # largest positive value of a signed sample of sample_size bits
+        full_scale = 2 ** (self.parent._ll_handler.sample_size - 1) - 1
+        scaled = np.rint(samples.real * full_scale) + 1j * np.rint(samples.imag * full_scale)
         div = 1 if self._for_interpolation else self.parent._ll_handler.number_of_channels
         memory_depth = len(samples) // div
         self._address = self.parent.reserve_envelope_segment(memory_depth)
         self.natural_length = len(samples)
         return self.parent._ll_handler.write_envelope_memory(
-            start_address=self._address, envelope=samples, common=self._for_interpolation
+            start_address=self._address, envelope=scaled, common=self._for_interpolation
         )
 
 

@@ -14,6 +14,7 @@ from .exceptions import (
     IncompleteTransferError,
     InvalidPayloadError,
     RecoverableDMAError,
+    SweepAbortedError,
     TimingError,
     WaveCompilationError,
 )
@@ -36,6 +37,7 @@ __all__ = [
     "ClientDisconnectedError",
     "IncompleteTransferError",
     "InvalidPayloadError",
+    "SweepAbortedError",
     # memory limited queue
     "MemoryBoundedQueue",
 ]

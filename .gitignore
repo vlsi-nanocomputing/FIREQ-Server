@@ -56,3 +56,7 @@ testing/
 
 # deprecated stuff
 deprecated/
+
+# local scratch files
+todo.md
+CLAUDE.md

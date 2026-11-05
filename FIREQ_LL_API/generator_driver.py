@@ -152,7 +152,7 @@ class GeneratorDriver(_FIREQDriver):
 
         :param start_address: Start address in the envelope memory (word aligned)
         :type start_address: int
-        :param envelope: Array of complex samples to write
+        :param envelope: Array of complex samples to write, real and imaginary parts as signed 16-bit integer values
         :type envelope: np.ndarray
         :param common: If True, it write the envelope in all parallelization sub-channels (envelope for interpolation)
         :type common: bool
@@ -176,7 +176,10 @@ class GeneratorDriver(_FIREQDriver):
             self.log.error("data exceeds memory bounds")
             return -3
 
-        to_write_array = (envelope.real.astype(np.int32) << 16) + envelope.imag.astype(np.int16)
+        # pack I in the upper and Q in the lower 16 bits; the Q half is masked so negative values cannot borrow from I
+        real_bits = envelope.real.astype(np.int16).view(np.uint16).astype(np.uint32)
+        imag_bits = envelope.imag.astype(np.int16).view(np.uint16).astype(np.uint32)
+        to_write_array = (real_bits << 16) | imag_bits
         if common:
             # write the samples to all sub-channels, there is a specific space in the generator memory to do just that
             self._common_envelope_memory_interface.write(start_address * 4, to_write_array.tobytes())
@@ -555,11 +558,11 @@ class GeneratorDriver(_FIREQDriver):
         if normalized_gain < 0:
             wdw |= 1 << 124
         gain = abs(normalized_gain)
-        if gain >= 1:
+        if gain > 1:
             self.log.warning("Gain amplitude is out of bounds. Gain amplitude was saturated to 1")
-            gain = 2**self.sample_size - 1
-        # set the gain, cap to 1 if gain was bigger than 1
-        gain = int(2**self.sample_size * gain)
+            gain = 1
+        # set the gain, a gain of 1 is saturated to the maximum representable value
+        gain = min(int(2**self.sample_size * gain), 2**self.sample_size - 1)
         wdw = _set_bits(wdw, 2 * self.sample_gen_increment_width + self.duration_width, self.sample_size, gain)
 
         # compute a safe duration and set it
@@ -588,15 +591,20 @@ class GeneratorDriver(_FIREQDriver):
             # The remainder (num % den) tells us how far we were from the ideal ratio; by adding
             # half of it to start_offset we "center" the quantization error, reducing the peak
             # error at the end without changing the hardware behavior.
+            # The increment is (natural_duration - 1) / (dur - 1) addresses per sample, in Q(FractionalPrecision):
+            # only the numerator is shifted. Over the (dur - 1) steps the truncation loses exactly `reminder`
+            # LSBs, so half of it is added to the start offset.
             start_offset = start_address << self.fractional_precision
-            num = (natural_duration - 1) << self.fractional_precision
-            den = (dur - 1) << self.fractional_precision
-
-            increment = num // den
-            reminder = num % den
-
-            # shift by half remainder to "center" the error (reduces peak error at the end)
-            start_offset = start_offset + (reminder // 2)
+            if dur > 1:
+                num = (natural_duration - 1) << self.fractional_precision
+                den = dur - 1
+                increment = num // den
+                reminder = num % den
+                # shift by half remainder to "center" the error (reduces peak error at the end)
+                start_offset = start_offset + (reminder // 2)
+            else:
+                # a single output sample: stay on the first envelope sample
+                increment = 0
         else:
             start_offset = start_address << self.fractional_precision
             # set the increment to 1/(number_of_channels), usually 1/16

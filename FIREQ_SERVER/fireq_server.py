@@ -8,10 +8,10 @@ Architecture: 3 threads communicate via queue_in/queue_out.
 - Receiver thread: accepts connections, parses messages
 - Sender thread: writes responses to client
 
-Protocol:
-- Requests: 4-byte big-endian length prefix + UTF-8 JSON payload.
-- Responses: JSON messages (4-byte length) and streamed binary data (acquistion frames + timing).
-  For run_experiment/run_sweep: StreamHeader (JSON) -> BinaryChunk (frames) -> StreamTiming (JSON).
+Protocol (see network/protocol.py):
+- Every packet: 4-byte big-endian header length + msgpack header dict + optional trailing data
+  (present when the header has a "tsize" key).
+- config_and_run: experiment_header -> (dma_package(s) + iteration_ended) per iteration -> experiment_footer.
 """
 
 import logging
@@ -25,28 +25,19 @@ from FIREQ_SYSTEM import FIREQSystemNode
 
 from .execution import SweepExperiment
 from .network import FIREQNetworkPacket, NetworkDMAPayload, ReceiveWorker, SendWorker, get_command, get_sweep_variables
+from .utils import SweepAbortedError
 
-MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max payload
+MAX_PAYLOAD_BYTES = 10 * 1024 * 1024  # 10 MB max incoming header/data size
 QUEUE_MAX_MEMORY_BYTES = 1024 * 1024 * 1024  # 1 GB queue memory limit
 HANDSHAKE_TIMEOUT_SECONDS = 3.0
-SWEEP_WAIT_TIMEOUT_SECONDS = 10.0
-
-# Exception handling configuration: (error_type, log_level, log_suffix)
-# log_level: "warning", "error", or "exception"
-# _EXCEPTION_CONFIG: dict[type, tuple[str, str, str]] = {
-#    DMATimeoutError: ("timeout", "warning", "timed out"),
-#    ConfigurationError: ("config", "warning", "config error"),
-#    WaveCompilationError: ("data", "warning", "data error"),
-#    EnvelopeUploadError: ("data", "warning", "data error"),
-#    HardwareResourceError: ("hardware", "error", "hardware error"),
-# }
+SOCKET_TIMEOUT_SECONDS = 1.0  # client socket timeout, keeps the workers responsive to stop requests
 
 
 class FIREQServer:
     """TCP server for FIREQ experiments.
 
     Spawns three threads:
-    
+
     - a client handler thread, which communicates with the client to receive
       commands and send info/configuration
     - an execution thread, which manages the hw and runs commands received
@@ -76,8 +67,8 @@ class FIREQServer:
         :type port: int
         :param auth_token: Shared token for client authentication.
         :type auth_token: str
-        :param log: Optional log instance.
-        :type log: logging.log | None
+        :param logger: Optional logger instance.
+        :type logger: logging.Logger | None
         """
         # load the system
         if overlay_file is None:
@@ -94,20 +85,18 @@ class FIREQServer:
         # Server state
         self._stop_event = Event()
         self._thread_running = Event()
-        self._abort_in_progress = Event()
         self._client_connected = Event()
 
         # Thread objects for the receive and transmit channel
-        self._receive_worker = ReceiveWorker(self._client_connected)
-        self._send_worker = SendWorker(self._client_connected)
+        self._receive_worker = ReceiveWorker(self._client_connected, max_payload_bytes=MAX_PAYLOAD_BYTES)
+        self._send_worker = SendWorker(self._client_connected, max_queue_bytes=QUEUE_MAX_MEMORY_BYTES)
 
-        # Getting the two network packet queues
-        self._queue_in = self._receive_worker.queue_in
+        # Getting the output network packet queue, incoming packets are read with self._receive_worker.get()
         self._queue_out = self._send_worker.queue_out
 
         # sockets
-        self._server_socket: socket.socket
-        self._client_socket: socket.socket
+        self._server_socket: socket.socket = None
+        self._client_socket: socket.socket = None
 
     def start(self) -> None:
         """Start the server and block on the main thread.
@@ -147,26 +136,34 @@ class FIREQServer:
     def _run(self) -> None:
         """Handle a client connection and execute the commands received from the queue_in."""
         self._thread_running.set()
+        self._open_server_socket()
         while not self._stop_event.is_set():
-            # accept a client connection
-            self._client_socket = self._accept_client()
+            # accept a client connection, None means that the server is stopping
+            client_socket = self._accept_client()
+            if client_socket is None:
+                break
+            self._client_socket = client_socket
 
             # assign client socket and inform threads
+            self._client_socket.settimeout(SOCKET_TIMEOUT_SECONDS)
             self._receive_worker.client_socket = self._client_socket
-            self._send_worker.client_socket = self._client_socket
+            # before setting the event: packets queued while no client is connected are dropped
+            self._send_worker.start_session(self._client_socket)
             self._client_connected.set()
 
             # perform the handshake
             self.log.info("Performing handshake on client...")
-            self._client_socket.settimeout(HANDSHAKE_TIMEOUT_SECONDS)
             if not self._perform_handshake():
                 self.log.warning("A client connection failed to complete the handshake, closing connection")
                 self._close_client()
+                continue
 
             # now start the actual main loop
             self._main_loop()
 
-            # if the main loop exits, understand why and perform cleanup if necessary
+            # the main loop exits on logout, disconnect or stop: always release the client and drop
+            # stale packets so they are not delivered to the next client
+            self._close_client()
 
         self.log.info("Execution thread exited, cleaning up")
 
@@ -178,7 +175,7 @@ class FIREQServer:
         while not self._stop_event.is_set() and self._client_connected.is_set():
             # receive message from the input queue
             try:
-                msg = self._queue_in.get(timeout=1.0)
+                msg = self._receive_worker.get(timeout=1.0)
             except Empty:
                 continue
 
@@ -192,8 +189,6 @@ class FIREQServer:
 
         :param msg: Parsed command dictionary from the client.
         :type msg: dict
-
-        Note: ``abort`` is handled in the receiver loop for immediacy.
         """
         cmd = get_command(msg)
         # session_id = msg.get("session_id", "")
@@ -204,29 +199,13 @@ class FIREQServer:
             if cmd == "apply_configuration":
                 # apply the system configuration dictionary to the fireq soc
                 callbacks = self._config_from_message(msg)
-                if len(callbacks) > 0:
-                    self.log.warning("Configuration from apply_configuration has sweepable parameters")
+                if callbacks:
+                    self.log_and_send_warning(
+                        "Configuration from apply_configuration has sweepable parameters, they were not applied"
+                    )
 
             elif cmd == "config_and_run":
-                # run an experiment
-                callbacks = self._config_from_message(msg)
-                if callbacks is None:
-                    self.log.warning("Configuration failed to apply, aborting experiment run")
-                    return
-                if len(callbacks) > 0:
-                    variables = get_sweep_variables(msg)
-                    if not variables:
-                        self.log_and_send_warning(
-                            "Message from client tryed to execute a sweep experiment without specifing variables"
-                        )
-                        return
-                    exp = SweepExperiment(self, self._queue_out)
-                    execution_time = exp.run(callbacks, variables)
-                    self._queue_out.put(
-                        FIREQNetworkPacket({"type": "status", "msg": "sweep ended", "time": f"{execution_time} ns"})
-                    )
-                else:
-                    self._run_experiment()
+                self._config_and_run(msg)
 
             elif cmd == "ping":
                 self._queue_out.put(FIREQNetworkPacket({"resp": "pong"}))
@@ -235,20 +214,23 @@ class FIREQServer:
                 self._fireq_soc.reset_all()
                 self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "successfully reset"}))
 
-            # elif cmd == "status":
-            #    self.log.debug("status")
-
-            # deprecated functions:
-            # rf_mapping
-            # calibrate_adc
-            # reset_waves
-            # reset_envelopes
-
             elif cmd == "logout":
                 self._close_client()
 
-            # elif cmd == "reset_all":
-            #    self.log.debug("reset all")
+            elif cmd == "mts_sync":
+                self._fireq_soc.synchronize_dac_tiles()
+                self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+
+            elif cmd == "set_nyquist":
+                self._fireq_soc.set_nyquist_zone(msg.get("tile"), msg.get("block_id"), msg.get("zone"))
+                self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+
+            elif cmd == "trigger_manually":
+                try:
+                    self._fireq_soc.trigger_ip_manually(msg.get("ip_name", ""))
+                    self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
+                except Exception as e:
+                    self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"{e}"}))
 
             else:
                 self.log.debug("received a non-supported command from the client")
@@ -256,21 +238,14 @@ class FIREQServer:
 
         except Exception as e:
             self.log.exception("Caught error while running command")
+            self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"error while executing '{cmd}': {e}"}))
 
     # =========================================================================
     # Connection Handling
     # =========================================================================
 
-    def _accept_client(self) -> socket.socket:
-        """Accept a TCP connection on the server socket.
-
-        Will continue to wait for a connection indefinetly, and return when a connection
-        has been established. Will raise on errors.
-
-        :return: The client socket.
-        :rtype: socket.socket
-        """
-        # create the server socket and
+    def _open_server_socket(self) -> None:
+        """Create, bind and listen on the server socket. It is reused for every client connection."""
         self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_socket.bind((self._host, self._port))
@@ -278,6 +253,15 @@ class FIREQServer:
         self._server_socket.settimeout(1.0)
         self.log.info(f"Listening on {self._host}:{self._port}")
 
+    def _accept_client(self) -> socket.socket | None:
+        """Accept a TCP connection on the server socket.
+
+        Will continue to wait for a connection indefinetly, and return when a connection
+        has been established. Will raise on errors.
+
+        :return: The client socket, or None if the server is stopping.
+        :rtype: socket.socket | None
+        """
         while not self._stop_event.is_set():
             try:
                 try:
@@ -285,6 +269,8 @@ class FIREQServer:
                 except TimeoutError:
                     continue
                 except OSError:
+                    if self._stop_event.is_set():
+                        break
                     self.log.error("Accept failed")
                     continue
 
@@ -299,13 +285,16 @@ class FIREQServer:
             except Exception as e:
                 self.log.critical(f"Unexpected error in network loop: {e}")
                 raise
+        return None
 
     def _close_client(self) -> None:
-        if getattr(self, "_client_socket", None):
+        """Close the client socket, signal the disconnect to the workers and clear both queues."""
+        if self._client_socket is not None:
             try:
                 self._client_socket.close()
             except OSError:
                 pass
+            self._client_socket = None
 
         # signal to the workers that the client is disconnected
         self._client_connected.clear()
@@ -317,6 +306,7 @@ class FIREQServer:
         """Perform handshake authentication with the client.
 
         This function tryes to be as safe as possible, returning false on errors.
+        The client must answer within HANDSHAKE_TIMEOUT_SECONDS.
 
         :return: True if authenticated, False otherwise.
         :rtype: bool
@@ -326,9 +316,14 @@ class FIREQServer:
         self.log.info("Handshake put in queue, waiting for client response...")
 
         # wait for the response on the input queue
+        deadline = time.monotonic() + HANDSHAKE_TIMEOUT_SECONDS
         while not self._stop_event.is_set() and self._client_connected.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.log.warning("Handshake timed out")
+                return False
             try:
-                response = self._queue_in.get(timeout=0.5)
+                response = self._receive_worker.get(timeout=min(0.5, remaining))
             except Empty:
                 continue
 
@@ -350,7 +345,16 @@ class FIREQServer:
         self.log.debug("Received the stop condition or client disconnected on handshake")
         return False
 
-    def _config_from_message(self, message: dict) -> list:
+    def _config_from_message(self, message: dict) -> list | None:
+        """Apply the "system" configuration dict of a client message to the system.
+
+        Sends a status "ok" packet on success, or an error packet on failure.
+
+        :param message: network message fetched from the client
+        :type message: dict
+        :return: the sweepable callbacks of the configuration, or None if the configuration failed
+        :rtype: list | None
+        """
         config = message.get("system", None)
         if config is None:
             self.log.warning("Could not get the system dict from the client message, aborting apply")
@@ -369,29 +373,99 @@ class FIREQServer:
             )
             return None
 
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "ok"}))
         # return the callbacks
         return callbacks
 
     def _run_experiment(self) -> None:
-        # actually run the experiment
-        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment started"}))
-        try:
-            start = time.perf_counter_ns()
-            self._fireq_soc.run_experiment(self._queue_out)
-            end = time.perf_counter_ns()
-        except Exception as e:
-            self.log.exception("Exception occurred while running experiment")
-            self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": "error while running experiment"}))
+        """Run an experiment and time the execution.
+
+        Sends an "iteration_ended" status message to the client that includes the execution time in ns.
+        Exceptions are propagated to the caller.
+        """
+        start = time.perf_counter_ns()
+        self._fireq_soc.run_experiment(self._queue_out)
+        end = time.perf_counter_ns()
+        # send a status message to the client that includes the execution time
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "iteration_ended", "time": end - start}))
+
+    def _should_abort_run(self) -> bool:
+        """Return True if a running sweep must stop (server stopping or client disconnected)."""
+        return self._stop_event.is_set() or not self._client_connected.is_set()
+
+    def _config_and_run(self, message: dict) -> None:
+        """
+        Configure from network message and run experiment.
+
+        Will send an experiment header followed by the DMA payloads.
+        The iteration end is indicated by an "iteration_ended" packet followed
+        by another iteration or an experiment footer.
+        Once the header has been sent, the footer is always sent: if the run fails an error packet
+        is sent first and the footer has "aborted" set to True.
+
+        :param message: network message fetched from the client
+        :type message: dict
+        """
+        callbacks = self._config_from_message(message)
+        if callbacks is None:
+            # the error packet has already been sent by _config_from_message
+            self.log.warning("Configuration failed to apply, aborting experiment run")
             return
 
-        self._queue_out.put(
-            FIREQNetworkPacket({"type": "status", "msg": "experiment ended", "time": f"{end-start} ns"})
-        )
+        # no shot count here: a swept $shots is only applied by the sweep callbacks, so the system value
+        # would be stale; every dma_package carries the shots it actually holds
+        start_message = {}
+        exp = None
+        if callbacks:
+            variables = get_sweep_variables(message)
+            if not variables:
+                self.log_and_send_error(
+                    "Message from client tryed to execute a sweep experiment without specifing variables"
+                )
+                return
+            try:
+                exp = SweepExperiment(self, callbacks, variables, should_abort=self._should_abort_run)
+            except Exception as e:
+                self.log_and_send_error(f"Invalid sweep definition: {e}")
+                return
+            start_message["variable_order"] = exp.vars_order
+            # numpy arrays cannot be serialized by msgpack
+            start_message["variable_values"] = {key: values.tolist() for key, values in exp.computed_vars.items()}
 
-    def log_and_send_warning(self, warning: str):
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_header"} | start_message))
+
+        end_message = {"aborted": False}
+        start = time.perf_counter_ns()
+        try:
+            if exp is not None:
+                exp.run()
+            else:
+                self._run_experiment()
+        except SweepAbortedError:
+            self.log.warning("Sweep aborted, the server is stopping or the client disconnected")
+            end_message["aborted"] = True
+        except Exception as e:
+            self.log.exception("Exception occurred while running experiment")
+            self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"error while running experiment: {e}"}))
+            end_message["aborted"] = True
+        end_message["run_time"] = time.perf_counter_ns() - start
+
+        self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_footer"} | end_message))
+
+    def log_and_send_warning(self, warning: str) -> None:
+        """Log a warning and send it to the client as a "warning" packet.
+
+        :param warning: warning message
+        :type warning: str
+        """
         self.log.warning(warning)
         self._queue_out.put(FIREQNetworkPacket({"type": "warning", "msg": f"{warning}"}))
 
-    def log_and_send_error(self, error: str):
-        self.log.warning(error)
-        self._queue_out.put(FIREQNetworkPacket({"type": "warning", "msg": f"{error}"}))
+    def log_and_send_error(self, error: str) -> None:
+        """Log an error and send it to the client as an "error" packet.
+
+        :param error: error message
+        :type error: str
+        """
+        self.log.error(error)
+        self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"{error}"}))

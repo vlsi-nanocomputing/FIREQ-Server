@@ -124,15 +124,21 @@ class TriggerGeneratorNode(_GenericNode):
         )
 
     def update_hw_shots(self) -> bool:
-        """Update the number of hardware shots."""
-        if self._hw_shots:
-            ret = self._ll_handler.set_number_of_shots(self._hw_shots["value"])
-            if ret != 0:
-                self.log.error("Failed to set the number of shots")
-                raise RuntimeError("Failed to set the number of shots")
-        else:
+        """Update the number of hardware shots.
+
+        Nothing is written if the number of hw shots has no valid value; the system node refuses to
+        run the experiment in that case.
+        """
+        if self._hw_shots is None:
             self.log.error("Reference to hw shots is invalid")
             raise RuntimeError("Reference to hw shots is invalid")
+        if not self._hw_shots:
+            self.log.debug("No valid number of hw shots, not writing it to the trigger generator")
+            return False
+        ret = self._ll_handler.set_number_of_shots(self._hw_shots["value"])
+        if ret != 0:
+            self.log.error("Failed to set the number of shots")
+            raise RuntimeError("Failed to set the number of shots")
         return True
 
     @_GenericNode.parameter_callback("$experiment_duration", sweepable=True, cost=1)

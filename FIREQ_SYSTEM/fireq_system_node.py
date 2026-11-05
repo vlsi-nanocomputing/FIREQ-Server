@@ -85,7 +85,7 @@ class FIREQSystemNode(_GenericNode):
         Scans all of the IPs discovered by the low-level SoC and creates the
         corresponding wrapper node for each supported driver type.
         """
-        for subsystem_name, (instance, ll_handler, driver_type) in self._fireq_soc.ips.items():
+        for subsystem_name, (_instance, ll_handler, driver_type) in self._fireq_soc.ips.items():
             if driver_type not in _driver_wrappers:
                 continue
             self.log.debug("Creating node for %s", subsystem_name)
@@ -125,11 +125,19 @@ class FIREQSystemNode(_GenericNode):
     def set_shots(self, shots: int) -> int:
         """Set the number of shots.
 
-        :param shots: Number of shots (must be positive)
+        The value is cast to int (truncated), so floats such as the values produced by a 'lin' sweep are accepted.
+
+        :param shots: Number of shots (must be positive after the cast)
         :type shots: int
         :return: Error code (0 on success)
         :rtype: int
         """
+        try:
+            shots = int(shots)
+        except (TypeError, ValueError, OverflowError):
+            self.shots = None
+            self.log.error("Number of shots must be a number, got %s", shots)
+            return -3
         if shots <= 0:
             self.shots = None
             self.log.error("Number of shots must be positive, got %s", shots)
@@ -158,7 +166,10 @@ class FIREQSystemNode(_GenericNode):
                 else:
                     max_hw_shots = min(max_hw_shots, ref["value"])
         if max_hw_shots is None or max_hw_shots == 0:
+            # no fifo has a valid payload, or the payload does not fit in a fifo: no valid value
             self.max_hw_shots.clear()
+            self.log.debug("Max hardware shots cleared, no valid value")
+            return self.max_hw_shots.hash_and_compare()
         max_hw_shots = min(max_hw_shots, self._hw_supported_hw_shots["value"])
         self.max_hw_shots["value"] = max_hw_shots
         self.log.debug("Max hardware shots set to %s", self.max_hw_shots["value"])
@@ -172,7 +183,12 @@ class FIREQSystemNode(_GenericNode):
         """Update the actual number of hardware shots.
 
         Depends on the maximum number of hw shots and the requested number of shots.
+        The value is cleared if either one is not available.
         """
+        if not self.max_hw_shots or self.requested_hw_shots.get("value") is None:
+            self.hw_shots.clear()
+            self.log.debug("Hardware shots cleared, no valid value")
+            return self.hw_shots.hash_and_compare()
         self.hw_shots["value"] = min(self.max_hw_shots["value"], self.requested_hw_shots["value"])
         self.log.debug("Hardware shots set to %s", self.hw_shots["value"])
         return self.hw_shots.hash_and_compare()
@@ -218,7 +234,7 @@ class FIREQSystemNode(_GenericNode):
             raise KeyError(f"Reference {ref_name} already exists")
         self._references[ref_name] = ref
 
-    def get_reference(self, ref_name: str) -> Any:
+    def get_reference(self, ref_name: str) -> Any:  # noqa: ANN401 - references are heterogeneous
         """Get a reference to a variable.
 
         :param ref_name: Name of the reference
@@ -278,66 +294,148 @@ class FIREQSystemNode(_GenericNode):
 
         Resolves intra-system dependencies and updates all registered variables
         before the experiment starts.
+
+        :param queue: queue in which the DMA payloads are put
+        :type queue: Queue
+        :raises RuntimeError: if the number of shots is not set, if no valid number of hw shots can be
+            computed (e.g. no acquisition is configured or its payload does not fit in a FIFO), or if a
+            DMA transfer fails
         """
         # given the max number of hw shots, the number of shots plan the experiment
         # then, set the number of hw shots for each sw shot in the trigger generator
         # run the experiment and extract data from the dma by sending it to the queque
-        # TODO: add a series of checks
+        if self.shots is None:
+            self.log.error("Number of shots is not set")
+            raise RuntimeError("Number of shots is not set, configure '$shots' before running")
         executed_shots = 0
         self.requested_hw_shots["value"] = self.shots
         sw_shots = 0
         # update the dependencies
         self._dependency_orchestrator.update()
-        # get the actual number of hw shots
-        hw_shots = self.hw_shots["value"]
-        while executed_shots < self.shots:
-            # init the dma
-            for dma_nodes in self._dma_nodes:
-                dma_nodes.init_dma()
-            # run the experiment, at this point we are certain that the number of hw shots is set correctly
-            self._trigger_generator_nodes[0].start_experiment()
-            # save the dma variables
+        # get the actual number of hw shots, a missing or zero value would never complete the experiment
+        hw_shots = self.hw_shots.get("value")
+        if not hw_shots or hw_shots < 1:
+            self.log.error("Invalid number of hw shots: %s", hw_shots)
+            raise RuntimeError(
+                f"Invalid number of hw shots ({hw_shots}): check that an acquisition is configured "
+                "and that its payload fits in the acquisition FIFO"
+            )
+        try:
+            while executed_shots < self.shots:
+                # init the dma
+                for dma_nodes in self._dma_nodes:
+                    dma_nodes.init_dma()
+                # run the experiment, at this point we are certain that the number of hw shots is set correctly
+                self._trigger_generator_nodes[0].start_experiment()
+                # save the dma variables
+                for dma_node in self._dma_nodes:
+                    dma_node.save_variables()
+                # do some work while the experiment runs, before extracting the data
+                executed_shots += hw_shots
+                remaining_shots = self.shots - executed_shots
+                # if we have less remaining shots than the currently set hw shots,
+                # request a different number of hw shots
+                if hw_shots > remaining_shots > 0:
+                    # reduce the number of hw shots and rerun dependency
+                    hw_shots = remaining_shots
+                    self.log.debug("Reducing the number of hw shots to properly run the expeirment")
+                    self.requested_hw_shots["value"] = hw_shots
+                    # NOTE: we can update now because the dma caches the payloads and the trigger generator
+                    #       is not affected by a change in hw shots while running
+                    # TODO: maybe check that this is true
+                    self._dependency_orchestrator.update()
+                    if self.hw_shots["value"] != hw_shots:
+                        self.log.error("Failed to set the number of hw shots to the correct amount")
+                        raise RuntimeError("Failed to set the number of hw shots to the correct amount")
+                # extract data from the dma
+                for dma_node in self._dma_nodes:
+                    if not dma_node.transfer_all(queue):
+                        raise RuntimeError(f"DMA transfer failed for node {dma_node.name}")
+                # increment number of sw shots
+                sw_shots += 1
+                # wait until experiment is done
+                while not self._trigger_generator_nodes[0].is_done():
+                    pass
+        except BaseException:
+            # do not leave the dma nodes in the transferring state, or every following run would fail
             for dma_node in self._dma_nodes:
-                dma_node.save_variables()
-            # do some work while the experiment runs, before extracting the data
-            executed_shots += hw_shots
-            remaining_shots = self.shots - executed_shots
-            # if we have less remaining shots than the currently set hw shots, request a different number of hw shots
-            if hw_shots > remaining_shots > 0:
-                # reduce the number of hw shots and rerun dependency
-                hw_shots = remaining_shots
-                self.log.debug("Reducing the number of hw shots to properly run the expeirment")
-                self.requested_hw_shots["value"] = hw_shots
-                # NOTE: we can update now because the dma caches the payloads and the trigger generator
-                #       is not affected by a change in hw shots while running
-                # TODO: maybe check that this is true
-                self._dependency_orchestrator.update()
-                if self.hw_shots["value"] != hw_shots:
-                    self.log.error("Failed to set the number of hw shots to the correct amount")
-                    raise RuntimeError("Failed to set the number of hw shots to the correct amount")
-            # extract data from the dma
-            for dma_node in self._dma_nodes:
-                dma_node.transfer_all(queue)
-            # increment number of sw shots
-            sw_shots += 1
-            # wait until experiment is done
-            while not self._trigger_generator_nodes[0].is_done():
-                pass
+                dma_node.reset_transfer_state()
+            raise
         self.log.debug("Experiment finished, executed %s shots in %s software shots", executed_shots, sw_shots)
 
     # ------------------------------------------------------------------
     # Async commands
     # ------------------------------------------------------------------
 
-    def trigger_manually(self, generator_node_name: str) -> None:
+    def trigger_ip_manually(self, ip_name: str) -> None:
         """
-        Trigger a generator manually.
+        Trigger a child IP manually.
 
-        :param generator_node_name: Name of the generator that is to be triggered
-        :type generator_node_name: str
+        Will call the manual_trigger method on the IP or raise an error if not found.
+
+        :param ip_name: Name of the child IP to trigger
+        :type ip_name: str
+        :raises ValueError: If the IP is not found or cannot be triggered manually
+        :raises RuntimeError: If the manual trigger returns an error code
         """
-        gen = self.get_child(generator_node_name)
-        gen.manual_trigger()
+        try:
+            ip = self.get_child(ip_name)
+            trigger = ip.manual_trigger
+        except (KeyError, AttributeError):
+            raise ValueError(f"IP {ip_name} not found or cannot be triggered manually") from None
+        ret = trigger()
+        if ret not in (0, None):
+            raise RuntimeError(f"Manual trigger of IP {ip_name} failed with error code {ret}")
+
+    def synchronize_dac_tiles(self) -> None:
+        """Run multi-tile synchronization (MTS) on the active DAC tiles.
+
+        The tile with the enabled PLL is used as the reference tile.
+
+        :raises RuntimeError: If the design has no RF-DC or no DAC tile with an enabled PLL
+        """
+        soc = self._fireq_soc
+        if soc.rfdc is None:
+            raise RuntimeError("No RF-DC found in the design, cannot synchronize the DAC tiles")
+        if soc._mts_dac_master is None:
+            raise RuntimeError("No DAC tile with an enabled PLL found, cannot synchronize the DAC tiles")
+        soc.syncronize_mts_groups()
+        self.log.info(
+            "DAC tiles synchronized (tile mask %s, reference tile %s)", soc._mts_dac_mask, soc._mts_dac_master
+        )
+
+    def set_nyquist_zone(self, tile: int, block_id: int, zone: int) -> None:
+        """Set the Nyquist zone of a DAC or ADC block.
+
+        :param tile: Converter tile number as in the Xilinx numbering: 224-227 for ADCs, 228-231 for DACs
+        :type tile: int
+        :param block_id: Converter block number inside the tile, starts at 0
+        :type block_id: int
+        :param zone: Nyquist zone, 1 (odd) or 2 (even)
+        :type zone: int
+        :raises ValueError: If an argument is not an integer, the zone is not 1 or 2, or the block is not active
+        :raises RuntimeError: If the design has no RF-DC
+        """
+        for arg_name, value in (("tile", tile), ("block_id", block_id), ("zone", zone)):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"{arg_name} must be an integer, got {value!r}")
+        if zone not in (1, 2):
+            raise ValueError(f"Nyquist zone must be 1 or 2, got {zone}")
+        soc = self._fireq_soc
+        if soc.rfdc is None:
+            raise RuntimeError("No RF-DC found in the design, cannot set the Nyquist zone")
+        # the low-level driver fails silently on unknown blocks, so check them here
+        if tile >= 228:
+            converter, tile_base, active = "DAC", 228, soc.active_dacs
+        elif tile >= 224:
+            converter, tile_base, active = "ADC", 224, soc.active_adcs
+        else:
+            raise ValueError(f"Invalid tile {tile}: ADC tiles are 224-227, DAC tiles are 228-231")
+        if (tile - tile_base, block_id) not in active:
+            available = [(t + tile_base, b) for t, b in active]
+            raise ValueError(f"{converter} tile {tile} block {block_id} is not active, active blocks: {available}")
+        soc.set_nyquist_zone(tile, block_id, zone)
+        self.log.info("Nyquist zone of %s tile %s block %s set to %s", converter, tile, block_id, zone)
 
     def set_dma_payload_interface_class(self, interface_class: object) -> None:
         """

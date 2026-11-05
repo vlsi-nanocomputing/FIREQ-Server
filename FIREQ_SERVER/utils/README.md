@@ -30,6 +30,14 @@ FIFO order is preserved; items come out in the same order they went in. The
 queue also supports `clear()` (discard all items) and `close()` (stop
 blocking on `put`/`get`).
 
+- `discard_when`: optional callable given to the constructor. While it returns
+  True, `put()` drops its item instead of enqueuing it, also when it is already
+  waiting for space (checked every 0.5 s). `put()` returns whether the item was
+  enqueued.
+- Sessions: `new_session()` clears the queue and starts a new session. Every
+  item is tagged with the session it was put in, and `get_with_session()`
+  returns it together with the item.
+
 ## Exceptions
 
 ### Hardware errors
