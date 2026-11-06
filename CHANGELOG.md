@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SweepExperiment` takes an optional `should_abort` callable. The server uses
   it to stop a sweep when it is stopping or when the client disconnects;
   `SweepAbortedError` is raised in that case.
+- Server logging: every received command, and the start and end of each
+  experiment, are logged at INFO level. At DEBUG level each iteration logs its
+  duration, the time it spent blocked on the full output queue, and the queue
+  occupation (`MemoryBoundedQueue.usage()`).
 - Incoming packets are limited to 10 MB (`MAX_PAYLOAD_BYTES`) for both the
   header and the trailing data. An oversized size closes the connection.
 - `DMANode.reset_transfer_state()`, also called by `reset_all`.

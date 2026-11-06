@@ -15,6 +15,7 @@ Protocol (see network/protocol.py):
 """
 
 import logging
+import math
 import socket
 import time
 from pathlib import Path
@@ -193,7 +194,7 @@ class FIREQServer:
         cmd = get_command(msg)
         # session_id = msg.get("session_id", "")
 
-        self.log.debug(f"Processing command: {cmd}")
+        self.log.info(f"Received command '{cmd}'")
 
         try:
             if cmd == "apply_configuration":
@@ -381,11 +382,23 @@ class FIREQServer:
         """Run an experiment and time the execution.
 
         Sends an "iteration_ended" status message to the client that includes the execution time in ns.
+        At debug level, logs the time the run spent blocked on the full output queue and the queue occupation.
         Exceptions are propagated to the caller.
         """
+        # the queue is only inspected at debug level, and outside the timed section
+        debug = self.log.isEnabledFor(logging.DEBUG)
+        if debug:
+            blocked_before = self._queue_out.usage()[3]
         start = time.perf_counter_ns()
         self._fireq_soc.run_experiment(self._queue_out)
         end = time.perf_counter_ns()
+        if debug:
+            items, used_bytes, max_bytes, blocked_after = self._queue_out.usage()
+            self.log.debug(
+                f"Iteration took {(end - start) / 1e6:.3f} ms, {(blocked_after - blocked_before) / 1e6:.3f} ms "
+                f"blocked on the full output queue; queue holds {items} packets, "
+                f"{used_bytes / 2**20:.1f} of {max_bytes / 2**20:.0f} MiB"
+            )
         # send a status message to the client that includes the execution time
         self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "iteration_ended", "time": end - start}))
 
@@ -433,6 +446,11 @@ class FIREQServer:
             start_message["variable_values"] = {key: values.tolist() for key, values in exp.computed_vars.items()}
 
         self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_header"} | start_message))
+        if exp is not None:
+            points = math.prod(len(exp.computed_vars[var]) for var in exp.vars_order)
+            self.log.info(f"Experiment started: sweep of {points} points over {exp.vars_order}")
+        else:
+            self.log.info("Experiment started: single run")
 
         end_message = {"aborted": False}
         start = time.perf_counter_ns()
@@ -449,6 +467,13 @@ class FIREQServer:
             self._queue_out.put(FIREQNetworkPacket({"type": "error", "msg": f"error while running experiment: {e}"}))
             end_message["aborted"] = True
         end_message["run_time"] = time.perf_counter_ns() - start
+        # the run ends when its data is queued, the client may still be receiving it
+        queued_packets, queued_bytes, _, _ = self._queue_out.usage()
+        self.log.info(
+            f"Experiment {'aborted' if end_message['aborted'] else 'ended'} after "
+            f"{end_message['run_time'] / 1e6:.1f} ms, {queued_packets} packets "
+            f"({queued_bytes / 2**20:.1f} MiB) still queued for the client"
+        )
 
         self._queue_out.put(FIREQNetworkPacket({"type": "status", "msg": "experiment_footer"} | end_message))
 

@@ -48,6 +48,8 @@ class MemoryBoundedQueue:
         self._closed = False
         self._discard_when = discard_when or (lambda: False)
         self._session = 0
+        # total time put() spent waiting for space, only measured when it actually waits
+        self._blocked_ns = 0
 
     def put(self, item: object, timeout: float | None = None) -> bool:
         """Put item into queue, blocking if memory limit reached.
@@ -66,16 +68,21 @@ class MemoryBoundedQueue:
         end_time = None if timeout is None else time.monotonic() + timeout
 
         with self._not_full:
-            while self._queue and self._current_bytes + item_bytes > self._max_bytes:
-                if self._closed or self._discard_when():
-                    return False
-                wait = _DISCARD_POLL_SECONDS
-                if end_time is not None:
-                    remaining = end_time - time.monotonic()
-                    if remaining <= 0:
-                        raise Full("Memory limit reached")
-                    wait = min(wait, remaining)
-                self._not_full.wait(timeout=wait)
+            if self._queue and self._current_bytes + item_bytes > self._max_bytes:
+                wait_start = time.perf_counter_ns()
+                try:
+                    while self._queue and self._current_bytes + item_bytes > self._max_bytes:
+                        if self._closed or self._discard_when():
+                            return False
+                        wait = _DISCARD_POLL_SECONDS
+                        if end_time is not None:
+                            remaining = end_time - time.monotonic()
+                            if remaining <= 0:
+                                raise Full("Memory limit reached")
+                            wait = min(wait, remaining)
+                        self._not_full.wait(timeout=wait)
+                finally:
+                    self._blocked_ns += time.perf_counter_ns() - wait_start
 
             if self._closed or self._discard_when():
                 return False
@@ -129,6 +136,15 @@ class MemoryBoundedQueue:
             self._queue.clear()
             self._current_bytes = 0
             self._not_full.notify_all()
+
+    def usage(self) -> tuple[int, int, int, int]:
+        """Return a snapshot of the queue occupation, meant for diagnostics.
+
+        :return: Number of items, their estimated size in bytes, the memory limit in bytes, and the total
+            time put() has spent waiting for space since the queue was created, in ns.
+        """
+        with self._lock:
+            return len(self._queue), self._current_bytes, self._max_bytes, self._blocked_ns
 
     def new_session(self) -> int:
         """Clear the queue and start a new session: the items put from now on are tagged with it.
