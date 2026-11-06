@@ -60,3 +60,6 @@ deprecated/
 # local scratch files
 todo.md
 CLAUDE.md
+
+# board profiling scripts and their results (synced by profiling/sync_profiling.sh)
+profiling/
